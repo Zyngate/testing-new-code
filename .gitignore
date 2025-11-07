@@ -1,0 +1,37 @@
+@"
+# Python / project ignores
+stelle_env/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# local env / secrets
+.env
+.env.*
+
+# logs and temporary folders
+logs/
+temp/
+tmp/
+*.log
+
+# IDE/editor files
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# node / build
+node_modules/
+dist/
+build/
+"@ | Out-File -Encoding UTF8 .gitignore

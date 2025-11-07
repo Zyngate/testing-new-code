@@ -1,0 +1,28 @@
+fastapi[all]
+uvicorn
+python-dotenv
+motor
+numpy
+faiss-cpu
+sentence-transformers
+groq
+pytz
+pywebpush
+pydantic
+requests
+httpx
+beautifulsoup4
+duckduckgo-search
+bs4
+pandas
+selenium
+webdriver-manager
+docx2txt
+PyMuPDF
+loguru
+ratelimit
+#secrets  <-- REMOVE THIS LINE ENTIRELY
+#typing   <-- REMOVE THIS LINE ENTIRELY
+html2image
+win10toast
+speechrecognition
