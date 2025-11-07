@@ -21,12 +21,8 @@ docx2txt
 PyMuPDF
 loguru
 ratelimit
-#secrets  <-- REMOVE THIS LINE ENTIRELY
-#typing   <-- REMOVE THIS LINE ENTIRELY
 html2image
-#win10toast
-<<<<<<< HEAD
 speechrecognition
-=======
-speechrecognition
->>>>>>> 73d45ce (Removed win10toast dependency for Railway deployment)
+
+# Optional Windows-only notifier (ignored on Linux/Railway)
+# win10toast
