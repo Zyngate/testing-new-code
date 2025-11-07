@@ -25,4 +25,8 @@ ratelimit
 #typing   <-- REMOVE THIS LINE ENTIRELY
 html2image
 #win10toast
+<<<<<<< HEAD
 speechrecognition
+=======
+speechrecognition
+>>>>>>> 73d45ce (Removed win10toast dependency for Railway deployment)
