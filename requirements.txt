@@ -24,5 +24,5 @@ ratelimit
 #secrets  <-- REMOVE THIS LINE ENTIRELY
 #typing   <-- REMOVE THIS LINE ENTIRELY
 html2image
-win10toast
+#win10toast
 speechrecognition
