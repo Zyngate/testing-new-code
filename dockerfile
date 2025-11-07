@@ -1,28 +1,43 @@
-# Base image
-FROM python:3.11-slim
+# ===== Base Image =====
+FROM python:3.13-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    wget curl unzip xvfb libnss3 libgconf-2-4 libxi6 libxrender1 libglib2.0-0 \
-    chromium chromium-driver git build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set environment variables for Chrome/Selenium
-ENV CHROME_BIN=/usr/bin/chromium
-ENV CHROME_DRIVER=/usr/bin/chromedriver
-
-# Set workdir
+# ===== Set working directory =====
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ===== System Dependencies for Selenium & Chrome =====
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    fonts-liberation \
+    libnss3 \
+    libxss1 \
+    libasound2 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libx11-xcb1 \
+    libgtk-3-0 \
+    curl \
+    wget \
+    unzip \
+    git \
+    build-essential \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy all code
+# Set Chromium environment variables
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROME_PATH=/usr/lib/chromium/
+
+# ===== Copy requirements & install dependencies first (Docker caching) =====
+COPY requirements.txt .
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install -r requirements.txt
+
+# ===== Copy application code =====
 COPY . .
 
-# Expose port (Railway default for web service)
-EXPOSE 8080
+# ===== Expose port for FastAPI =====
+EXPOSE 8000
 
-# Command to run FastAPI
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# ===== Set entrypoint =====
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
