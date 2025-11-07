@@ -9,7 +9,6 @@ import tkinter as tk
 from tkinter import messagebox
 import webbrowser
 import speech_recognition as sr
-from win10toast import ToastNotifier
 
 from config import logger, GROQ_API_KEY_STELLE_MODEL
 from database import get_or_init_sync_collections 
@@ -17,7 +16,7 @@ from services.common_utils import get_current_datetime
 
 # --- Synchronous Globals (from the original code's synchronous section) ---
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-notifier = ToastNotifier()
+notifier.show_toast("Task Completed", desc)
 calendar_day_map = {"Mon":0,"Tue":1,"Wed":2,"Thu":3,"Fri":4,"Sat":5,"Sun":6}
 
 
@@ -164,12 +163,8 @@ def execute_task(task: dict):
         {"$set": {"retrieved": True, "content": result}}
     )
 
-    # Notification (synchronous toast, only works on Windows)
-    notifier.show_toast(
-        f"Task Completed: {user_email}",
-        f"{desc[:50]}...",
-        duration=8
-    )
+    # Notification (cloud safe)
+print(f"✅ Task Completed for {user_email}: {desc[:50]}...")
 
     # Schedule next occurrence
     freq = task.get("frequency")
