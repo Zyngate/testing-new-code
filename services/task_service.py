@@ -9,8 +9,8 @@ import speech_recognition as sr
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from config import logger, GROQ_API_KEY_STELLE_MODEL, EMAIL_HOST, EMAIL_PORT, EMAIL_ADDRESS, EMAIL_PASSWORD,FROM_EMAIL
 
-from config import logger, GROQ_API_KEY_STELLE_MODEL, EMAIL_HOST, EMAIL_PORT, EMAIL_ADDRESS, EMAIL_PASSWORD
 from database import get_or_init_sync_collections
 from services.common_utils import get_current_datetime
 
@@ -126,16 +126,16 @@ def send_calendar_link(user_email: str, task: dict):
 # 2. EMAIL NOTIFICATION FUNCTION
 # ====================================================================
 def send_email(to_email: str, subject: str, body: str):
-    """Send email using SMTP."""
+    """Send email using Hostinger SMTP over SSL."""
     try:
         msg = MIMEMultipart()
-        msg['From'] = EMAIL_ADDRESS
+        msg['From'] = FROM_EMAIL
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
-        server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
-        server.starttls()
+        # Connect using SSL
+        server = smtplib.SMTP_SSL(EMAIL_HOST, EMAIL_PORT)
         server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         server.send_message(msg)
         server.quit()

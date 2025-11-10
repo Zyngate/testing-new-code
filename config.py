@@ -35,6 +35,13 @@ SMTP_CONFIG = {
     "from_email": os.getenv("FROM_EMAIL"),
 }
 
+EMAIL_HOST = "smtp.hostinger.com"
+EMAIL_PORT = int(os.getenv("SMTP_PORT", 465))
+EMAIL_ADDRESS = os.getenv("SMTP_USERNAME")
+EMAIL_PASSWORD = os.getenv("SMTP_PASSWORD")
+FROM_EMAIL = os.getenv("FROM_EMAIL")
+
+
 # Pexels Key
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
