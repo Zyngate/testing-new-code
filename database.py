@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 from config import MONGO_URI, logger
+import asyncio
 
 # --- Async MongoDB Setup (for FastAPI background tasks and async endpoints) ---
 def get_async_database():
@@ -34,13 +35,12 @@ notifications_collection = db["notifications"]
 otp_collection = db["user_otps"]
 weekly_plans_collection = db["weekly_plans"]
 
-
 # ----------------------------------------------------------------------
 # --- Synchronous MongoDB Setup (Lazy & Robust Initialization) ---
 # ----------------------------------------------------------------------
 
 _sync_db = None
-_sync_db_initialized = False # <-- NEW GLOBAL STATUS FLAG
+_sync_db_initialized = False  # <-- NEW GLOBAL STATUS FLAG
 
 def get_or_init_sync_collections():
     """
@@ -51,25 +51,25 @@ def get_or_init_sync_collections():
     
     # CRITICAL FIX: Only attempt initialization once
     if not _sync_db_initialized: 
-        _sync_db_initialized = True # Mark as attempted
+        _sync_db_initialized = True  # Mark as attempted
         
         if not MONGO_URI:
             logger.error("Synchronous DB initialization failed: MONGO_URI is missing.")
             return None, None
         try:
             # Initialize the synchronous connection
-            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000) # Added timeout
+            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)  # Added timeout
             # Force connection attempt immediately
             client.admin.command('ping') 
             _sync_db = client["stelle_db"]
             logger.info("Synchronous MongoDB client initialized successfully.")
         except Exception as e:
             logger.error(f"FATAL: Failed to initialize synchronous MongoDB client: {e}")
-            _sync_db = None # Ensure it is None on failure
+            _sync_db = None  # Ensure it is None on failure
             return None, None 
             
     # Safely return collections if initialization succeeded
-    if _sync_db is not None: # <-- CRITICAL FIX: Checks against None (not bool())
+    if _sync_db is not None:  # <-- CRITICAL FIX: Checks against None (not bool())
         return _sync_db["tasks"], _sync_db["blogs"]
         
     return None, None
@@ -83,16 +83,24 @@ user_memory_map = {}
 file_doc_memory_map = {}
 code_memory_map = {}
 
-# Create TTL Index for OTPs (Non-fatal warning is expected here but required for function)
+# --- Safe OTP TTL index creation (converted into an async function) ---
+async def create_otp_ttl_index():
+    """Creates a TTL index on the OTP collection asynchronously."""
+    try:
+        existing_indexes = await otp_collection.index_information()
+        if "created_at_1" not in existing_indexes:
+            await otp_collection.create_index("created_at", expireAfterSeconds=300)
+            logger.info("OTP TTL index created.")
+    except Exception as e:
+        logger.warning(f"Failed to create OTP TTL index: {e}")
+
+# Run OTP TTL index creation safely on startup
 try:
-    if "created_at_1" not in otp_collection.index_information():
-        # This uses the non-blocking client reference initialized above
-        otp_collection.create_index("created_at", expireAfterSeconds=300)
-        logger.info("OTP TTL index created.")
-except Exception as e:
-    logger.warning(f"Failed to create OTP TTL index: {e}")
+    asyncio.get_event_loop().create_task(create_otp_ttl_index())
+except RuntimeError:
+    asyncio.run(create_otp_ttl_index())
 
-
+# --- FAISS Index Loader ---
 async def load_faiss_indices():
     """Loads user memory vectors into FAISS on startup."""
     try:
