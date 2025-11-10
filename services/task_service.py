@@ -6,22 +6,17 @@ import requests
 import json
 import webbrowser
 import speech_recognition as sr
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-from config import logger, GROQ_API_KEY_STELLE_MODEL
+from config import logger, GROQ_API_KEY_STELLE_MODEL, EMAIL_HOST, EMAIL_PORT, EMAIL_ADDRESS, EMAIL_PASSWORD
 from database import get_or_init_sync_collections
 from services.common_utils import get_current_datetime
-
-# Optional: For Windows notifications (if desired)
-try:
-    from win10toast import ToastNotifier
-    notifier = ToastNotifier()
-except ImportError:
-    notifier = None  # Notifications will be skipped if not installed
 
 # --- Globals ---
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 calendar_day_map = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
-
 
 # ====================================================================
 # 1. UTILITY FUNCTIONS
@@ -51,7 +46,6 @@ def ask_stelle(prompt: str) -> str:
         response_text = getattr(response, "text", "N/A") if 'response' in locals() else 'N/A'
         logger.error(f"JSON Parsing Error in ask_stelle: {e}\nResponse: {response_text}")
         return f"Error in API response: {response_text}"
-
 
 def get_next_run_time(task: dict, days: list) -> datetime_type | None:
     """Calculates the next scheduled run time for a recurring task."""
@@ -91,7 +85,6 @@ def get_next_run_time(task: dict, days: list) -> datetime_type | None:
 
     return next_dt
 
-
 def save_task_to_db(task: dict):
     """Saves or updates a task document in the synchronous task collection."""
     tasks_collection_sync, _ = get_or_init_sync_collections()
@@ -103,7 +96,6 @@ def save_task_to_db(task: dict):
         )
     else:
         logger.error("Cannot save task: Synchronous DB connection unavailable.")
-
 
 def send_calendar_link(user_email: str, task: dict):
     """Opens a Google Calendar link in the default browser."""
@@ -130,9 +122,29 @@ def send_calendar_link(user_email: str, task: dict):
     webbrowser.open(link)
     logger.info(f"Calendar link opened for: {link}")
 
+# ====================================================================
+# 2. EMAIL NOTIFICATION FUNCTION
+# ====================================================================
+def send_email(to_email: str, subject: str, body: str):
+    """Send email using SMTP."""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(EMAIL_HOST, EMAIL_PORT)
+        server.starttls()
+        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Email sent to {to_email} successfully.")
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {e}")
 
 # ====================================================================
-# 2. CORE SCHEDULER LOGIC
+# 3. CORE SCHEDULER LOGIC
 # ====================================================================
 
 def execute_task(task: dict):
@@ -149,7 +161,7 @@ def execute_task(task: dict):
     result = ask_stelle(desc)
     logger.info(f"Task Result: {result[:100]}...")
 
-    # Store content in blogs collection
+    # Store content in blogs collection (Dashboard will show this)
     blogs_collection_sync.insert_one({
         "user_email": user_email,
         "task_description": desc,
@@ -163,10 +175,12 @@ def execute_task(task: dict):
         {"$set": {"retrieved": True, "content": result}}
     )
 
-    # Notification
-    print(f"✅ Task Completed for {user_email}: {desc[:50]}...")
-    if notifier:
-        notifier.show_toast("Task Completed", desc)
+    # Email notification (no content, just alert)
+    email_subject = f"Task Completed: {desc[:50]}"
+    email_body = f"Hello,\n\nYour task \"{desc}\" has been completed successfully.\nCheck your dashboard to view the content.\n\nBest regards,\nStelle Assistant"
+    send_email(user_email, email_subject, email_body)
+
+    logger.info(f"Notification sent to {user_email} for completed task.")
 
     # Schedule next occurrence
     freq = task.get("frequency")
@@ -185,7 +199,6 @@ def execute_task(task: dict):
         else:
             logger.info(f"Non-recurring task for {user_email} finished.")
 
-
 def background_scheduler():
     """The main loop for the synchronous task scheduler."""
     while True:
@@ -203,7 +216,6 @@ def background_scheduler():
             logger.error(f"Error in background_scheduler loop: {e}")
         time.sleep(30)
 
-
 def load_tasks():
     """Initializes scheduled_datetime for existing tasks if missing."""
     tasks_collection_sync, _ = get_or_init_sync_collections()
@@ -218,7 +230,6 @@ def load_tasks():
                 save_task_to_db(task)
             except Exception as e:
                 logger.error(f"Could not parse scheduled_time for task {task.get('_id')}: {e}")
-
 
 # --- Scheduler Thread Setup ---
 load_tasks()
