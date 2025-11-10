@@ -41,6 +41,13 @@ EMAIL_ADDRESS = os.getenv("SMTP_USERNAME")
 EMAIL_PASSWORD = os.getenv("SMTP_PASSWORD")
 FROM_EMAIL = os.getenv("FROM_EMAIL")
 
+raw_from_email = os.getenv("FROM_EMAIL", "mailto:info@stelle.world")
+if not raw_from_email.startswith("mailto:"):
+    raw_from_email = f"mailto:{raw_from_email}"
+FROM_EMAIL = raw_from_email
+
+VAPID_CLAIMS = {"sub": FROM_EMAIL}
+
 
 # Pexels Key
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
