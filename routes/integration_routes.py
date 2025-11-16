@@ -14,7 +14,7 @@ from services.ai_service import get_groq_client
 from services.post_generator_service import (
     classify_post_type, 
     generate_keywords_post, fetch_trending_hashtags_post, fetch_seo_keywords_post, 
-    generate_caption_post, Platforms, generate_html_code_post, parse_media
+    generate_caption_post, Platforms, generate_html_code_post
 )
 
 router = APIRouter(tags=["Integrations"])  # Sets the tag in Swagger UI
