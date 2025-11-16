@@ -3,7 +3,7 @@
 import asyncio
 import os
 from datetime import datetime, timezone
-
+from config import FROM_EMAIL, VAPID_CLAIMS
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,5 +85,5 @@ async def root():
 # --- Main Execution Block (for local dev/uvicorn run) ---
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # Use Render's assigned port if available
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Make sure to run from the parent directory: uvicorn stelle_backend.main:app --reload
+    uvicorn.run(app, host="0.0.0.0", port=8000)
