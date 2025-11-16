@@ -1,8 +1,8 @@
 # stelle_backend/routes/integration_routes.py
 import json
 import asyncio
-import time # Needed for time.sleep in run_linkedin_scrape_sync
-from typing import List, Dict, Any, Union, Tuple # Needed for proper typing hints
+import time  # Needed for time.sleep in run_linkedin_scrape_sync
+from typing import List, Dict, Any, Union, Tuple  # Needed for proper typing hints
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -14,10 +14,10 @@ from services.ai_service import get_groq_client
 from services.post_generator_service import (
     classify_post_type, 
     generate_keywords_post, fetch_trending_hashtags_post, fetch_seo_keywords_post, 
-    generate_caption_post, Platforms, generate_html_code_post, get_pexels_data, parse_media
+    generate_caption_post, Platforms, generate_html_code_post, parse_media
 )
 
-router = APIRouter(tags=["Integrations"]) # Sets the tag in Swagger UI
+router = APIRouter(tags=["Integrations"])  # Sets the tag in Swagger UI
 
 # ====================================================================
 # A. LINKEDIN SCRAPING ENDPOINTS
@@ -28,12 +28,8 @@ def run_linkedin_scrape_sync(query: str, max_results: int) -> Dict[str, Any]:
     Placeholder for synchronous Selenium scraping logic. 
     This function simulates scraping success and must run in a separate thread.
     """
-    
     logger.info(f"Starting simulated LinkedIn scrape for query: {query}")
-    
-    # Simulates the blocking network/browser operation
-    time.sleep(1) 
-    
+    time.sleep(1)  # Simulates the blocking network/browser operation
     return {
         "status": "success",
         "query": query,
@@ -49,7 +45,6 @@ async def scrape_linkedin_endpoint(request: ScrapeRequest):
     running in a background thread to prevent Uvicorn from locking up.
     """
     try:
-        # Run the synchronous function in a separate thread
         scrape_result = await asyncio.to_thread(
             run_linkedin_scrape_sync, request.query, request.max_results
         )
@@ -67,9 +62,6 @@ async def scrape_linkedin_endpoint(request: ScrapeRequest):
 async def websocket_generate_post_endpoint(websocket: WebSocket):
     """Streams the full social media content generation pipeline."""
     await websocket.accept()
-    
-    # Imports needed dynamically for the loop
-    from services.ai_service import get_groq_client
     
     await websocket.send_json(
         {"status": "connected", "message": "Connection established for post generation."}
@@ -112,7 +104,7 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
         await websocket.send_json({"status": "processing", "message": "Fetching SEO keywords..."})
         seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
 
-        html_code, captions, media, parsed_media = None, None, None, None
+        html_code, captions, parsed_media = None, None, None
 
         if post_option_type == PostGenOptions.Text:
             # Text Post: Generate HTML
@@ -121,15 +113,12 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
             captions = await generate_caption_post(client_async, prompt, seed_keywords, trending_hashtags, platform_options)
 
         else:
-            # Photo/Video Post: Fetch Media and Captions
-            await websocket.send_json({"status": "processing", "message": "Finding relevant media..."})
-            media = await get_pexels_data(seed_keywords, post_option_type)
-            parsed_media = await parse_media(media, post_option_type)
+            # Photo/Video Post: Skip Pexels, use empty media
+            await websocket.send_json({"status": "processing", "message": "Skipping media fetch (Pexels removed)..."} )
+            parsed_media = []
 
             await websocket.send_json({"status": "processing", "message": "Crafting the perfect caption..."})
-            captions = await generate_caption_post(
-                client_async, prompt, seed_keywords, trending_hashtags, platform_options
-            )
+            captions = await generate_caption_post(client_async, prompt, seed_keywords, trending_hashtags, platform_options)
 
         # 7. Final Output
         await websocket.send_json(
