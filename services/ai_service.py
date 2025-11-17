@@ -119,7 +119,7 @@ async def groq_generate_text(
             model=model,
             messages=[
                 {"role": "system", "content": system_msg},
-                {"role": "user", "content": [{"type": "text", "text": prompt}]}
+                {"role": "user", "content": prompt}
             ],
             temperature=0.8,
             max_completion_tokens=300,
