@@ -123,37 +123,63 @@ async def fetch_seo_keywords_post(client: AsyncGroq, seed_keywords: list) -> lis
 # =============================================================
 # 🔥 NEW CAPTION GENERATOR
 # =============================================================
+# =============================================================
+# 🔥 CLEAN + POLISHED CAPTION GENERATOR
+# =============================================================
 
 async def generate_caption_post(query: str, seed_keywords: list, hashtags: list, platforms: list) -> Dict[str, Any]:
     final_output = {}
+
+    # reduce hashtags to 5 best ones
+    clean_hashtags = []
+    for h in hashtags:
+        if len(clean_hashtags) >= 5:
+            break
+        if len(h) > 2 and h not in clean_hashtags:
+            clean_hashtags.append(h)
+
+    if not clean_hashtags:
+        clean_hashtags = ["#Trending", "#ExploreMore", "#Inspiration"]
+
+    hashtag_block = " ".join(clean_hashtags)
 
     for platform in platforms:
         platform_normalized = platform.lower().strip()
         style = PLATFORM_STYLES.get(platform_normalized, "Write a simple creative caption.")
 
         prompt = f"""
-User query: {query}
-Seed keywords: {", ".join(seed_keywords)}
+Write a clean, final social-media caption based on this context:
 
-Write a caption for platform: {platform}
-Style instruction: {style}
+➡️ Context / event: "{query}"
 
-❗ Do NOT include hashtags in the caption.
-❗ Do NOT mention keywords list.
-❗ Write only ONE caption, clean and final.
+Platform: {platform}
+Writing Style: {style}
+
+Rules:
+- The caption MUST be short, catchy and polished.
+- Add ONE clear call-to-action: “Follow us for more updates!”
+- Do NOT list keywords.
+- Do NOT include explanations.
+- Do NOT repeat the full context again.
+- Return ONLY the final caption text.
+- After the caption, add this hashtag block exactly:
+{hashtag_block}
 """
 
         try:
             caption = await groq_generate_text(MODEL, prompt)
         except Exception as e:
             logger.error(f"Error generating caption for {platform}: {e}")
-            caption = query  # fallback: use the query as caption
+            caption = query  # fallback
 
-        final_output[platform] = caption.strip()
+        # final cleaning
+        final_caption = caption.strip().replace("\n", " ")
+
+        final_output[platform] = final_caption
 
     return {
         "captions": final_output,
-        "hashtags": hashtags
+        "hashtags": clean_hashtags
     }
 
 
