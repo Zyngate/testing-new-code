@@ -415,3 +415,27 @@ async def websocket_ai_assist_endpoint(websocket):
             await websocket.close()
         except Exception:
             pass
+
+
+# -------------------------
+# FIX: SIMPLE CHAT ENDPOINT
+# -------------------------
+
+from fastapi import HTTPException
+
+@router.post("/chat")
+async def simple_chat_endpoint(data: dict):
+    """
+    Basic chat endpoint required by frontend.
+    Does not affect existing AI Assist, caption generation, or websocket logic.
+    """
+    message = data.get("message") or data.get("text")
+
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    # Basic echo reply (can be replaced later with ai_service)
+    return {
+        "reply": f"Echo: {message}",
+        "status": "ok"
+    }

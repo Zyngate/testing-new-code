@@ -50,7 +50,7 @@ async def handler(request: Request, exc: Exception):
 
 # ALL ROUTERS INCLUDED
 app.include_router(auth_routes.router)
-app.include_router(chat_routes.router)
+app.include_router(chat_routes.router, prefix="/aiassist", tags=["Chat"])
 app.include_router(content_routes.router)
 app.include_router(goal_routes.router)
 app.include_router(misc_routes.router)
