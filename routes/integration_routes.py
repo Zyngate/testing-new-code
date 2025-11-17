@@ -70,7 +70,10 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
     try:
         post_option_type = websocket.query_params.get("post_option")
         if not post_option_type:
-            await websocket.send_json({"status": "error", "message": "Error: Missing post_option parameter in URL."})
+            await websocket.send_json({
+                "status": "error",
+                "message": "Error: Missing post_option parameter in URL."
+            })
             return
 
         post_option_type = post_option_type.lower()
@@ -78,11 +81,17 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
 
         # 1. Platform Options
         platform_options_str = await websocket.receive_text()
-        await websocket.send_json({"status": "processing", "message": "Received platform options..."})
-        
         platform_options_indices = platform_options_str.split(',')
-        platform_options = [Platforms.platform_list[int(x)] for x in platform_options_indices if x.isdigit() and int(x) < len(Platforms.platform_list)]
-        logger.info(f"Selected platform options: {platform_options}")
+
+        platform_options = []
+        for x in platform_options_indices:
+            if x.isdigit() and int(x) < len(Platforms.platform_list):
+                item = Platforms.platform_list[int(x)]
+                # Convert string to Enum if needed
+                if isinstance(item, str):
+                    item = Platforms(item)
+                platform_options.append(item)
+        logger.info(f"Selected platform options (Enum): {platform_options}")
 
         # 2. Prompt
         prompt = await websocket.receive_text()
@@ -93,7 +102,10 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
         post_type = await classify_post_type(client_async, prompt)
 
         # 4. Keywords
-        await websocket.send_json({"status": "processing", "message": f"Post classified as {post_type}. Generating keywords..."})
+        await websocket.send_json({
+            "status": "processing",
+            "message": f"Post classified as {post_type}. Generating keywords..."
+        })
         seed_keywords = await generate_keywords_post(client_async, prompt)
 
         # 5. Hashtags
@@ -114,33 +126,32 @@ async def websocket_generate_post_endpoint(websocket: WebSocket):
 
         else:
             # Photo/Video Post: Skip Pexels, use empty media
-            await websocket.send_json({"status": "processing", "message": "Skipping media fetch (Pexels removed)..."} )
+            await websocket.send_json({"status": "processing", "message": "Skipping media fetch (Pexels removed)..."})
             parsed_media = []
 
             await websocket.send_json({"status": "processing", "message": "Crafting the perfect caption..."})
             captions = await generate_caption_post(client_async, prompt, seed_keywords, trending_hashtags, platform_options)
 
         # 7. Final Output
-        await websocket.send_json(
-            {
-                "status": "completed",
-                "message": "Post Generated Successfully!",
-                "trending_hashtags": trending_hashtags,
-                "seo_keywords": seo_keywords,
-                "captions": captions,
-                "html_code": html_code,
-                "media": parsed_media,
-                "post_type": post_option_type,
-            }
-        )
+        await websocket.send_json({
+            "status": "completed",
+            "message": "Post Generated Successfully!",
+            "trending_hashtags": trending_hashtags,
+            "seo_keywords": seo_keywords,
+            "captions": captions,
+            "html_code": html_code,
+            "media": parsed_media,
+            "post_type": post_option_type,
+        })
 
     except WebSocketDisconnect:
         logger.info("Client disconnected from /ws/generate-post")
     except Exception as e:
         logger.error(f"Post generation failed with an exception: {e}", exc_info=True)
-        await websocket.send_json(
-            {"status": "error", "message": "A critical error occurred while generating the post."}
-        )
+        await websocket.send_json({
+            "status": "error",
+            "message": "A critical error occurred while generating the post."
+        })
     finally:
         await websocket.close()
         logger.info("WebSocket connection for /ws/generate-post has been closed.")
