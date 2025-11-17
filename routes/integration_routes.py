@@ -1,11 +1,9 @@
 # stelle_backend/routes/integration_routes.py
 
 import asyncio
-import time
 from typing import Dict, Any
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
 
 from models.common_models import ScrapeRequest
 from services.common_utils import logger
@@ -20,23 +18,21 @@ from services.post_generator_service import (
 
 router = APIRouter(tags=["Integrations"])
 
-
-
-# ============================================================
-# A. LINKEDIN SCRAPING
-# ============================================================
+# ====================================================================
+# A. LINKEDIN SCRAPING ENDPOINT
+# ====================================================================
 
 def run_linkedin_scrape_sync(query: str, max_results: int) -> Dict[str, Any]:
-    logger.info(f"Starting simulated LinkedIn scrape for query: {query}")
+    logger.info(f"Starting simulated LinkedIn scrape for: {query}")
+    import time
     time.sleep(1)
+
     return {
         "status": "success",
         "query": query,
         "results_count": max_results,
-        "data_summary": f"Retrieved summary for {query}'s profile.",
-        "note": "Actual scraping logic runs synchronously here."
+        "data_summary": f"Scraped summary for {query} (simulated)."
     }
-
 
 @router.post("/scrape_linkedin", response_model=Dict[str, Any])
 async def scrape_linkedin_endpoint(request: ScrapeRequest):
@@ -48,115 +44,113 @@ async def scrape_linkedin_endpoint(request: ScrapeRequest):
         )
         return result
     except Exception as e:
-        logger.error(f"Error in /scrape_linkedin: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
+        logger.error(f"LinkedIn scrape failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="LinkedIn scrape failed.")
 
 
+# ====================================================================
+# B. TEXT-ONLY CAPTION GENERATOR (REST ENDPOINT)
+# ====================================================================
 
-# ============================================================
-# B. CAPTION GENERATOR — REST VERSION (APPEARS IN /docs)
-# ============================================================
-
-@router.post("/generate_caption", tags=["Integrations"])
-async def generate_caption_endpoint(body: Dict[str, Any]):
+@router.post("/generate_caption")
+async def generate_caption_endpoint(body: dict):
+    """
+    REST-based caption generator (shows in Swagger).
+    """
     try:
         prompt = body.get("prompt", "")
         if not prompt:
-            raise HTTPException(400, "Prompt is required")
+            raise HTTPException(status_code=400, detail="Prompt is required.")
 
         client_async = await get_groq_client()
 
-        # Classification
+        # 1. post classification
         post_type = await classify_post_type(client_async, prompt)
 
-        # Keywords
-        seed_keywords = await generate_keywords_post(client_async, prompt)
+        # 2. keywords
+        keywords = await generate_keywords_post(client_async, prompt)
 
-        # Trending hashtags
-        trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, [])
+        # 3. trending hashtags
+        hashtags = await fetch_trending_hashtags_post(client_async, keywords, [])
 
-        # SEO keywords
-        seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
+        # 4. SEO terms
+        seo_keywords = await fetch_seo_keywords_post(client_async, keywords)
 
-        # Captions (default Instagram)
-        caption_result = await generate_caption_post(
+        # 5. Captions for ALL platforms
+        platforms = ["instagram", "linkedin", "facebook", "twitter", "reddit"]
+
+        captions = await generate_caption_post(
             query=prompt,
-            seed_keywords=seed_keywords,
-            hashtags=trending_hashtags,
-            platforms=["instagram"]
+            seed_keywords=keywords,
+            hashtags=hashtags,
+            platforms=platforms
         )
 
         return {
             "status": "success",
             "post_type": post_type,
-            "keywords": seed_keywords,
-            "trending_hashtags": trending_hashtags,
+            "keywords": keywords,
             "seo_keywords": seo_keywords,
-            "captions": caption_result["captions"]
+            "hashtags": hashtags,
+            "captions": captions["captions"]
         }
 
     except Exception as e:
-        logger.error(f"Caption REST endpoint failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Caption generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Caption generation failed.")
 
 
-
-# ============================================================
-# C. CAPTION GENERATOR — WEBSOCKET VERSION
-# ============================================================
+# ====================================================================
+# C. CAPTION GENERATION (WEBSOCKET)
+# ====================================================================
 
 @router.websocket("/wss/generate-caption")
 async def websocket_generate_caption(websocket: WebSocket):
     await websocket.accept()
-
-    await websocket.send_json({
-        "status": "connected",
-        "message": "Connection established for caption generation."
-    })
+    await websocket.send_json({"status": "connected", "message": "Caption generation initialized."})
 
     try:
+        # Receive prompt from frontend
         prompt = await websocket.receive_text()
-        logger.info(f"Caption Prompt: {prompt}")
 
         client_async = await get_groq_client()
 
-        await websocket.send_json({"status": "processing", "message": "Classifying post type..."})
+        await websocket.send_json({"status": "processing", "message": "Classifying post..."})
         post_type = await classify_post_type(client_async, prompt)
 
         await websocket.send_json({"status": "processing", "message": "Generating keywords..."})
-        seed_keywords = await generate_keywords_post(client_async, prompt)
+        keywords = await generate_keywords_post(client_async, prompt)
 
-        await websocket.send_json({"status": "processing", "message": "Fetching trending hashtags..."})
-        trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, [])
+        await websocket.send_json({"status": "processing", "message": "Trending hashtags..."})
+        hashtags = await fetch_trending_hashtags_post(client_async, keywords, [])
 
         await websocket.send_json({"status": "processing", "message": "Fetching SEO keywords..."})
-        seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
+        seo_keywords = await fetch_seo_keywords_post(client_async, keywords)
 
         await websocket.send_json({"status": "processing", "message": "Generating captions..."})
-        caption_result = await generate_caption_post(
+
+        platforms = ["instagram", "linkedin", "facebook", "twitter", "reddit"]
+
+        captions = await generate_caption_post(
             query=prompt,
-            seed_keywords=seed_keywords,
-            hashtags=trending_hashtags,
-            platforms=["instagram"]
+            seed_keywords=keywords,
+            hashtags=hashtags,
+            platforms=platforms
         )
 
         await websocket.send_json({
             "status": "completed",
-            "message": "Caption generation finished!",
             "post_type": post_type,
-            "keywords": seed_keywords,
-            "trending_hashtags": trending_hashtags,
+            "keywords": keywords,
             "seo_keywords": seo_keywords,
-            "captions": caption_result["captions"]
+            "hashtags": hashtags,
+            "captions": captions["captions"]
         })
 
     except WebSocketDisconnect:
-        logger.info("Client disconnected from caption websocket")
-
+        logger.info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"Caption generation failed: {e}", exc_info=True)
-        await websocket.send_json({"status": "error", "message": str(e)})
-
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+        await websocket.send_json({"status": "error", "message": "Failed to generate caption."})
     finally:
         await websocket.close()
-        logger.info("WebSocket closed for /wss/generate-caption")
