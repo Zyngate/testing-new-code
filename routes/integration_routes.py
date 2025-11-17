@@ -56,7 +56,7 @@ async def scrape_linkedin_endpoint(request: ScrapeRequest):
 
 
 # ====================================================================
-# B. TEXT-ONLY CAPTION GENERATOR  (WEBSOCKET)
+# B. TEXT-ONLY CAPTION GENERATOR (WEBSOCKET)
 # ====================================================================
 
 @router.websocket("/wss/generate-caption")
@@ -125,3 +125,55 @@ async def websocket_generate_caption(websocket: WebSocket):
     finally:
         await websocket.close()
         logger.info("WebSocket closed for /wss/generate-caption")
+
+
+
+# ====================================================================
+# C. REST API CAPTION GENERATOR (VISIBLE IN /docs)
+# ====================================================================
+
+@router.post("/generate_caption", tags=["Integrations"])
+async def generate_caption_endpoint(body: dict):
+    """
+    REST API version of the caption generator.
+    Shows in /docs.
+    """
+    try:
+        prompt = body.get("prompt", "")
+        if not prompt:
+            return {"error": "Prompt is required"}
+
+        client_async = await get_groq_client()
+
+        # 1. Classify post
+        post_type = await classify_post_type(client_async, prompt)
+
+        # 2. Seed keywords
+        seed_keywords = await generate_keywords_post(client_async, prompt)
+
+        # 3. Hashtags
+        trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, [])
+
+        # 4. SEO keywords
+        seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
+
+        # 5. Captions (default Instagram)
+        caption_result = await generate_caption_post(
+            query=prompt,
+            seed_keywords=seed_keywords,
+            hashtags=trending_hashtags,
+            platforms=["instagram"]
+        )
+
+        return {
+            "status": "success",
+            "post_type": post_type,
+            "keywords": seed_keywords,
+            "trending_hashtags": trending_hashtags,
+            "seo_keywords": seo_keywords,
+            "captions": caption_result["captions"],
+        }
+
+    except Exception as e:
+        logger.error(f"Caption REST endpoint failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
