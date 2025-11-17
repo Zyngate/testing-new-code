@@ -29,6 +29,7 @@ router = APIRouter(tags=["Integrations"])
 def run_linkedin_scrape_sync(query: str, max_results: int) -> Dict[str, Any]:
     logger.info(f"Starting simulated LinkedIn scrape for query: {query}")
     time.sleep(1)
+
     return {
         "status": "success",
         "query": query,
@@ -41,20 +42,21 @@ def run_linkedin_scrape_sync(query: str, max_results: int) -> Dict[str, Any]:
 @router.post("/scrape_linkedin", response_model=Dict[str, Any])
 async def scrape_linkedin_endpoint(request: ScrapeRequest):
     try:
-        scrape_result = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             run_linkedin_scrape_sync,
             request.query,
             request.max_results
         )
-        return scrape_result
+        return result
 
     except Exception as e:
-        logger.error(f"Error in /scrape_linkedin endpoint: {e}", exc_info=True)
+        logger.error(f"Error in /scrape_linkedin: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Scraping failed: {str(e)}")
 
 
+
 # ====================================================================
-# B. TEXT-ONLY CAPTION GENERATOR (WEBSOCKET)
+# B. TEXT-ONLY CAPTION GENERATOR  (WEBSOCKET)
 # ====================================================================
 
 @router.websocket("/wss/generate-caption")
@@ -67,40 +69,39 @@ async def websocket_generate_caption(websocket: WebSocket):
     })
 
     try:
-        # User sends only the TEXT prompt (no platform selection here)
+        # User sends only the TEXT prompt
         prompt = await websocket.receive_text()
-        logger.info(f"Prompt received: {prompt}")
+        logger.info(f"Caption Prompt: {prompt}")
 
-        # Async Groq client
+        # GROQ client
         client_async = await get_groq_client()
 
-        # Classification
+        # CLASSIFY TYPE
         await websocket.send_json({"status": "processing", "message": "Classifying post type..."})
         post_type = await classify_post_type(client_async, prompt)
 
-        # Keywords
+        # KEYWORDS
         await websocket.send_json({"status": "processing", "message": "Generating keywords..."})
         seed_keywords = await generate_keywords_post(client_async, prompt)
 
-        # Trending hashtags
+        # HASHTAGS
         await websocket.send_json({"status": "processing", "message": "Fetching trending hashtags..."})
         trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, [])
 
-        # SEO keywords
+        # SEO TERMS
         await websocket.send_json({"status": "processing", "message": "Fetching SEO keywords..."})
         seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
 
-        # Captions — NEW FORMAT
+        # CAPTION GENERATION
         await websocket.send_json({"status": "processing", "message": "Generating captions..."})
-
         caption_result = await generate_caption_post(
             query=prompt,
             seed_keywords=seed_keywords,
             hashtags=trending_hashtags,
-            platforms=["instagram"]       # default platform
+            platforms=["instagram"]  # default platform
         )
 
-        # Send Final Response
+        # SEND FINAL RESPONSE
         await websocket.send_json({
             "status": "completed",
             "message": "Caption generation finished!",
@@ -116,8 +117,11 @@ async def websocket_generate_caption(websocket: WebSocket):
 
     except Exception as e:
         logger.error(f"Caption generation failed: {e}", exc_info=True)
-        await websocket.send_json({"status": "error", "message": f"Critical error: {str(e)}"})
+        await websocket.send_json({
+            "status": "error",
+            "message": f"Critical error: {str(e)}"
+        })
 
     finally:
         await websocket.close()
-        logger.info("WebSocket connection closed for /wss/generate-caption")
+        logger.info("WebSocket closed for /wss/generate-caption")
