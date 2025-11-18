@@ -12,26 +12,44 @@ from services.ai_service import (
 
 MODEL = "llama-3.3-70b-versatile"
 
+# ============================================================
+#  SUPPORTED PLATFORMS (7 platforms you asked for)
+# ============================================================
+
 class Platforms(str, Enum):
     Instagram = "instagram"
-    Twitter = "twitter"
-    LinkedIn = "linkedin"
     Facebook = "facebook"
-    Reddit = "reddit"
+    LinkedIn = "linkedin"
+    Pinterest = "pinterest"
+    Threads = "threads"
+    TikTok = "tiktok"
+    YouTube = "youtube"
 
-    platform_list = [Instagram, Twitter, LinkedIn, Facebook, Reddit]
+    platform_list = [
+        Instagram, Facebook, LinkedIn,
+        Pinterest, Threads, TikTok, YouTube
+    ]
+
+
+# ============================================================
+#  PLATFORM STYLES
+# ============================================================
 
 PLATFORM_STYLES = {
     "instagram": "Write a sassy, trendy, aesthetic Gen-Z caption.",
-    "linkedin": "Write a corporate, professional, confident caption.",
     "facebook": "Write a warm, friendly, conversational caption.",
-    "reddit": "Write an informative, community-style caption.",
-    "twitter": "Write a short, punchy, high-impact tweet."
+    "linkedin": "Write a professional, corporate, polished caption.",
+    "pinterest": "Write an aesthetic, dreamy, soft-vibe caption.",
+    "threads": "Write a spicy, short Gen-Z style caption.",
+    "tiktok": "Write a chaotic, hook-first, Gen-Z engaging caption.",
+    "youtube": "Write a YouTube description-style caption with SEO tone."
 }
 
-# --------------------------------------------------------
-# KEYWORDS
-# --------------------------------------------------------
+
+# ============================================================
+#  KEYWORDS
+# ============================================================
+
 async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
     prompt = f"Generate exactly 3 short keywords for: {query}. Only keywords, comma-separated."
     try:
@@ -45,24 +63,56 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
     except:
         return ["", "", ""]
 
-# --------------------------------------------------------
-# HASHTAGS
-# --------------------------------------------------------
+
+# ============================================================
+#  PLATFORM-WISE HASHTAGS  (MOST IMPORTANT PART)
+# ============================================================
+
+async def fetch_platform_hashtags(
+    client: AsyncGroq,
+    seed_keywords: list,
+    platform: str
+) -> List[str]:
+
+    prompt = f"""
+Generate 15 trending hashtags for the platform: {platform}.
+Base them on keywords: {", ".join(seed_keywords)}.
+Rules:
+- ONLY output hashtags (space-separated)
+- No sentences or explanations
+"""
+
+    try:
+        raw = await query_internet_via_groq(prompt)
+        cleaned = [t.replace("#", "").strip() for t in raw.split() if t.strip()]
+    except:
+        cleaned = []
+
+    cleaned = list(dict.fromkeys(cleaned))
+    return [f"#{t}" for t in cleaned[:15]]
+
+
+# ============================================================
+#  GLOBAL HASHTAGS (old one, still used by chat)
+# ============================================================
+
 async def fetch_trending_hashtags_post(client: AsyncGroq, seed_keywords, _platforms):
     tags = []
     for kw in seed_keywords:
         p = f"Give trending hashtags for: {kw}. Only hashtags separated by spaces."
         try:
-            content = await query_internet_via_groq(p)
-            tags.extend([x.replace("#", "") for x in content.split()])
+            raw = await query_internet_via_groq(p)
+            tags.extend([t.replace("#", "") for t in raw.split()])
         except:
             pass
     unique = list(dict.fromkeys(tags))
     return [f"#{t}" for t in unique[:15]]
 
-# --------------------------------------------------------
-# SEO
-# --------------------------------------------------------
+
+# ============================================================
+#  SEO
+# ============================================================
+
 async def fetch_seo_keywords_post(client: AsyncGroq, seed_keywords):
     out = []
     for kw in seed_keywords:
@@ -74,17 +124,32 @@ async def fetch_seo_keywords_post(client: AsyncGroq, seed_keywords):
             pass
     return list(dict.fromkeys(out))[:10]
 
-# --------------------------------------------------------
-# MULTI-PLATFORM CAPTION GENERATOR (FINAL)
-# --------------------------------------------------------
-async def generate_caption_post(query: str, seed_keywords: list, hashtags: list, platforms: list):
-    results = {}
+
+# ============================================================
+#  FINAL MULTI-PLATFORM CAPTION + HASHTAGS GENERATOR
+# ============================================================
+
+async def generate_caption_post(
+    query: str,
+    seed_keywords: list,
+    platforms: list
+) -> Dict[str, Any]:
+
+    captions: Dict[str, str] = {}
+    platform_hashtags: Dict[str, List[str]] = {}
+
+    # Create async Groq instance for hashtag calls
+    client = AsyncGroq()
 
     for platform in platforms:
         p = platform.lower()
+
+        # ---------------------------------------
+        # Caption generation
+        # ---------------------------------------
         style = PLATFORM_STYLES.get(p, "Write a clean, creative caption.")
 
-        prompt = f"""
+        caption_prompt = f"""
 Generate a caption for: {p}
 
 Context: {query}
@@ -92,24 +157,40 @@ Context: {query}
 Style: {style}
 
 Rules:
-- NO hashtags in caption.
-- NO keywords mentioned.
-- ONE final clean caption.
+- Do NOT include hashtags.
+- Only return ONE clean caption.
 """
 
         try:
-            caption = await groq_generate_text(MODEL, prompt)
+            caption = await groq_generate_text(MODEL, caption_prompt)
         except Exception as e:
             logger.error(f"Caption generation failed for {p}: {e}")
             caption = query
 
-        results[p] = caption.strip()
+        captions[p] = caption.strip()
 
-    return {"captions": results, "hashtags": hashtags}
+        # ---------------------------------------
+        # Platform-wise hashtags
+        # ---------------------------------------
+        try:
+            platform_hashtags[p] = await fetch_platform_hashtags(
+                client=client,
+                seed_keywords=seed_keywords,
+                platform=p
+            )
+        except:
+            platform_hashtags[p] = []
 
-# --------------------------------------------------------
-# CLASSIFIER
-# --------------------------------------------------------
+    return {
+        "captions": captions,
+        "platform_hashtags": platform_hashtags
+    }
+
+
+# ============================================================
+#  CLASSIFIER
+# ============================================================
+
 async def classify_post_type(client: AsyncGroq, prompt: str):
     p = f"Classify this post: {prompt}. Options: Informative, Inspirational, Promotional, Tutorial. Only the word."
     try:
