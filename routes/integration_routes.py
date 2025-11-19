@@ -8,8 +8,6 @@ from services.common_utils import logger
 from services.ai_service import get_groq_client
 from services.post_generator_service import (
     generate_keywords_post,
-    fetch_platform_hashtags,
-    fetch_seo_keywords_post,
     generate_caption_post
 )
 
@@ -31,9 +29,10 @@ async def generate_caption_endpoint(body: dict):
 
         client = await get_groq_client()
 
+        # 1. keywords
         keywords = await generate_keywords_post(client, prompt)
-        seo_keywords = await fetch_seo_keywords_post(client, keywords)
 
+        # 2. captions + hashtags
         results = await generate_caption_post(
             query=prompt,
             seed_keywords=keywords,
@@ -43,7 +42,6 @@ async def generate_caption_endpoint(body: dict):
         return {
             "status": "success",
             "keywords": keywords,
-            "seo_keywords": seo_keywords,
             "captions": results["captions"],
             "hashtags": results["platform_hashtags"]
         }
@@ -62,10 +60,13 @@ async def websocket_generate_caption(websocket: WebSocket):
     await websocket.send_json({"status": "connected", "message": "Ready."})
 
     try:
+        # 1. Receive platforms
         platforms_text = await websocket.receive_text()
         platforms = [p.strip() for p in platforms_text.split(",")]
 
+        # 2. Receive prompt
         prompt = await websocket.receive_text()
+
         client = await get_groq_client()
 
         await websocket.send_json({"status": "processing", "message": "Generating keywords..."})
@@ -82,7 +83,7 @@ async def websocket_generate_caption(websocket: WebSocket):
         })
 
     except Exception as e:
-        logger.error(f"WebSocket Error: {e}")
+        logger.error(f"WebSocket Error: {e}", exc_info=True)
         await websocket.send_json({"status": "error", "message": "Caption generation failed."})
 
     finally:

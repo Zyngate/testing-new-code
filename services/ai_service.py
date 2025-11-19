@@ -96,10 +96,15 @@ async def rate_limited_groq_call(
 # 🔵 3. DEDICATED CAPTION GENERATOR CLIENT (ADDED)
 # ============================================================
 
-def get_caption_client():
+def get_caption_client() -> AsyncGroq:
+    """
+    Dedicated client that MUST use the GROQ_API_KEY_CAPTION environment variable.
+    Raises if the key is missing to avoid silent failures during caption generation.
+    """
     key = GROQ_API_KEY_CAPTION
     if not key:
-        logger.error("GROQ_API_KEY_CAPTION missing — using fallback key")
+        logger.error("GROQ_API_KEY_CAPTION is missing! Caption generation requires this key.")
+        raise Exception("Missing GROQ_API_KEY_CAPTION environment variable.")
     return AsyncGroq(api_key=key)
 
 
@@ -110,12 +115,12 @@ async def groq_generate_text(
 ):
     """
     Safe wrapper for caption text generation only.
-    Does NOT affect any other logic in ai_service.py
+    Uses the dedicated caption client (GROQ_API_KEY_CAPTION).
     """
     try:
-        client = get_caption_client()
+        client_caption = get_caption_client()
 
-        response = await client.chat.completions.create(
+        response = await client_caption.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_msg},
@@ -131,16 +136,25 @@ async def groq_generate_text(
 
     except Exception as e:
         logger.error(f"GROQ Caption Error: {e}")
+        # Return empty string so downstream code can fallback gracefully
         return ""
 
 
 # ============================================================
-# 🔵 4. EXISTING CORE FUNCTIONS
+# 🔵 4. EXISTING CORE FUNCTIONS (unchanged except get_groq_client)
 # ============================================================
 
 async def get_groq_client() -> AsyncGroq:
-    selected_key = random.choice(GENERATE_API_KEYS)
-    return AsyncGroq(api_key=selected_key)
+    """
+    IMPORTANT: for caption generation flows we want to use the dedicated caption key.
+    This function now returns the caption client so all caption-related callers that
+    call get_groq_client() (e.g. routes -> generate_keywords_post -> generate_caption_post)
+    will consistently use GROQ_API_KEY_CAPTION.
+
+    NOTE: If you have other non-caption parts of the app that relied on random GENERATE_API_KEYS,
+    consider using a separate helper. For caption flows this ensures stability.
+    """
+    return get_caption_client()
 
 
 async def generate_text_embedding(text: str | None) -> list:
@@ -208,9 +222,9 @@ async def content_for_website(content: str) -> str:
         "List key themes and provide a brief final summary."
     )
     try:
-        client = Groq(api_key=CONTENT_CLIENT_KEY)
+        client_local = Groq(api_key=CONTENT_CLIENT_KEY)
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            client_local.chat.completions.create,
             messages=[
                 {"role": "system", "content": "You are a content analysis expert."},
                 {"role": "user", "content": prompt},
@@ -231,9 +245,9 @@ async def detailed_explanation(content: str) -> str:
         "and then generate a comprehensive summary of the content below:\n\n" + content
     )
     try:
-        client = Groq(api_key=EXPLANATION_CLIENT_KEY)
+        client_local = Groq(api_key=EXPLANATION_CLIENT_KEY)
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            client_local.chat.completions.create,
             messages=[
                 {"role": "system", "content": "You are an expert analysis assistant."},
                 {"role": "user", "content": prompt},
@@ -250,9 +264,9 @@ async def detailed_explanation(content: str) -> str:
 
 async def classify_prompt(prompt: str) -> str:
     try:
-        client = Groq(api_key=CLASSIFY_CLIENT_KEY)
+        client_local = Groq(api_key=CLASSIFY_CLIENT_KEY)
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            client_local.chat.completions.create,
             messages=[
                 {
                     "role": "system",
@@ -370,10 +384,10 @@ async def efficient_summarize(previous_summary: str, new_messages: list, user_id
             f"Summarize the following context in under {max_summary_length} characters:\n\n{context_text}"
         )
 
-        client = Groq(api_key=MEMORY_SUMMARY_KEY)
+        client_local = Groq(api_key=MEMORY_SUMMARY_KEY)
 
         response = await asyncio.to_thread(
-            client.chat.completions.create,
+            client_local.chat.completions.create,
             messages=[
                 {"role": "system", "content": "You summarize user behavior."},
                 {"role": "user", "content": prompt},
