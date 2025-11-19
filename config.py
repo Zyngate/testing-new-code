@@ -47,6 +47,8 @@ SMTP_PORT     = optional_env("SMTP_PORT", 465)
 EMAIL_HOST = optional_env("EMAIL_HOST", "smtp.hostinger.com")
 EMAIL_ADDRESS = SMTP_USERNAME
 EMAIL_PASSWORD = SMTP_PASSWORD
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", 465))
+
 
 raw_from_email = optional_env("FROM_EMAIL", "mailto:info@stelle.world")
 if not raw_from_email.startswith("mailto:"):
