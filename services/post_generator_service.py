@@ -10,7 +10,9 @@ from services.ai_service import (
     groq_generate_text
 )
 
+# ✅ Updated model
 MODEL = "llama-3.3-70b-versatile"
+
 
 # Supported platforms
 class Platforms(str, Enum):
@@ -24,6 +26,7 @@ class Platforms(str, Enum):
     Twitter = "twitter"
     Reddit = "reddit"
 
+
 PLATFORM_STYLES = {
     "instagram": "Write a sassy, trendy, Gen-Z caption. Short, aesthetic & bold.",
     "linkedin": "Write a polished, professional, corporate-friendly caption.",
@@ -31,10 +34,11 @@ PLATFORM_STYLES = {
     "pinterest": "Write an aesthetic, dreamy, soft-vibes caption.",
     "threads": "Write a short, spicy, gen-z hot take caption.",
     "tiktok": "Write a chaotic, hook-first caption focused on engagement.",
-    "youtube": "Write a YouTube description with SEO-friendly first line and CTA.",
+    "youtube": "Write a SEO-friendly YouTube description with a CTA.",
     "twitter": "Write a short, punchy tweet.",
     "reddit": "Write an informative, discussion-starter style caption."
 }
+
 
 # -------------------------------------------------------
 # 1. Generate seed keywords
@@ -47,17 +51,19 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
     try:
         resp = await rate_limited_groq_call(
             client,
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-8b-instant",   # ✅ Updated model
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_completion_tokens=40,
+            max_completion_tokens=30,
         )
-        text = resp.choices[0].message.content
+        text = resp.choices[0].message.content or ""
         keywords = [k.strip() for k in text.replace("\n", ",").split(",") if k.strip()]
-        return keywords[:3]
+        return keywords[:3] if keywords else ["", "", ""]
+
     except Exception as e:
         logger.error(f"Keyword generation failed: {e}")
         return ["", "", ""]
+
 
 # -------------------------------------------------------
 # 2. Platform-based hashtag generator
@@ -83,9 +89,9 @@ async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], p
     }
 
     extra_tags = platform_style_tags.get(platform.lower(), ["#socialmedia"])
-
     final = list(dict.fromkeys(base_tags + extra_tags))
     return final[:10]
+
 
 # -------------------------------------------------------
 # 3. Caption Generator
@@ -109,14 +115,21 @@ Keywords: {', '.join(seed_keywords)}
 Platform: {p_norm}
 Tone: {style}
 
-Write ONE single caption without hashtags.
-Keep it platform appropriate.
+Write ONE final caption.
+DO NOT include hashtags.
+Use platform-appropriate tone.
 """
 
         try:
             caption = await groq_generate_text(MODEL, prompt)
-        except Exception:
-            caption = query
+
+            # ✅ fallback so caption never becomes empty
+            if not caption:
+                caption = f"A short {p_norm} caption about: {query}"
+
+        except Exception as e:
+            logger.error(f"Caption generation error for {p_norm}: {e}")
+            caption = f"A short {p_norm} caption about: {query}"
 
         captions[p_norm] = caption.strip()
 
