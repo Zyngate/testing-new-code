@@ -25,7 +25,8 @@ from routes import (
     misc_routes,
     subscription_routes,
     task_routes,
-    integration_routes   # <-- YOUR CAPTION ENDPOINT IS HERE
+    integration_routes,
+    post_generation_routes     # ✅ NEWLY ADDED
 )
 
 app = FastAPI(
@@ -56,7 +57,8 @@ app.include_router(goal_routes.router)
 app.include_router(misc_routes.router)
 app.include_router(subscription_routes.router)
 app.include_router(task_routes.router)
-app.include_router(integration_routes.router)  # ✅ CAPTION ENDPOINT LOADED
+app.include_router(integration_routes.router)        # Existing LinkedIn + old caption
+app.include_router(post_generation_routes.router)   # ✅ NEW: Your updated caption endpoint
 
 
 @app.on_event("startup")
