@@ -1,126 +1,99 @@
 # stelle_backend/config.py
-
 import os
+import random
 import logging
 from dotenv import load_dotenv
 
-# -------------------------------------------------------------------
-# LOAD .env
-# -------------------------------------------------------------------
-load_dotenv()
+# --- Load Environment Variables ---
+load_dotenv()  # Load .env file in project root
 
-# -------------------------------------------------------------------
-# LOGGING SETUP
-# -------------------------------------------------------------------
+# --- Logging Setup ---
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger("stelle_backend")
 
-# -------------------------------------------------------------------
-# SAFE ENV GETTERS
-# -------------------------------------------------------------------
-def require_env(name: str) -> str:
-    """Require an environment variable; log error if missing."""
-    value = os.getenv(name)
-    if not value or value.strip() == "":
-        logger.error(f"❌ Missing environment variable: {name}")
-    return value
+# --- Database ---
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    logger.error("MONGO_URI environment variable is missing.")
 
-def optional_env(name: str, default=None):
-    """Optional env var; returns default if missing."""
-    return os.getenv(name, default)
+# --- VAPID Keys (WebPush) ---
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
 
-# -------------------------------------------------------------------
-# DATABASE
-# -------------------------------------------------------------------
-MONGO_URI = require_env("MONGO_URI")
-
-# -------------------------------------------------------------------
-# SMTP / EMAIL
-# -------------------------------------------------------------------
-SMTP_USERNAME = optional_env("SMTP_USERNAME")
-SMTP_PASSWORD = optional_env("SMTP_PASSWORD")
-SMTP_PORT     = optional_env("SMTP_PORT", 465)
-
-EMAIL_HOST = optional_env("EMAIL_HOST", "smtp.hostinger.com")
-EMAIL_ADDRESS = SMTP_USERNAME
-EMAIL_PASSWORD = SMTP_PASSWORD
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", 465))
-
-
-raw_from_email = optional_env("FROM_EMAIL", "mailto:info@stelle.world")
+raw_from_email = os.getenv("FROM_EMAIL", "mailto:info@stelle.world")
 if not raw_from_email.startswith("mailto:"):
     raw_from_email = f"mailto:{raw_from_email}"
 FROM_EMAIL = raw_from_email
-VAPID_PUBLIC_KEY = optional_env("VAPID_PUBLIC_KEY")
-VAPID_PRIVATE_KEY = optional_env("VAPID_PRIVATE_KEY")
 VAPID_CLAIMS = {"sub": FROM_EMAIL}
 
-# -------------------------------------------------------------------
-# REDIS
-# -------------------------------------------------------------------
-USE_REDIS = optional_env("USE_REDIS", "false").lower() == "true"
-REDIS_HOST = optional_env("REDIS_HOST", "localhost")
+# --- SMTP Configuration ---
+SMTP_CONFIG = {
+    "server": "smtpout.secureserver.net",  # Hostinger SMTP inferred
+    "port": int(os.getenv("SMTP_PORT", 465)),
+    "username": os.getenv("SMTP_USERNAME"),
+    "password": os.getenv("SMTP_PASSWORD"),
+    "from_email": FROM_EMAIL,
+}
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.hostinger.com")
+EMAIL_PORT = int(os.getenv("SMTP_PORT", 465))
+EMAIL_ADDRESS = os.getenv("SMTP_USERNAME")
+EMAIL_PASSWORD = os.getenv("SMTP_PASSWORD")
 
-# -------------------------------------------------------------------
-# GROQ API KEYS (NO FALLBACKS MIXED)
-# -------------------------------------------------------------------
-# These three MUST be different
-GROQ_API_KEY = require_env("GROQ_API_KEY")                     # main general key
-GROQ_API_KEY_CAPTION = require_env("GROQ_API_KEY_CAPTION")     # caption generation key
-BASE_GROQ_KEY = require_env("BASE_GROQ_KEY")                   # async client key
+# --- Pexels API ---
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
-# Specialized Keys (Optional)
-CONTENT_CLIENT_KEY        = optional_env("GROQ_API_KEY_CONTENT", GROQ_API_KEY)
-EXPLANATION_CLIENT_KEY    = optional_env("GROQ_API_KEY_EXPLANATION", GROQ_API_KEY)
-CLASSIFY_CLIENT_KEY       = optional_env("GROQ_API_KEY_CLASSIFY", GROQ_API_KEY)
-GROQ_API_KEY_CODE         = optional_env("GROQ_API_KEY_CODE", GROQ_API_KEY)
-GROQ_API_KEY_RESEARCHAGENT= optional_env("GROQ_API_KEY_RESEARCHAGENT", GROQ_API_KEY)
-GROQ_API_KEY_STELLE_MODEL = optional_env("GROQ_API_KEY_STELLE_MODEL", GROQ_API_KEY)
-PLANNING_KEY              = optional_env("GROQ_API_KEY_PLANNING", GROQ_API_KEY)
-GOAL_SETTING_KEY          = optional_env("GROQ_API_KEY_GOAL_SETTING", GROQ_API_KEY)
-MEMORY_SUMMARY_KEY        = optional_env("GROQ_API_KEY_MEMORY_SUMMARY", GROQ_API_KEY)
+# --- Redis Configuration ---
+USE_REDIS = os.getenv("USE_REDIS", "false").lower() == "true"
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 
-# Browsing Keys
-INTERNET_CLIENT_KEY = optional_env("GROQ_API_KEY_BROWSE", GROQ_API_KEY)
-DEEPSEARCH_CLIENT_KEY = optional_env("GROQ_API_KEY_DEEPSEARCH", GROQ_API_KEY)
-BROWSE_ENDPOINT_KEY = optional_env("GROQ_API_KEY_BROWSE_ENDPOINT", GROQ_API_KEY)
+# --- Groq API Key Management ---
+def get_groq_keys(prefix: str) -> list[str]:
+    """Get all Groq API keys from environment starting with prefix."""
+    keys = [v for k, v in os.environ.items() if k.startswith(prefix) and v]
+    # Sort numerically if key ends with number
+    keys.sort(key=lambda k: int(''.join(filter(str.isdigit, k)) or 0))
+    return keys
 
-# Async operations use BASE_GROQ_KEY
+BASE_GROQ_KEY = os.getenv("BASE_GROQ_KEY") or os.getenv("GROQ_API_KEY")
+
+# Specialized Keys
+CONTENT_CLIENT_KEY        = os.getenv("GROQ_API_KEY_CONTENT", BASE_GROQ_KEY)
+EXPLANATION_CLIENT_KEY    = os.getenv("GROQ_API_KEY_EXPLANATION", BASE_GROQ_KEY)
+CLASSIFY_CLIENT_KEY       = os.getenv("GROQ_API_KEY_CLASSIFY", BASE_GROQ_KEY)
+GROQ_API_KEY_CAPTION      = os.getenv("GROQ_API_KEY_CAPTION", BASE_GROQ_KEY)
+GROQ_API_KEY_CODE         = os.getenv("GROQ_API_KEY_CODE", BASE_GROQ_KEY)
+GROQ_API_KEY_RESEARCHAGENT= os.getenv("GROQ_API_KEY_RESEARCHAGENT", BASE_GROQ_KEY)
+GROQ_API_KEY_STELLE_MODEL = os.getenv("GROQ_API_KEY_STELLE_MODEL", BASE_GROQ_KEY)
+PLANNING_KEY              = os.getenv("GROQ_API_KEY_PLANNING", BASE_GROQ_KEY)
+GOAL_SETTING_KEY          = os.getenv("GROQ_API_KEY_GOAL_SETTING", BASE_GROQ_KEY)
+MEMORY_SUMMARY_KEY        = os.getenv("GROQ_API_KEY_MEMORY_SUMMARY", BASE_GROQ_KEY)
+
+# Browsing / DeepSearch
+INTERNET_CLIENT_KEY = os.getenv("GROQ_API_KEY_BROWSE", BASE_GROQ_KEY)
+DEEPSEARCH_CLIENT_KEY = os.getenv("GROQ_API_KEY_DEEPSEARCH", BASE_GROQ_KEY)
+BROWSE_ENDPOINT_KEY = os.getenv("GROQ_API_KEY_BROWSE_ENDPOINT", BASE_GROQ_KEY)
 ASYNC_CLIENT_KEY = BASE_GROQ_KEY
 
-# -------------------------------------------------------------------
-# MULTIPLE GENERATION KEYS
-# -------------------------------------------------------------------
-def collect_keys(prefix: str) -> list[str]:
-    return [v for k, v in os.environ.items() if k.startswith(prefix) and v.strip()]
+# Randomized Generation Keys
+GENERATION_KEY_PREFIX = "GROQ_API_KEY_GENERATE_"
+GENERATE_API_KEYS = get_groq_keys(GENERATION_KEY_PREFIX) or [BASE_GROQ_KEY]
 
-GENERATE_API_KEYS = collect_keys("GROQ_API_KEY_GENERATE_")
-if not GENERATE_API_KEYS:
-    GENERATE_API_KEYS = [GROQ_API_KEY]   # fallback pool
+# --- OpenAI API Key ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# -------------------------------------------------------------------
-# OPENAI (Optional)
-# -------------------------------------------------------------------
-OPENAI_API_KEY = optional_env("OPENAI_API_KEY")
-
-# -------------------------------------------------------------------
-# GLOBAL CONFIGS
-# -------------------------------------------------------------------
+# --- Rate Limiting ---
 CALLS_PER_MINUTE = 50
-PERIOD = 60
+PERIOD = 60  # seconds
+
+# --- Other Global Configs ---
 FAISS_EMBEDDING_DIM = 768
 
-# -------------------------------------------------------------------
-# WARNINGS
-# -------------------------------------------------------------------
-if not GROQ_API_KEY:
-    logger.error("❌ GROQ_API_KEY missing!")
-if not GROQ_API_KEY_CAPTION:
-    logger.error("❌ GROQ_API_KEY_CAPTION missing!")
+# --- Quick sanity check (optional) ---
+if not OPENAI_API_KEY:
+    logger.warning("OPENAI_API_KEY is missing!")
 if not BASE_GROQ_KEY:
-    logger.error("❌ BASE_GROQ_KEY missing!")
+    logger.warning("BASE_GROQ_KEY / GROQ_API_KEY is missing!")
 if not MONGO_URI:
-    logger.error("❌ MONGO_URI missing!")
+    logger.warning("MONGO_URI is missing!")
