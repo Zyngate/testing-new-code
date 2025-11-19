@@ -11,3 +11,12 @@ stelle_env\Scripts\activate
 
 cd Stelle-backend-code-main
 pip install pymongo
+
+git add services/post_generator_service.py 
+
+git commit -m "Updated platform-wise hashtags & caption generator"
+git push origin main
+
+
+
+
