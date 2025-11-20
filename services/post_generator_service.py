@@ -68,20 +68,48 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
         return ["brand", "marketing", "content"]
 
 # ---------------------------
-# 2) platform hashtag generator (prompt-based)
+# 2) platform hashtag generator (prompt-based + common tags)
 # ---------------------------
 async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], platform: str, query: str) -> List[str]:
-    """
-    Create platform-specific hashtags relevant to the query and seed keywords.
-    Must be called with the query param.
-    Returns up to 12 hashtags.
-    """
-    if not platform:
-        return []
+
+    # Common platform hashtags
+    COMMON_TAGS = {
+        "instagram": [
+            "#reels", "#reelitfeelit", "#viral", "#trending", 
+            "#explorepage", "#instadaily", "#genzvibes"
+        ],
+        "tiktok": [
+            "#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", 
+            "#viralvideo", "#trendingsound"
+        ],
+        "youtube": [
+            "#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", 
+            "#creatorlife", "#youtubetrending"
+        ],
+        "linkedin": [
+            "#leadership", "#careerdevelopment", "#professionalnetworking", 
+            "#businessstrategy", "#innovation", "#futureofwork"
+        ],
+        "facebook": [
+            "#community", "#friendsandfamily", "#fblife", "#socialvibes"
+        ],
+        "threads": [
+            "#threadsapp", "#genz", "#hotTake", "#trendingNow"
+        ],
+        "pinterest": [
+            "#aesthetic", "#moodboard", "#creativeinspo", "#pinterestideas"
+        ],
+        "twitter": [
+            "#trending", "#viralpost", "#tweetoftheday", "#newpost"
+        ],
+        "reddit": [
+            "#askreddit", "#discussion", "#redditcommunity"
+        ]
+    }
 
     platform_context = {
         "instagram": "trendy, aesthetic, gen-z",
-        "facebook": "friendly, community, casual",
+        "facebook": "friendly, community vibes",
         "linkedin": "professional, business, corporate",
         "pinterest": "aesthetic, dreamy, creative",
         "threads": "spicy, short, gen-z hot takes",
@@ -91,42 +119,40 @@ async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], p
         "reddit": "discussion, informative, community"
     }.get(platform.lower(), "general social media")
 
+    # Prompt to AI
     prompt = f"""
-Generate 12 high-quality, platform-specific hashtags.
+Generate 12 platform-specific hashtags.
 
 Platform: {platform}
 Platform style: {platform_context}
 
 Topic: {query}
-Keywords: {', '.join([k for k in seed_keywords if k])}
+Keywords: {', '.join(seed_keywords)}
 
 Rules:
-- Only return hashtags separated by spaces.
-- Do NOT include explanations.
-- Hashtags must be relevant to both topic AND platform style.
+- Only output hashtags separated by spaces.
+- No explanations.
 """
 
     try:
         text = await groq_generate_text(MODEL, prompt)
-        # parse hashtags that start with #
-        tags = [t.strip() for t in text.split() if t.startswith("#")]
-    except Exception as e:
-        logger.error(f"fetch_platform_hashtags generation error for {platform}: {e}")
-        tags = []
+        ai_tags = [t for t in text.split() if t.startswith("#")]
+    except Exception:
+        ai_tags = []
 
-    # fallback: if none returned, build simple ones from keywords + platform tag
-    if not tags:
-        fallback = []
-        for kw in seed_keywords:
-            if kw:
-                safe = "".join(ch for ch in kw if ch.isalnum() or ch == "_")
-                if safe:
-                    fallback.append(f"#{safe.lower()}")
-        fallback.append(f"#{platform.lower()}")
-        tags = list(dict.fromkeys(fallback))
+    # Fallback if no hashtags generated
+    if not ai_tags:
+        ai_tags = [f"#{k.lower()}" for k in seed_keywords if k]
 
-    tags = list(dict.fromkeys(tags))
-    return tags[:12]
+    # Add common platform hashtags
+    common = COMMON_TAGS.get(platform.lower(), [])
+    final_tags = ai_tags + common
+
+    # Dedupe + limit 15 tags
+    final_tags = list(dict.fromkeys(final_tags))[:15]
+
+    return final_tags
+
 
 # ---------------------------
 # 3) caption generator (per-platform)
