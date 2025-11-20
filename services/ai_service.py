@@ -98,8 +98,8 @@ async def rate_limited_groq_call(
 
 def get_caption_client() -> AsyncGroq:
     """
-    Dedicated client that MUST use the GROQ_API_KEY_CAPTION environment variable.
-    Raises if the key is missing to avoid silent failures during caption generation.
+    Return an AsyncGroq client that uses the dedicated caption API key.
+    Will raise if the env var is missing to avoid silent failures.
     """
     key = GROQ_API_KEY_CAPTION
     if not key:
@@ -108,37 +108,28 @@ def get_caption_client() -> AsyncGroq:
     return AsyncGroq(api_key=key)
 
 
-async def groq_generate_text(
-    model: str,
-    prompt: str,
-    system_msg: str = "You are a helpful assistant."
-):
+async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are a helpful assistant.", **kwargs) -> str:
     """
-    Safe wrapper for caption text generation only.
-    Uses the dedicated caption client (GROQ_API_KEY_CAPTION).
+    Uses the dedicated caption client to generate text (synchronous non-streaming).
+    Returns empty string on failure (caller should fallback).
     """
     try:
         client_caption = get_caption_client()
-
         response = await client_caption.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.8,
-            max_completion_tokens=300,
-            top_p=0.95,
-            stream=False
+            temperature=kwargs.get("temperature", 0.8),
+            max_completion_tokens=kwargs.get("max_completion_tokens", 300),
+            top_p=kwargs.get("top_p", 0.95),
+            stream=False,
         )
-
-        return response.choices[0].message.content
-
+        return response.choices[0].message.content or ""
     except Exception as e:
         logger.error(f"GROQ Caption Error: {e}")
-        # Return empty string so downstream code can fallback gracefully
         return ""
-
 
 # ============================================================
 # 🔵 4. EXISTING CORE FUNCTIONS (unchanged except get_groq_client)
