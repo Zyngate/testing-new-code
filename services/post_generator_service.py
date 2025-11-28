@@ -135,7 +135,9 @@ Rules:
         ai_tags = [f"#{k.lower()}" for k in seed_keywords if k]
 
     common = COMMON_TAGS.get(platform.lower(), [])
-    final_tags = list(dict.fromkeys(ai_tags + common))[:15]
+    final_tags = list(dict.fromkeys(common + ai_tags))  # keep all common tags first
+    return final_tags[:15]  # optional limit
+
     return final_tags
 
 
