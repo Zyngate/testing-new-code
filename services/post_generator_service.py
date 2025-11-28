@@ -87,13 +87,13 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
 async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], platform: str, query: str) -> List[str]:
 
     COMMON_TAGS = {
-        "instagram": ["#reels", "#reelitfeelit", "#viral", "#trending", "#explorepage", "#instadaily"],
-        "tiktok": ["#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", "#viralvideo"],
-        "youtube": ["#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", "#creatorlife"],
-        "linkedin": ["#leadership", "#careerdevelopment", "#professionalnetworking", "#businessstrategy"],
-        "facebook": ["#community", "#friendsandfamily", "#socialvibes"],
-        "threads": ["#threadsapp", "#trendingNow"],
-        "pinterest": ["#aesthetic", "#moodboard", "#creativeinspo"],
+        "instagram": ["#reels", "#reelitfeelit", "#viral", "#trending", "#explorepage", "#instadaily","#ExplorePage","#TrendingNow","#InstaVibes","#ReelsDaily","#ViralReels","#InstaGood"],
+        "tiktok": ["#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", "#viralvideo","#foryoupage", "#tiktokmademedoit", "#watchtiltheend", "#creatorspotlight", "#viralmoments", "#trendingsounds"],
+        "youtube": ["#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", "#creatorlife","#ContentCreator","#SubscribeNow"],
+        "linkedin": ["#leadership", "#careerdevelopment", "#professionalnetworking", "#businessstrategy","#Leadership","#CareerGrowth","#BusinessInsights","#ProfessionalDevelopment","#FutureOfWork","#IndustryTrends"],
+        "facebook": ["#community", "#friendsandfamily", "#socialvibes","#SocialVibes","#CommunityLove","#FBFamily","#GoodVibesOnly","#StayConnected","#FriendsAndFamily"],
+        "threads": ["#threadsapp", "#trendingNow","#ThreadsApp","#HotTake","#TrendingNow","#DailyThoughts","#CreatorsOnThreads","#TechTalks"],
+        "pinterest": ["#aesthetic", "#moodboard", "#creativeinspo","#AestheticInspo","#DreamyVibes","#CreativeIdeas","#PinterestFinds","#InspoDaily","#MoodBoardMagic"],
         "twitter": ["#trending", "#viralpost", "#newpost"],
         "reddit": ["#askreddit", "#discussion", "#redditcommunity"]
     }
