@@ -26,23 +26,20 @@ class Platforms(str, Enum):
 # PLATFORM TONE SETTINGS
 # ---------------------------
 PLATFORM_STYLES = {
-    # Clean, aesthetic, NO slang
     "instagram": "Write a clean, trendy, aesthetic caption. No Gen-Z slang. No words like lowkey, highkey, obsessed, fr, no cap.",
-    
     "linkedin": "Write a polished professional, business-focused caption.",
     "facebook": "Write a warm, friendly and conversational caption.",
     "pinterest": "Write an aesthetic, dreamy, mood-board style caption.",
-    
-    # No slang allowed here too
     "threads": "Write a bold, expressive caption. No slang like lowkey/highkey.",
-    
     "tiktok": "Write an engaging, hook-first caption without slang (no lowkey/highkey/no cap).",
     "youtube": "Write a SEO-friendly YouTube description with CTA.",
     "twitter": "Write a short, punchy, bold tweet without slang.",
     "reddit": "Write an informative, discussion-starter caption."
 }
 
-# Banned words globally
+# ---------------------------
+# GLOBAL SLANG BAN WORD LIST
+# ---------------------------
 BANNED_WORDS = [
     "lowkey", "low key", "low-key",
     "highkey", "high key", "high-key",
@@ -87,14 +84,30 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
 async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], platform: str, query: str) -> List[str]:
 
     COMMON_TAGS = {
-        "instagram": ["#reels", "#reelitfeelit", "#viral", "#trending", "#explorepage", "#instadaily","#ExplorePage","#TrendingNow","#InstaVibes","#ReelsDaily","#ViralReels","#InstaGood"],
-        "tiktok": ["#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", "#viralvideo","#foryoupage", "#tiktokmademedoit", "#watchtiltheend", "#creatorspotlight", "#viralmoments", "#trendingsounds"],
-        "youtube": ["#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", "#creatorlife","#ContentCreator","#SubscribeNow"],
-        "linkedin": ["#leadership", "#careerdevelopment", "#professionalnetworking", "#businessstrategy","#Leadership","#CareerGrowth","#BusinessInsights","#ProfessionalDevelopment","#FutureOfWork","#IndustryTrends"],
-        "facebook": ["#community", "#friendsandfamily", "#socialvibes","#SocialVibes","#CommunityLove","#FBFamily","#GoodVibesOnly","#StayConnected","#FriendsAndFamily"],
-        "threads": ["#threadsapp", "#trendingNow","#ThreadsApp","#HotTake","#TrendingNow","#DailyThoughts","#CreatorsOnThreads","#TechTalks"],
-        "pinterest": ["#aesthetic", "#moodboard", "#creativeinspo","#AestheticInspo","#DreamyVibes","#CreativeIdeas","#PinterestFinds","#InspoDaily","#MoodBoardMagic"],
+        "instagram": ["#reels", "#reelitfeelit", "#viral", "#trending", "#explorepage", "#instadaily",
+                      "#ExplorePage", "#TrendingNow", "#InstaVibes", "#ReelsDaily", "#ViralReels", "#InstaGood"],
+        
+        "tiktok": ["#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", "#viralvideo",
+                   "#foryoupage", "#tiktokmademedoit", "#watchtiltheend", "#creatorspotlight", "#viralmoments", "#trendingsounds"],
+        
+        "youtube": ["#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", "#creatorlife",
+                    "#ContentCreator", "#SubscribeNow"],
+        
+        "linkedin": ["#leadership", "#careerdevelopment", "#professionalnetworking", "#businessstrategy",
+                     "#Leadership", "#CareerGrowth", "#BusinessInsights", "#ProfessionalDevelopment",
+                     "#FutureOfWork", "#IndustryTrends"],
+        
+        "facebook": ["#community", "#friendsandfamily", "#socialvibes", "#SocialVibes", "#CommunityLove",
+                     "#FBFamily", "#GoodVibesOnly", "#StayConnected", "#FriendsAndFamily"],
+        
+        "threads": ["#threadsapp", "#trendingNow", "#ThreadsApp", "#HotTake", "#TrendingNow",
+                    "#DailyThoughts", "#CreatorsOnThreads", "#TechTalks"],
+        
+        "pinterest": ["#aesthetic", "#moodboard", "#creativeinspo", "#AestheticInspo", "#DreamyVibes",
+                      "#CreativeIdeas", "#PinterestFinds", "#InspoDaily", "#MoodBoardMagic"],
+        
         "twitter": ["#trending", "#viralpost", "#newpost"],
+        
         "reddit": ["#askreddit", "#discussion", "#redditcommunity"]
     }
 
@@ -122,7 +135,7 @@ Keywords: {', '.join(seed_keywords)}
 Rules:
 - Only output hashtags separated by spaces.
 - No explanations.
-- Do NOT use slang (lowkey, highkey, no cap, fr, obsessed).
+- No slang (lowkey, highkey, no cap, fr, obsessed).
 """
 
     try:
@@ -134,9 +147,17 @@ Rules:
     if not ai_tags:
         ai_tags = [f"#{k.lower()}" for k in seed_keywords if k]
 
-    common = COMMON_TAGS.get(platform.lower(), [])
-    final_tags = list(dict.fromkeys(common + ai_tags))  # keep all common tags first
-    return final_tags[:15]  # optional limit
+    # -------------------------------
+    # ✅ LIMITS & MERGING LOGIC HERE
+    # -------------------------------
+    ai_tags = ai_tags[:6]                 # limit AI-generated hashtags
+    common = COMMON_TAGS.get(platform.lower(), [])[:10]  # limit common hashtags
+
+    # Merge: common first, then AI
+    merged = common + [tag for tag in ai_tags if tag not in common]
+
+    # Remove duplicates while preserving order
+    final_tags = list(dict.fromkeys(merged))
 
     return final_tags
 
@@ -153,7 +174,6 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         p_norm = p.lower().strip()
         tone = PLATFORM_STYLES.get(p_norm, "Write a clean, engaging caption.")
 
-        # hashtags
         try:
             tags = await fetch_platform_hashtags(None, seed_keywords, p_norm, query)
         except Exception as e:
@@ -162,7 +182,6 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
 
         platform_hashtags[p_norm] = tags
 
-        # caption prompt
         caption_prompt = f"""
 You are a senior marketing strategist and expert social media copywriter.
 Write a single caption for platform: {p_norm}.
@@ -174,8 +193,8 @@ Tone: {tone}
 Strict Rules:
 - Write ONE final caption only.
 - No hashtags.
-- NO slang: lowkey, low-key, highkey, no cap, fr, obsessed, literally.
-- No filler hooks. Provide meaningful context.
+- No slang: lowkey, low-key, highkey, fr, no cap, obsessed, literally.
+- Provide meaningful context.
 - Keep it short and platform-appropriate.
 """
 
@@ -183,14 +202,14 @@ Strict Rules:
             caption_text = await groq_generate_text(MODEL, caption_prompt)
             caption_text = caption_text.strip() if caption_text else f"A {p_norm} caption about {query}"
         except Exception as e:
-            logger.error(f"Caption generation error for {p_norm}: {e}")
+            logger.error(f"Caption generation failed for {p_norm}: {e}")
             caption_text = f"A {p_norm} caption about {query}"
 
-        # Final safety filter
+        # Remove banned slang
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
 
-        caption_text = " ".join(caption_text.split())  # clean extra spaces
+        caption_text = " ".join(caption_text.split())
 
         captions[p_norm] = caption_text
 
