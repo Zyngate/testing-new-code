@@ -507,3 +507,76 @@ async def synthesize_result(main_query: str, contents: list[str], max_context: i
         return completion.choices[0].message.content.strip()
     except:
         return "Error generating summary."
+
+# ============================================================
+# 🔵 5. DeepSearch + Visualization (Required by chat_routes.py)
+# ============================================================
+
+async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
+    """
+    Calls Groq DeepSearch using DEEPSEARCH_CLIENT_KEY.
+    Returns: (content, sources[])
+    """
+    try:
+        completion = await asyncio.to_thread(
+            deepsearch_client.chat.completions.create,
+            messages=[{"role": "user", "content": query}],
+            model="deepsearch-1"
+        )
+
+        content = completion.choices[0].message.content or ""
+
+        sources = []
+        tool_execs = getattr(completion.choices[0].message, "executed_tools", []) or []
+        for tool in tool_execs:
+            if hasattr(tool, "search_results") and tool.search_results:
+                results = getattr(tool.search_results, "results", [])
+                for r in results:
+                    title = r.get("title")
+                    url = r.get("url")
+                    if title and url:
+                        sources.append({"title": title, "url": url})
+
+        return content, sources
+
+    except Exception as e:
+        logger.error(f"DeepSearch error: {e}")
+        return "DeepSearch unavailable.", []
+
+
+async def visualize_content(context_text: str) -> Dict[str, Any]:
+    """
+    Generates a structured visualization summary using Groq.
+    Used by chat_routes when user asks to 'visualize', 'analyze', or 'insight'.
+    """
+    try:
+        prompt = (
+            "Analyze the following content and return JSON with:"
+            "\n- summary: a short high-level overview"
+            "\n- themes: list of key themes"
+            "\n- insights: 3–5 bullet insights"
+            "\n\nContent:\n" + context_text
+        )
+
+        completion = await asyncio.to_thread(
+            internet_client.chat.completions.create,
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        raw = completion.choices[0].message.content or ""
+
+        try:
+            data = json.loads(raw)
+            return data
+        except Exception:
+            # fallback: extract text even if JSON not valid
+            return {
+                "summary": raw[:300],
+                "themes": [],
+                "insights": []
+            }
+
+    except Exception as e:
+        logger.error(f"Visualization error: {e}")
+        return {"summary": "", "themes": [], "insights": []}

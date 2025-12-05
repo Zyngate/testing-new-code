@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Union, Tuple
 from groq import Groq, AsyncGroq
 
-from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 import numpy as np
 
@@ -28,13 +28,17 @@ from services.ai_service import (
     classify_prompt,
     generate_text_embedding,
     store_long_term_memory,
+    # newly used helpers (must exist in ai_service.py)
+    query_deepsearch,
+    visualize_content,
 )
 from services.goal_service import update_task_goal_status, schedule_immediate_reminder
 from services.common_utils import get_current_datetime, filter_think_messages, convert_object_ids
 from config import logger, GENERATE_API_KEYS
 from database import doc_index, code_index, file_doc_memory_map, code_memory_map
 
-router = APIRouter()
+router = APIRouter(prefix="/aiassist", tags=["Chat"])
+
 
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
@@ -329,9 +333,34 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         # e) Dynamic Research
         research_needed = await classify_prompt(user_message)
         if research_needed == "research" and not multimodal_context:
-            research_results = await query_internet_via_groq(user_message)
-            if research_results and research_results != "Error accessing internet information.":
-                unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+            # Prefer DeepSearch -> fallback to internet/groq
+            try:
+                ds_content, ds_sources = await query_deepsearch(user_message)
+                if ds_content and "Error" not in ds_content and "unavailable" not in ds_content:
+                    unified_prompt += f"\n\n[DeepSearch Results]:\n{ds_content}\n"
+                    if ds_sources:
+                        unified_prompt += "\nSources:\n" + "\n".join([f"- {s['title']}: {s['url']}" for s in ds_sources])
+                else:
+                    research_results = await query_internet_via_groq(user_message)
+                    if research_results and research_results != "Error accessing internet information.":
+                        unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+            except Exception as e:
+                logger.warning(f"DeepSearch failed in /generate, falling back: {e}")
+                research_results = await query_internet_via_groq(user_message)
+                if research_results and research_results != "Error accessing internet information.":
+                    unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+
+        # Visualization integration: if there's multimodal content and user asked for visual or analysis
+        if multimodal_context and any(k in user_message.lower() for k in ("visual", "visualize", "analyze", "analysis", "insight")):
+            try:
+                viz = await visualize_content(multimodal_context)
+                # Attach a short summary into the LLM prompt so it can reference visualization findings
+                unified_prompt += (
+                    f"\n\n[Visualization Summary]:\nSummary: {viz.get('summary','')}\n"
+                    f"Themes: {', '.join(viz.get('themes',[]))}\n"
+                )
+            except Exception as e:
+                logger.warning(f"visualize_content failed in /generate: {e}")
 
         # --- 3. Build Message History (Retrieval Augmented) ---
         chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
@@ -470,129 +499,146 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
 @router.post("/regenerate", response_model=GenerateResponse)
 async def regenerate_response_endpoint(request: RegenerateRequest, background_tasks: BackgroundTasks):
-    """Regenerates the last assistant response based on the last user message."""
+    """
+    Regenerates the last assistant response based on the last user message.
+    Clean, safe rewritten version (Option B).
+    """
     try:
-        req = request
-        user_id, session_id, filenames = req.user_id, req.session_id, req.filenames
+        user_id, session_id, filenames = request.user_id, request.session_id, request.filenames
 
+        # ---- Fetch chat entry ----
         chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
         if not chat_entry or not chat_entry.get("messages"):
             raise HTTPException(status_code=400, detail="No chat history found for regeneration.")
 
-        messages = chat_entry["messages"]
-        last_user_message = next((msg for msg in reversed(messages) if msg.get("role") == "user"), None)
-        if not last_user_message:
-            raise HTTPException(status_code=400, detail="No user message found to regenerate response for.")
+        messages_list = chat_entry["messages"]
 
-        prompt = last_user_message["content"]
-
-        # Remove last assistant message before regenerating (if present)
-        last_assistant_index = -1
-        for i, msg in enumerate(reversed(messages)):
-            if msg.get("role") == "assistant":
-                last_assistant_index = len(messages) - 1 - i
+        # ---- Find last user message ----
+        last_user = None
+        for msg in reversed(messages_list):
+            if msg.get("role") == "user":
+                last_user = msg
                 break
 
-        if last_assistant_index != -1:
-            del messages[last_assistant_index]
-            await chats_collection.update_one({"_id": chat_entry["_id"]}, {"$pop": {"messages": 1}})
-            logger.info(f"Removed previous assistant message for regeneration in session {session_id}.")
+        if not last_user:
+            raise HTTPException(status_code=400, detail="No user message found to regenerate from.")
 
-        async def call_generate_stream():
-            current_date = get_current_datetime()
+        user_message = last_user["content"]
 
-            long_term_memory = await memory_collection.find_one({"user_id": user_id})
-            long_term_memory_summary = long_term_memory.get("summary", "") if long_term_memory else ""
+        # ---- Remove last assistant response (if exists) ----
+        last_assistant_idx = None
+        for i in range(len(messages_list) - 1, -1, -1):
+            if messages_list[i].get("role") == "assistant":
+                last_assistant_idx = i
+                break
 
-            system_prompt = (
-                "You are Stelle... [full system prompt content] ...\n"
-                f"Current date/time: {current_date}\n"
+        if last_assistant_idx is not None:
+            await chats_collection.update_one(
+                {"_id": chat_entry["_id"]},
+                {"$unset": {f"messages.{last_assistant_idx}": ""}},
             )
-
-            messages = [{"role": "system", "content": system_prompt}]
-            if long_term_memory_summary:
-                messages.append({"role": "system", "content": f"Long-term memory: {long_term_memory_summary}"})
-
-            for msg in filter_think_messages(messages):
-                messages.append({"role": msg["role"], "content": msg["content"]})
-
-            messages.append({"role": "user", "content": prompt})
-
-            selected_key = random.choice(GENERATE_API_KEYS)
-            client_generate = AsyncGroq(api_key=selected_key)
-
-            stream = await client_generate.chat.completions.create(
-                messages=messages,
-                model="meta-llama/llama-4-maverick-17b-128e-instruct",
-                max_completion_tokens=4000,
-                temperature=0.7,
-                stream=True,
+            await chats_collection.update_one(
+                {"_id": chat_entry["_id"]},
+                {"$pull": {"messages": None}},
             )
+            messages_list.pop(last_assistant_idx)
 
+        # ---- Prepare context ----
+        current_date = get_current_datetime()
+
+        long_term_memory = await memory_collection.find_one({"user_id": user_id})
+        long_term_memory_summary = long_term_memory.get("summary", "") if long_term_memory else ""
+
+        # ---- System prompt ----
+        system_prompt = (
+            "You are Stelle, an intelligent assistant. "
+            "Regenerate the assistant response based ONLY on the last user message "
+            "and context provided. Keep goal/task consistency.\n"
+            f"Current date/time: {current_date}\n"
+        )
+
+        # ---- Build messages for model ----
+        final_messages = [{"role": "system", "content": system_prompt}]
+
+        if long_term_memory_summary:
+            final_messages.append({"role": "system", "content": f"Long-term memory: {long_term_memory_summary}"})
+
+        # Add the last few cleaned messages (history)
+        cleaned_history = filter_think_messages(messages_list[-4:])
+        for m in cleaned_history:
+            clean_content = re.sub(r"<think>.*?</think>", "", m["content"], flags=re.DOTALL).strip()
+            clean_content = clean_content[:800] + "…" if len(clean_content) > 800 else clean_content
+            final_messages.append({"role": m["role"], "content": clean_content})
+
+        # Add the user message that triggered regeneration
+        final_messages.append({"role": "user", "content": user_message})
+
+        # ---- Generate new response ----
+        selected_key = random.choice(GENERATE_API_KEYS)
+        client_generate = AsyncGroq(api_key=selected_key)
+
+        stream = await client_generate.chat.completions.create(
+            messages=final_messages,
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            max_completion_tokens=4000,
+            temperature=0.7,
+            stream=True,
+        )
+
+        async def regeneration_stream():
             full_reply = ""
             async for chunk in stream:
-                delta = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+                delta = chunk.choices[0].delta.content or ""
                 full_reply += delta
                 yield delta
 
             reply_content = full_reply.strip()
 
+            # ---- Post-processing ----
             await handle_goal_updates_and_cleanup(reply_content, user_id, session_id)
 
+            # Remove goal/task commands for storage
             lines = reply_content.split("\n")
-            clean_lines = [line for line in lines if not re.match(r"\[.*?: .*?\]", line.strip())]
-            reply_content_clean = "\n".join(clean_lines).strip()
+            clean_lines = [L for L in lines if not re.match(r"\[.*?: .*?\]", L.strip())]
+            cleaned_reply = "\n".join(clean_lines).strip()
 
-            assistant_embedding = await generate_text_embedding(reply_content_clean)
+            # ---- Save regenerated reply ----
+            assistant_embedding = await generate_text_embedding(cleaned_reply)
 
-            new_assistant_message = {
+            new_msg = {
                 "role": "assistant",
-                "content": reply_content_clean,
-                **({"embedding": assistant_embedding} if assistant_embedding else {}),
+                "content": cleaned_reply,
+                "embedding": assistant_embedding,
             }
 
             await chats_collection.update_one(
                 {"user_id": user_id, "session_id": session_id},
                 {
-                    "$push": {"messages": new_assistant_message},
+                    "$push": {"messages": new_msg},
                     "$set": {"last_updated": datetime.now(timezone.utc)},
                 },
             )
-            logger.info(f"Regeneration complete and new response saved for session {session_id}.")
 
+            # Update long-term memory after enough messages
             updated_chat = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
             if updated_chat and len(updated_chat.get("messages", [])) >= 10:
                 background_tasks.add_task(store_long_term_memory, user_id, session_id, updated_chat["messages"][-10:])
 
+            # Cleanup RAG chunks
             await update_rag_usage_and_cleanup(user_id, session_id)
 
-        return StreamingResponse(call_generate_stream(), media_type="text/plain")
+        return StreamingResponse(regeneration_stream(), media_type="text/plain")
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error in /regenerate endpoint: {e}")
-        raise HTTPException(status_code=500, detail="Internal error processing your regeneration request.")
-
-
-@router.get("/chat-history")
-async def get_chat_history_endpoint(user_id: str = Query(...), session_id: str = Query(...)):
-    """Retrieves chat history for a specific session."""
-    try:
-        chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id}, {"messages": 1})
-        if chat_entry and "messages" in chat_entry:
-            return {"messages": filter_think_messages(chat_entry["messages"])}
-        return {"messages": []}
-    except Exception as e:
-        logger.error(f"Chat history retrieval error: {e}")
-        raise HTTPException(status_code=500, detail="Error retrieving chat history.")
+        raise HTTPException(status_code=500, detail=f"Error during regeneration: {e}")
 
 
 # --- NLP/Voice Endpoint (WebSocket) ---
 
 
 @router.websocket("/nlp")
-async def nlp_websocket_endpoint(websocket):
+async def nlp_websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time NLP/Voice chat."""
     await websocket.accept()
 
@@ -650,10 +696,34 @@ async def nlp_websocket_endpoint(websocket):
 
             research_needed = await classify_prompt(user_message)
             if research_needed == "research" and not multimodal_context:
-                await websocket.send_json({"status": "researching", "message": "Researching the topic..."})
-                research_results = await query_internet_via_groq(user_message)
-                if research_results and research_results != "Error accessing internet information.":
-                    unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+                # Try DeepSearch first, then fallback to query_internet_via_groq
+                try:
+                    await websocket.send_json({"status": "researching", "message": "Deep-searching the topic..."})
+                    ds_content, ds_sources = await query_deepsearch(user_message)
+                    if ds_content and "Error" not in ds_content and "unavailable" not in ds_content:
+                        unified_prompt += f"\n\n[DeepSearch Results]:\n{ds_content}\n"
+                        if ds_sources:
+                            unified_prompt += "\nSources:\n" + "\n".join([f"- {s['title']}: {s['url']}" for s in ds_sources])
+                    else:
+                        research_results = await query_internet_via_groq(user_message)
+                        if research_results and research_results != "Error accessing internet information.":
+                            unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+                except Exception as e:
+                    logger.warning(f"DeepSearch failed in /nlp, falling back: {e}")
+                    research_results = await query_internet_via_groq(user_message)
+                    if research_results and research_results != "Error accessing internet information.":
+                        unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
+
+            # Visualization integration for multimodal content in websocket mode
+            if multimodal_context and any(k in user_message.lower() for k in ("visual", "visualize", "analyze", "analysis", "insight")):
+                try:
+                    viz = await visualize_content(multimodal_context)
+                    unified_prompt += (
+                        f"\n\n[Visualization Summary]:\nSummary: {viz.get('summary','')}\n"
+                        f"Themes: {', '.join(viz.get('themes',[]))}\n"
+                    )
+                except Exception as e:
+                    logger.warning(f"visualize_content failed in /nlp: {e}")
 
             chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
             past_messages = chat_entry.get("messages", []) if chat_entry else []
@@ -741,7 +811,10 @@ async def nlp_websocket_endpoint(websocket):
 
     except Exception as e:
         logger.error(f"Error in /nlp endpoint: {e}")
-        await websocket.send_json({"error": f"Internal error processing your request: {e}"})
+        try:
+            await websocket.send_json({"error": f"Internal error processing your request: {e}"})
+        except Exception:
+            logger.error("Failed to send error over websocket.")
     finally:
         await websocket.close()
 
@@ -784,7 +857,7 @@ async def ai_assist_endpoint(input_data: UserInput):
 
 
 @router.websocket("/wss/aiassist")
-async def websocket_ai_assist_endpoint(websocket):
+async def websocket_ai_assist_endpoint(websocket: WebSocket):
     """Streams the social media asset generation process."""
     await websocket.accept()
     from services.post_generator_service import (
@@ -851,4 +924,3 @@ async def chat_alias_endpoint(request: Request):
     """
     # Forward request to the main generate handler. Create a BackgroundTasks instance to satisfy signature.
     return await generate_response_endpoint(request, BackgroundTasks())
-
