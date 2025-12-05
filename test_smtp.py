@@ -5,7 +5,7 @@ server = "smtpout.secureserver.net"
 port = 465
 username = "info@stelle.world"
 password = "zyngate123"
-...
+
 msg = EmailMessage()
 msg.set_content("Testing OTP mail from Stelle backend")
 msg["Subject"] = "SMTP Test - Stelle"

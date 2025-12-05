@@ -24,6 +24,9 @@ loguru
 ratelimit
 html2image
 speechrecognition
-
-# Optional Windows-only notifier (ignored on Linux/Railway)
-# win10toast
+opencv-python       # ⭐ REQUIRED FOR VIDEO FRAME EXTRACTION
+pillow              # ⭐ For image processing
+moviepy             # ⭐ For video audio/frame handling
+ffmpeg-python       # ⭐ Needed for video processing
+tqdm                # Optional but good for progress handling
+python-multipart    # ⭐ REQUIRED for file upload in FastAPI

@@ -11,6 +11,10 @@ from config import logger
 
 router = APIRouter(tags=["Post Generator"])
 
+async def fetch_seo_keywords_post(*args, **kwargs):
+    return []
+
+
 @router.websocket("/wss/generate-post")
 async def websocket_generate_post(websocket: WebSocket, post_option: str = "normal"):
     await websocket.accept()
