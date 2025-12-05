@@ -37,7 +37,7 @@ from services.common_utils import get_current_datetime, filter_think_messages, c
 from config import logger, GENERATE_API_KEYS
 from database import doc_index, code_index, file_doc_memory_map, code_memory_map
 
-router = APIRouter(prefix="/aiassist", tags=["Chat"])
+router = APIRouter(tags=["Chat"])
 
 
 # -------------------------
