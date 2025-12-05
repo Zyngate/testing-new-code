@@ -827,7 +827,7 @@ async def ai_assist_endpoint(input_data: UserInput):
     """Generates social media assets (sync version)."""
     from services.post_generator_service import (
         generate_keywords_post,
-        fetch_trending_hashtags_post,
+        fetch_platform_hashtags,
         fetch_seo_keywords_post,
         generate_caption_post,
         Platforms,
@@ -840,7 +840,7 @@ async def ai_assist_endpoint(input_data: UserInput):
         default_platforms = [Platforms.Instagram]
 
         seed_keywords = await generate_keywords_post(client_async, input_data.query)
-        trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, default_platforms)
+        trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
         seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
         caption_dict = await generate_caption_post(client_async, input_data.query, seed_keywords, trending_hashtags, default_platforms)
         caption = caption_dict.get(Platforms.Instagram.value, list(caption_dict.values())[0])
@@ -862,7 +862,7 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
     await websocket.accept()
     from services.post_generator_service import (
         generate_keywords_post,
-        fetch_trending_hashtags_post,
+        fetch_platform_hashtags,
         fetch_seo_keywords_post,
         generate_caption_post,
         Platforms,
@@ -883,7 +883,7 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
             seed_keywords = await generate_keywords_post(client_async, query)
             await websocket.send_text(json.dumps({"step": "Generated Seed Keywords", "keywords": seed_keywords}))
 
-            trending_hashtags = await fetch_trending_hashtags_post(client_async, seed_keywords, default_platforms)
+            trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
             await websocket.send_text(json.dumps({"step": "Fetched Trending Hashtags", "hashtags": trending_hashtags}))
 
             seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)

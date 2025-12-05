@@ -43,14 +43,85 @@ from services.file_service import split_text_into_chunks
 
 
 # ============================================================
-# 🔵 1. GLOBAL RESOURCES
+# 🔵 1. GLOBAL RESOURCES (key resolution + clients)
 # ============================================================
 
 local_embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
 
-internet_client = Groq(api_key=INTERNET_CLIENT_KEY)
-deepsearch_client = Groq(api_key=DEEPSEARCH_CLIENT_KEY)
-client = AsyncGroq(api_key=ASYNC_CLIENT_KEY)
+# Resolve keys robustly from multiple possible env var names and config fallbacks.
+# This helps when .env uses either old names (INTERNET_CLIENT_KEY) or canonical names (GROQ_API_KEY_BROWSE).
+from config import BASE_GROQ_KEY  # ensure we can fall back to base key if needed
+
+def _resolve_key(*candidates: str) -> str:
+    """
+    Return the first non-empty key from a list of env/config candidate names or values.
+    Each candidate can be either an env var name (prefixed 'env:') or a direct value.
+    Example: _resolve_key('env:GROQ_API_KEY_BROWSE', INTERNET_CLIENT_KEY, 'env:BASE_GROQ_KEY')
+    """
+    for cand in candidates:
+        if isinstance(cand, str) and cand.startswith("env:"):
+            val = os.getenv(cand[4:], "") or None
+            if val:
+                return val
+        else:
+            if cand:
+                return cand
+    return ""
+
+
+# Candidates order: prefer canonical GROQ env names, then legacy config names, then BASE_GROQ_KEY
+resolved_internet_key = _resolve_key(
+    "env:GROQ_API_KEY_BROWSE",
+    "env:INTERNET_CLIENT_KEY",
+    INTERNET_CLIENT_KEY,
+    BASE_GROQ_KEY
+)
+
+resolved_deepsearch_key = _resolve_key(
+    "env:GROQ_API_KEY_DEEPSEARCH",
+    DEEPSEARCH_CLIENT_KEY,
+    "env:GROQ_API_KEY_RESEARCHAGENT",
+    BASE_GROQ_KEY
+)
+
+resolved_browse_endpoint_key = _resolve_key(
+    "env:GROQ_API_KEY_BROWSE_ENDPOINT",
+    BROWSE_ENDPOINT_KEY,
+    BASE_GROQ_KEY
+)
+
+resolved_async_key = _resolve_key(
+    "env:ASYNC_CLIENT_KEY",
+    ASYNC_CLIENT_KEY,
+    BASE_GROQ_KEY
+)
+
+# Log which keys are being used (only log truncated suffix for safety)
+def _mask_key(k: str) -> str:
+    if not k:
+        return "<missing>"
+    return f"...{k[-8:]}"
+
+logger.info(f"Resolved Groq keys — internet: {_mask_key(resolved_internet_key)}, deepsearch: {_mask_key(resolved_deepsearch_key)}, browse_endpoint: {_mask_key(resolved_browse_endpoint_key)}, async: {_mask_key(resolved_async_key)}")
+
+# Instantiate clients with resolved keys
+try:
+    internet_client = Groq(api_key=resolved_internet_key)
+except Exception as e:
+    logger.error(f"Failed to create internet_client Groq client: {e}")
+    internet_client = None
+
+try:
+    deepsearch_client = Groq(api_key=resolved_deepsearch_key)
+except Exception as e:
+    logger.error(f"Failed to create deepsearch_client Groq client: {e}")
+    deepsearch_client = None
+
+try:
+    client = AsyncGroq(api_key=resolved_async_key)
+except Exception as e:
+    logger.error(f"Failed to create async Groq client: {e}")
+    client = None
 
 
 # ============================================================
@@ -514,34 +585,51 @@ async def synthesize_result(main_query: str, contents: list[str], max_context: i
 
 async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
     """
-    Calls Groq DeepSearch using DEEPSEARCH_CLIENT_KEY.
-    Returns: (content, sources[])
+    Fake DeepSearch implementation using normal Groq API.
+    Behaves similar to deepsearch-1 but works on any Groq account.
     """
+
     try:
-        completion = await asyncio.to_thread(
-            deepsearch_client.chat.completions.create,
-            messages=[{"role": "user", "content": query}],
-            model="deepsearch-1"
+        # 1. Clarify the query
+        clarification_prompt = (
+            "Clarify and rewrite this query to be more search-friendly:\n" + query
         )
+        clarification = await query_internet_via_groq(clarification_prompt)
 
-        content = completion.choices[0].message.content or ""
+        # 2. Generate subqueries
+        subqueries_prompt = (
+            "Generate 3 diverse subqueries to research the topic:\n" + clarification
+        )
+        sub_ideas = await query_internet_via_groq(subqueries_prompt)
 
+        # 3. Research each subquery using normal Groq search model
+        contents = []
         sources = []
-        tool_execs = getattr(completion.choices[0].message, "executed_tools", []) or []
-        for tool in tool_execs:
-            if hasattr(tool, "search_results") and tool.search_results:
-                results = getattr(tool.search_results, "results", [])
-                for r in results:
-                    title = r.get("title")
-                    url = r.get("url")
-                    if title and url:
-                        sources.append({"title": title, "url": url})
 
-        return content, sources
+        for sq in sub_ideas.split("\n"):
+            sq = sq.strip()
+            if not sq:
+                continue
+
+            research_prompt = f"Search the internet and summarize findings for:\n{sq}\nInclude links if possible."
+            result = await query_internet_via_groq(research_prompt, return_sources=True)
+
+            if isinstance(result, tuple):
+                summary, src = result
+                contents.append(summary)
+                sources.extend(src)
+            else:
+                contents.append(result)
+
+        # 4. Synthesize everything into a DeepSearch-like response
+        synthesized = await synthesize_result(query, contents)
+
+        return synthesized, sources
 
     except Exception as e:
-        logger.error(f"DeepSearch error: {e}")
-        return "DeepSearch unavailable.", []
+        logger.error(f"Fake DeepSearch failed: {e}")
+        return "DeepSearch unavailable (simulated fallback).", []
+
 
 
 async def visualize_content(context_text: str) -> Dict[str, Any]:
