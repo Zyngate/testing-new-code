@@ -828,7 +828,6 @@ async def ai_assist_endpoint(input_data: UserInput):
     from services.post_generator_service import (
         generate_keywords_post,
         fetch_platform_hashtags,
-        fetch_seo_keywords_post,
         generate_caption_post,
         Platforms,
     )
@@ -841,7 +840,6 @@ async def ai_assist_endpoint(input_data: UserInput):
 
         seed_keywords = await generate_keywords_post(client_async, input_data.query)
         trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
-        seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
         caption_dict = await generate_caption_post(client_async, input_data.query, seed_keywords, trending_hashtags, default_platforms)
         caption = caption_dict.get(Platforms.Instagram.value, list(caption_dict.values())[0])
 
@@ -849,7 +847,6 @@ async def ai_assist_endpoint(input_data: UserInput):
             "caption": caption,
             "keywords": seed_keywords,
             "hashtags": trending_hashtags,
-            "seo_keywords": seo_keywords,
         }
     except Exception as e:
         logger.error(f"Error in /aiassist endpoint: {e}")
@@ -863,7 +860,6 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
     from services.post_generator_service import (
         generate_keywords_post,
         fetch_platform_hashtags,
-        fetch_seo_keywords_post,
         generate_caption_post,
         Platforms,
     )
@@ -886,9 +882,6 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
             trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
             await websocket.send_text(json.dumps({"step": "Fetched Trending Hashtags", "hashtags": trending_hashtags}))
 
-            seo_keywords = await fetch_seo_keywords_post(client_async, seed_keywords)
-            await websocket.send_text(json.dumps({"step": "Fetched SEO Keywords", "seo_keywords": seo_keywords}))
-
             await websocket.send_text(json.dumps({"step": "Generating Final Captions..."}))
             caption_dict = await generate_caption_post(client_async, query, seed_keywords, trending_hashtags, default_platforms)
 
@@ -901,7 +894,7 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
                         "caption": caption,
                         "keywords": seed_keywords,
                         "hashtags": trending_hashtags,
-                        "seo_keywords": seo_keywords,
+                    
                     }
                 )
             )
