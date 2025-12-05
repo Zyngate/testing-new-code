@@ -852,6 +852,35 @@ async def ai_assist_endpoint(input_data: UserInput):
         logger.error(f"Error in /aiassist endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
+@router.post("/start_deepsearch")
+async def start_deepsearch(request: Request):
+    """
+    Endpoint used by frontend to run DeepSearch.
+    Calls query_deepsearch() from ai_service.py.
+    """
+    try:
+        body = await request.json()
+        query = body.get("query")
+
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing 'query' field")
+
+        result, sources = await query_deepsearch(query)
+
+        return {
+            "status": "success",
+            "summary": result,
+            "sources": sources
+        }
+
+    except Exception as e:
+        return {
+            "status": "failed",
+            "summary": "DeepSearch could not be completed.",
+            "error": str(e),
+            "sources": []
+        }
+
 
 @router.websocket("/wss/aiassist")
 async def websocket_ai_assist_endpoint(websocket: WebSocket):
@@ -908,12 +937,61 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
 # -------------------------
 # CHAT ALIAS (for frontend)
 # -------------------------
-from fastapi import HTTPException as _HTTPException
+# -------------------------
+# FIXED CHAT ENDPOINT (DeepSearch + Visualize support)
+# -------------------------
 
 @router.post("/chat")
 async def chat_alias_endpoint(request: Request):
     """
-    Alias endpoint so frontend calling POST /aiassist/chat gets routed to the real /generate logic.
+    Main endpoint used by frontend.
+    Handles:
+    - normal chat → /generate
+    - deepsearch mode → query_deepsearch()
+    - visualize mode → visualize_content()
     """
-    # Forward request to the main generate handler. Create a BackgroundTasks instance to satisfy signature.
+
+    body = await request.json()
+    user_message = body.get("prompt") or body.get("message") or ""
+    mode = body.get("mode") or ""   # <-- frontend sends this!
+
+    # -----------------
+    # 1️⃣ DeepSearch Mode
+    # -----------------
+    if mode.lower() == "deepsearch":
+        try:
+            result, sources = await query_deepsearch(user_message)
+            return {
+                "type": "deepsearch",
+                "summary": result,
+                "sources": sources,
+            }
+        except Exception as e:
+            return {
+                "type": "deepsearch",
+                "summary": "DeepSearch failed.",
+                "sources": [],
+                "error": str(e),
+            }
+
+    # -----------------
+    # 2️⃣ Visualization Mode
+    # -----------------
+    if mode.lower() == "visualize":
+        try:
+            analysis = await visualize_content(user_message)
+            return {
+                "type": "visualize",
+                "analysis": analysis
+            }
+        except Exception as e:
+            return {
+                "type": "visualize",
+                "analysis": {},
+                "error": str(e),
+            }
+
+    # -----------------
+    # 3️⃣ Default Chat → forward to /generate
+    # -----------------
     return await generate_response_endpoint(request, BackgroundTasks())
