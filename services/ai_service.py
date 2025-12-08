@@ -582,54 +582,55 @@ async def synthesize_result(main_query: str, contents: list[str], max_context: i
 # ============================================================
 # 🔵 5. DeepSearch + Visualization (Required by chat_routes.py)
 # ============================================================
-
 async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
     """
-    Fake DeepSearch implementation using normal Groq API.
-    Behaves similar to deepsearch-1 but works on any Groq account.
+    REAL DeepSearch-like implementation.
+    Uses Groq compound-beta (browsing model) with your DEEPSEARCH key.
+    Returns: summary, sources[]
     """
 
     try:
-        # 1. Clarify the query
-        clarification_prompt = (
-            "Clarify and rewrite this query to be more search-friendly:\n" + query
-        )
-        clarification = await query_internet_via_groq(clarification_prompt)
+        if not deepsearch_client:
+            return "DeepSearch client missing API key.", []
 
-        # 2. Generate subqueries
-        subqueries_prompt = (
-            "Generate 3 diverse subqueries to research the topic:\n" + clarification
+        # 1️⃣ Clarify the query
+        clarify = deepsearch_client.chat.completions.create(
+            model="compound-beta",
+            messages=[
+                {"role": "system", "content": "Rewrite this query to be better for internet research."},
+                {"role": "user", "content": query}
+            ]
         )
-        sub_ideas = await query_internet_via_groq(subqueries_prompt)
+        clarified_query = clarify.choices[0].message.content.strip()
 
-        # 3. Research each subquery using normal Groq search model
-        contents = []
+        # 2️⃣ Ask compound-beta to research deeply
+        research = deepsearch_client.chat.completions.create(
+            model="compound-beta",
+            messages=[
+                {"role": "system", "content": "Research deeply. Summarize findings and cite sources."},
+                {"role": "user", "content": clarified_query}
+            ]
+        )
+
+        summary = research.choices[0].message.content or ""
+
+        # 3️⃣ Extract sources from executed browsing tools
         sources = []
+        executed = getattr(research.choices[0].message, "executed_tools", [])
 
-        for sq in sub_ideas.split("\n"):
-            sq = sq.strip()
-            if not sq:
-                continue
+        for tool in executed:
+            if tool.type == "search" and hasattr(tool, "search_results"):
+                for hit in tool.search_results.results:
+                    sources.append({
+                        "title": getattr(hit, "title", None),
+                        "url": getattr(hit, "url", None),
+                    })
 
-            research_prompt = f"Search the internet and summarize findings for:\n{sq}\nInclude links if possible."
-            result = await query_internet_via_groq(research_prompt, return_sources=True)
-
-            if isinstance(result, tuple):
-                summary, src = result
-                contents.append(summary)
-                sources.extend(src)
-            else:
-                contents.append(result)
-
-        # 4. Synthesize everything into a DeepSearch-like response
-        synthesized = await synthesize_result(query, contents)
-
-        return synthesized, sources
+        return summary, sources
 
     except Exception as e:
-        logger.error(f"Fake DeepSearch failed: {e}")
-        return "DeepSearch unavailable (simulated fallback).", []
-
+        logger.error(f"DeepSearch failed: {e}")
+        return "DeepSearch unavailable.", []
 
 
 async def visualize_content(context_text: str) -> Dict[str, Any]:
