@@ -821,36 +821,37 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
 
 # --- AI Assist Endpoints ---
 
-
 @router.post("/aiassist")
-async def ai_assist_endpoint(input_data: UserInput):
-    """Generates social media assets (sync version)."""
+async def ai_assist_endpoint(input_data: dict):
+    """
+    Generates captions + keywords + hashtags for selected platforms.
+    """
     from services.post_generator_service import (
         generate_keywords_post,
         fetch_platform_hashtags,
-        generate_caption_post,
-        Platforms,
+        generate_caption_post
     )
 
-    client_sync = Groq(api_key=random.choice(GENERATE_API_KEYS))
-    client_async = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
+    query = input_data.get("query")
+    platforms = input_data.get("platforms", ["instagram"])
 
-    try:
-        default_platforms = [Platforms.Instagram]
+    if not query:
+        raise HTTPException(status_code=400, detail="Missing 'query' field.")
 
-        seed_keywords = await generate_keywords_post(client_async, input_data.query)
-        trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
-        caption_dict = await generate_caption_post(client_async, input_data.query, seed_keywords, trending_hashtags, default_platforms)
-        caption = caption_dict.get(Platforms.Instagram.value, list(caption_dict.values())[0])
+    # 1️⃣ Generate keywords
+    seed_keywords = await generate_keywords_post(None, query)
 
-        return {
-            "caption": caption,
-            "keywords": seed_keywords,
-            "hashtags": trending_hashtags,
-        }
-    except Exception as e:
-        logger.error(f"Error in /aiassist endpoint: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    # 2️⃣ Generate captions & hashtags (your updated function returns both)
+    result = await generate_caption_post(query, seed_keywords, platforms)
+
+    return {
+        "query": query,
+        "platforms": platforms,
+        "keywords": seed_keywords,
+        "captions": result["captions"],
+        "hashtags": result["platform_hashtags"]
+    }
+
 
 @router.post("/start_deepsearch")
 async def start_deepsearch(request: Request):
