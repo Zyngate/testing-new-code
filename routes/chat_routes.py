@@ -999,54 +999,55 @@ async def visualize_ws(websocket: WebSocket, visualize_id: str):
         await websocket.close()
 
 
+from fastapi import WebSocket
+from services.post_generator_service import (
+    generate_keywords_post,
+    fetch_platform_hashtags,
+    generate_caption_post
+)
+
 @router.websocket("/wss/aiassist")
 async def websocket_ai_assist_endpoint(websocket: WebSocket):
-    """Streams the social media asset generation process."""
+    """Streams caption + keyword + hashtag generation."""
     await websocket.accept()
-    from services.post_generator_service import (
-        generate_keywords_post,
-        fetch_platform_hashtags,
-        generate_caption_post,
-        Platforms,
-    )
-
-    client_async = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
     try:
-        while True:
-            data = await websocket.receive_text()
-            user_input = json.loads(data)
-            query = user_input["query"]
+        data = await websocket.receive_json()
+        query = data.get("query")
+        platforms = data.get("platforms", ["instagram"])
 
-            await websocket.send_text(json.dumps({"step": "Initializing AI Assistant..."}))
+        if not query:
+            await websocket.send_json({"error": "Missing 'query' field"})
+            await websocket.close()
+            return
 
-            default_platforms = [Platforms.Instagram, Platforms.X]
+        # Step 1 — notify frontend
+        await websocket.send_json({"step": "processing", "message": "Generating keywords..."})
 
-            seed_keywords = await generate_keywords_post(client_async, query)
-            await websocket.send_text(json.dumps({"step": "Generated Seed Keywords", "keywords": seed_keywords}))
+        # Step 2 — generate keywords
+        seed_keywords = await generate_keywords_post(None, query)
+        await websocket.send_json({"step": "keywords", "keywords": seed_keywords})
 
-            trending_hashtags = await fetch_platform_hashtags(client_async, seed_keywords, default_platforms)
-            await websocket.send_text(json.dumps({"step": "Fetched Trending Hashtags", "hashtags": trending_hashtags}))
+        # Step 3 — hashtags for each platform
+        hashtags = {}
+        for p in platforms:
+            tags = await fetch_platform_hashtags(None, seed_keywords, p, query)
+            hashtags[p] = tags
 
-            await websocket.send_text(json.dumps({"step": "Generating Final Captions..."}))
-            caption_dict = await generate_caption_post(client_async, query, seed_keywords, trending_hashtags, default_platforms)
+        await websocket.send_json({"step": "hashtags", "hashtags": hashtags})
 
-            caption = caption_dict.get(Platforms.Instagram.value, list(caption_dict.values())[0])
+        # Step 4 — generate captions
+        result = await generate_caption_post(query, seed_keywords, platforms)
 
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "step": "Caption ready",
-                        "caption": caption,
-                        "keywords": seed_keywords,
-                        "hashtags": trending_hashtags,
-                    
-                    }
-                )
-            )
+        await websocket.send_json({
+            "step": "complete",
+            "captions": result["captions"],
+            "hashtags": result["platform_hashtags"],
+            "keywords": seed_keywords
+        })
+
     except Exception as e:
-        logger.error(f"Error in AI Assist WebSocket: {e}")
-        await websocket.send_text(json.dumps({"error": str(e)}))
+        await websocket.send_json({"error": str(e)})
+
     finally:
         await websocket.close()
-
