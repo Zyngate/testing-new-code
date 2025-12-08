@@ -853,61 +853,89 @@ async def ai_assist_endpoint(input_data: dict):
     }
 
 
-@router.post("/start_deepsearch")
-async def start_deepsearch(request: Request):
-    """
-    Endpoint used by frontend to run DeepSearch.
-    Calls query_deepsearch() from ai_service.py.
-    """
+@router.websocket("/start_deepsearch")
+async def start_deepsearch_ws(websocket: WebSocket):
+    await websocket.accept()
+
     try:
-        body = await request.json()
-        query = body.get("query")
+        # Step 1: Receive query from frontend
+        data = await websocket.receive_json()
+        query = data.get("query")
 
         if not query:
-            raise HTTPException(status_code=400, detail="Missing 'query' field")
+            await websocket.send_json({
+                "status": "failed",
+                "error": "Missing 'query' field"
+            })
+            return
 
+        # Step 2: Notify frontend that search started
+        await websocket.send_json({"status": "searching", "message": "Running DeepSearch..."})
+
+        # Step 3: Run backend deepsearch logic
         result, sources = await query_deepsearch(query)
 
-        return {
+        # Step 4: Send final DeepSearch result over websocket
+        await websocket.send_json({
             "status": "success",
             "summary": result,
             "sources": sources
-        }
+        })
 
     except Exception as e:
-        return {
+        await websocket.send_json({
             "status": "failed",
-            "summary": "DeepSearch could not be completed.",
-            "error": str(e),
-            "sources": []
-        }
+            "error": str(e)
+        })
 
-@router.post("/start_visualize")
-async def start_visualize(request: Request):
+    finally:
+        await websocket.close()
+
+@router.websocket("/start_visualize")
+async def start_visualize_ws(websocket: WebSocket):
     """
-    Standalone visualization endpoint.
-    Calls visualize_content() from ai_service.py.
+    WebSocket version of visualization endpoint.
     """
+    await websocket.accept()
+
     try:
-        body = await request.json()
-        text = body.get("text") or body.get("query") or body.get("message")
+        # Receive input
+        data = await websocket.receive_json()
+        text = data.get("text") or data.get("query") or data.get("message")
 
         if not text:
-            raise HTTPException(status_code=400, detail="Missing 'text' field")
+            await websocket.send_json({
+                "status": "failed",
+                "error": "Missing 'text' field"
+            })
+            await websocket.close()
+            return
 
+        # Notify frontend
+        await websocket.send_json({
+            "status": "processing",
+            "message": "Analyzing content..."
+        })
+
+        # Run visualization logic
         analysis = await visualize_content(text)
 
-        return {
+        # Send result
+        await websocket.send_json({
             "status": "success",
             "analysis": analysis
-        }
+        })
 
     except Exception as e:
-        return {
+        await websocket.send_json({
             "status": "failed",
             "analysis": {},
             "error": str(e)
-        }
+        })
+
+    finally:
+        await websocket.close()
+
 
 
 @router.websocket("/wss/aiassist")
