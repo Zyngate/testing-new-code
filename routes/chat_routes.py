@@ -881,6 +881,33 @@ async def start_deepsearch(request: Request):
             "sources": []
         }
 
+@router.post("/start_visualize")
+async def start_visualize(request: Request):
+    """
+    Standalone visualization endpoint.
+    Calls visualize_content() from ai_service.py.
+    """
+    try:
+        body = await request.json()
+        text = body.get("text") or body.get("query") or body.get("message")
+
+        if not text:
+            raise HTTPException(status_code=400, detail="Missing 'text' field")
+
+        analysis = await visualize_content(text)
+
+        return {
+            "status": "success",
+            "analysis": analysis
+        }
+
+    except Exception as e:
+        return {
+            "status": "failed",
+            "analysis": {},
+            "error": str(e)
+        }
+
 
 @router.websocket("/wss/aiassist")
 async def websocket_ai_assist_endpoint(websocket: WebSocket):
