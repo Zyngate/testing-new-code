@@ -40,7 +40,9 @@ from database import doc_index, code_index, file_doc_memory_map, code_memory_map
 
 router = APIRouter(tags=["Chat"])
 
-
+visualize_queries = {}
+visualize_jobs = {}
+deepsearch_queries = {}
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
 # -------------------------
@@ -854,21 +856,27 @@ async def ai_assist_endpoint(input_data: dict):
     }
 
 # Store deepsearch requests temporarily
-deepsearch_queries = {}
+
 
 @router.post("/start_deepsearch")
 async def start_deepsearch(request: Request):
     body = await request.json()
-    query = body.get("query")
 
-    if not query or not query.strip():
+    user_id = body.get("user_id")
+    session_id = body.get("session_id")
+    prompt = body.get("prompt")
+    filenames = body.get("filenames", [])
+
+    if not prompt or not prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     query_id = str(uuid.uuid4())
 
-    # Save request info so WebSocket can read it
     deepsearch_queries[query_id] = {
-        "query": query
+        "user_id": user_id,
+        "session_id": session_id,
+        "prompt": prompt,
+        "filenames": filenames
     }
 
     return {"query_id": query_id}
@@ -878,110 +886,87 @@ async def deepsearch_ws(websocket: WebSocket, query_id: str):
     await websocket.accept()
 
     try:
-        query_data = deepsearch_queries.get(query_id)
-        if not query_data:
-            await websocket.send_json({"step": "error", "message": "Invalid query ID"})
+        if query_id not in deepsearch_queries:
+            await websocket.send_json({"step": "error", "message": "Invalid query id"})
             await websocket.close()
             return
 
-        user_query = query_data["query"]
+        job = deepsearch_queries[query_id]
+        prompt = job["prompt"]
 
-        # STEP 1 — Acknowledge
-        await websocket.send_json({"step": "start", "message": "Deepsearch started..."})
+        # Notify frontend
+        await websocket.send_json({"step": "started", "message": "Running deep search..."})
 
-        # STEP 2 — Clarify query (fake deepsearch)
-        await websocket.send_json({"step": "clarify", "message": "Clarifying query..."})
-        clarified = f"Clarified: {user_query}"
+        # Run your Groq deepsearch logic
+        summary, sources = await query_deepsearch(prompt)
 
-        # STEP 3 — Generating subqueries
-        await websocket.send_json({"step": "subqueries", "message": "Generating subqueries..."})
-        subqueries = [
-            f"{user_query} meaning",
-            f"{user_query} history",
-            f"{user_query} effects"
-        ]
-
-        # STEP 4 — Research each one (fake responses)
-        await websocket.send_json({"step": "research", "message": "Researching online..."})
-
-        results = []
-        for sq in subqueries:
-            result, sources = await query_internet_via_groq(f"Research: {sq}", return_sources=True)
-            results.append(result)
-
-        # STEP 5 — Synthesize
-        await websocket.send_json({"step": "synthesizing", "message": "Combining results..."})
-        summary = await synthesize_result(user_query, results)
-
-        # STEP 6 — Final answer
         await websocket.send_json({
-            "step": "end",
-            "message": "Deepsearch complete",
-            "summary": summary
+            "step": "summary",
+            "summary": summary,
+            "sources": sources
         })
 
+        await websocket.send_json({"step": "done", "message": "DeepSearch complete"})
+
     except WebSocketDisconnect:
-        logger.info(f"Deepsearch WS disconnected: {query_id}")
+        pass
 
     except Exception as e:
-        logger.error(f"DeepSearch WS error: {e}")
-        await websocket.send_json({"step": "error", "message": "Server error"})
+        await websocket.send_json({
+            "step": "error",
+            "message": str(e)
+        })
 
     finally:
         deepsearch_queries.pop(query_id, None)
         await websocket.close()
 
-visualize_jobs = {}
-
 @router.post("/start_visualize")
 async def start_visualize(request: Request):
-    body = await request.json()
-    text = body.get("text") or body.get("query") or body.get("message")
+    try:
+        body = await request.json()
+        text = body.get("text") or body.get("query") or body.get("message")
 
-    if not text:
-        raise HTTPException(status_code=400, detail="Missing 'text' field")
+        if not text:
+            raise HTTPException(status_code=400, detail="Missing 'text' field")
 
-    visualize_id = str(uuid.uuid4())
+        visualize_id = str(uuid.uuid4())
 
-    visualize_jobs[visualize_id] = {
-        "text": text
-    }
+        visualize_queries[visualize_id] = {
+            "text": text
+        }
 
-    return {"visualize_id": visualize_id}
+        return { "visualize_id": visualize_id }
+
+    except Exception as e:
+        return {
+            "status": "failed",
+            "error": str(e)
+        }
+
 
 @router.websocket("/ws/visualize/{visualize_id}")
 async def visualize_ws(websocket: WebSocket, visualize_id: str):
     await websocket.accept()
 
+    # Lookup the stored prompt/text
+    data = visualize_queries.get(visualize_id)
+    if not data:
+        await websocket.send_json({"status": "failed", "error": "Invalid visualize ID"})
+        await websocket.close()
+        return
+
+    text = data["text"]
+
     try:
-        job = visualize_jobs.get(visualize_id)
-
-        if not job:
-            await websocket.send_json({
-                "status": "failed",
-                "error": "Invalid visualize_id"
-            })
-            await websocket.close()
-            return
-
-        text = job["text"]
-
-        # Notify frontend
         await websocket.send_json({
             "status": "processing",
-            "message": "Preparing visualization..."
+            "message": "Generating visualization..."
         })
 
-        # Step 1 – Begin analyzing
-        await websocket.send_json({
-            "status": "processing",
-            "message": "Analyzing content..."
-        })
-
-        # Step 2 – Run actual visualization
+        # Run the actual visualization code
         analysis = await visualize_content(text)
 
-        # Step 3 – Return result
         await websocket.send_json({
             "status": "success",
             "analysis": analysis
@@ -990,13 +975,12 @@ async def visualize_ws(websocket: WebSocket, visualize_id: str):
     except Exception as e:
         await websocket.send_json({
             "status": "failed",
-            "error": str(e),
-            "analysis": {}
+            "error": str(e)
         })
 
     finally:
-        visualize_jobs.pop(visualize_id, None)
         await websocket.close()
+        visualize_queries.pop(visualize_id, None)
 
 
 from fastapi import WebSocket
