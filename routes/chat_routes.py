@@ -43,6 +43,7 @@ router = APIRouter(tags=["Chat"])
 visualize_queries = {}
 visualize_jobs = {}
 deepsearch_queries = {}
+deepsearch_jobs={}
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
 # -------------------------
@@ -860,127 +861,116 @@ async def ai_assist_endpoint(input_data: dict):
 
 @router.post("/start_deepsearch")
 async def start_deepsearch(request: Request):
-    body = await request.json()
+    """
+    FRONTEND sends:
+    {
+        "user_id": "...",
+        "session_id": "...",
+        "prompt": "Explain quantum physics",
+        "filenames": []
+    }
 
-    user_id = body.get("user_id")
-    session_id = body.get("session_id")
-    prompt = body.get("prompt")
-    filenames = body.get("filenames", [])
+    Returns: { "query_id": "uuid" }
+    """
+    data = await request.json()
+    prompt = data.get("prompt")
 
     if not prompt or not prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     query_id = str(uuid.uuid4())
-
-    deepsearch_queries[query_id] = {
-        "user_id": user_id,
-        "session_id": session_id,
-        "prompt": prompt,
-        "filenames": filenames
-    }
+    deepsearch_jobs[query_id] = data  # Save job until WS connects
 
     return {"query_id": query_id}
 
+
+#websocket-deepsearch
 @router.websocket("/ws/deepsearch/{query_id}")
-async def deepsearch_ws(websocket: WebSocket, query_id: str):
+async def ws_deepsearch(websocket: WebSocket, query_id: str):
     await websocket.accept()
 
-    try:
-        if query_id not in deepsearch_queries:
-            await websocket.send_json({"step": "error", "message": "Invalid query id"})
-            await websocket.close()
-            return
-
-        job = deepsearch_queries[query_id]
-        prompt = job["prompt"]
-
-        # Notify frontend
-        await websocket.send_json({"step": "started", "message": "Running deep search..."})
-
-        # Run your Groq deepsearch logic
-        summary, sources = await query_deepsearch(prompt)
-
-        await websocket.send_json({
-            "step": "summary",
-            "summary": summary,
-            "sources": sources
-        })
-
-        await websocket.send_json({"step": "done", "message": "DeepSearch complete"})
-
-    except WebSocketDisconnect:
-        pass
-
-    except Exception as e:
-        await websocket.send_json({
-            "step": "error",
-            "message": str(e)
-        })
-
-    finally:
-        deepsearch_queries.pop(query_id, None)
-        await websocket.close()
-
-@router.post("/start_visualize")
-async def start_visualize(request: Request):
-    try:
-        body = await request.json()
-        text = body.get("text") or body.get("query") or body.get("message")
-
-        if not text:
-            raise HTTPException(status_code=400, detail="Missing 'text' field")
-
-        visualize_id = str(uuid.uuid4())
-
-        visualize_queries[visualize_id] = {
-            "text": text
-        }
-
-        return { "visualize_id": visualize_id }
-
-    except Exception as e:
-        return {
-            "status": "failed",
-            "error": str(e)
-        }
-
-
-@router.websocket("/ws/visualize/{visualize_id}")
-async def visualize_ws(websocket: WebSocket, visualize_id: str):
-    await websocket.accept()
-
-    # Lookup the stored prompt/text
-    data = visualize_queries.get(visualize_id)
-    if not data:
-        await websocket.send_json({"status": "failed", "error": "Invalid visualize ID"})
+    if query_id not in deepsearch_jobs:
+        await websocket.send_json({"step": "error", "message": "Invalid query_id"})
         await websocket.close()
         return
 
-    text = data["text"]
+    job = deepsearch_jobs.pop(query_id)
+    prompt = job["prompt"]
 
     try:
+        await websocket.send_json({"step": "started", "message": "Running deepsearch..."})
+
+        # TODO: replace this with your real deepsearch logic
+        await asyncio.sleep(1)
+        await websocket.send_json({"step": "collecting", "message": "Gathering research..."})
+        await asyncio.sleep(1)
+
+        final_answer = f"DeepSearch result for: {prompt}"
+
         await websocket.send_json({
-            "status": "processing",
-            "message": "Generating visualization..."
+            "step": "done",
+            "result": final_answer
         })
 
-        # Run the actual visualization code
-        analysis = await visualize_content(text)
-
-        await websocket.send_json({
-            "status": "success",
-            "analysis": analysis
-        })
+    except WebSocketDisconnect:
+        print("Deepsearch client disconnected")
 
     except Exception as e:
-        await websocket.send_json({
-            "status": "failed",
-            "error": str(e)
-        })
+        await websocket.send_json({"step": "error", "message": str(e)})
 
     finally:
         await websocket.close()
-        visualize_queries.pop(visualize_id, None)
+
+#post&websocket-visulaize
+
+@router.post("/start_visualize")
+async def start_visualize(request: Request):
+    data = await request.json()
+    text = data.get("text")
+
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+    visualize_id = str(uuid.uuid4())
+    visualize_jobs[visualize_id] = data
+
+    return {"visualize_id": visualize_id}
+
+#websocket
+
+@router.websocket("/ws/visualize/{visualize_id}")
+async def ws_visualize(websocket: WebSocket, visualize_id: str):
+    await websocket.accept()
+
+    if visualize_id not in visualize_jobs:
+        await websocket.send_json({"status": "error", "message": "Invalid visualize_id"})
+        await websocket.close()
+        return
+
+    job = visualize_jobs.pop(visualize_id)
+    text = job["text"]
+
+    try:
+        await websocket.send_json({"status": "processing", "message": "Analyzing content..."})
+        await asyncio.sleep(1)
+        await websocket.send_json({"status": "thinking", "message": "Building JSON representation..."})
+        await asyncio.sleep(1)
+
+        result = {
+            "nodes": ["Idea A", "Idea B", "Idea C"],
+            "links": [["A", "B"], ["B", "C"]],
+            "raw_text": text
+        }
+
+        await websocket.send_json({"status": "done", "visualize": result})
+
+    except Exception as e:
+        await websocket.send_json({"status": "error", "message": str(e)})
+
+    finally:
+        await websocket.close()
+
+
 
 
 from fastapi import WebSocket
