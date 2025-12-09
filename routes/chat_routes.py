@@ -1035,3 +1035,18 @@ async def websocket_ai_assist_endpoint(websocket: WebSocket):
 
     finally:
         await websocket.close()
+        
+# -------------------------
+# SIMPLE CHAT ENDPOINT
+# -------------------------
+
+@router.post("/chat")
+async def chat_endpoint(request: Request):
+    """
+    Frontend uses /chat.
+    Internally we forward the request to /generate.
+    No deepsearch.
+    No visualize.
+    Only normal chat.
+    """
+    return await generate_response_endpoint(request, BackgroundTasks())
