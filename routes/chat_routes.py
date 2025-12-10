@@ -904,7 +904,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             "message": "Running deepsearch..."
         })
 
-        # Step 2 — simulate progress (you’ll replace this later)
+        # Step 2 — simulate progress (optional)
         await asyncio.sleep(1)
         await websocket.send_json({
             "step": "collecting",
@@ -912,12 +912,25 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
         })
         await asyncio.sleep(1)
 
-        # Step 3 — FINAL ANSWER GOES HERE!
-        final_answer = f"DeepSearch result for: {prompt}"
+        # Step 3 — REAL DEEPSEARCH LLM CALL (correct indentation)
+        client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
+        response = await client.chat.completions.create(
+            model="deepseek-r1-distill-llama-70b",
+            messages=[
+                {"role": "system", "content": "You are a deep research assistant. Provide detailed factual analysis."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4,
+            max_completion_tokens=1500,
+        )
+
+        final_answer = response.choices[0].message["content"]
+
+        # Step 4 — Send final answer to frontend
         await websocket.send_json({
             "step": "done",
-            "result": final_answer   # <---- THIS LINE FIXES YOUR EMPTY RESULT
+            "result": final_answer
         })
 
     except WebSocketDisconnect:
