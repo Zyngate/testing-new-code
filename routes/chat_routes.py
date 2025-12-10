@@ -857,7 +857,7 @@ async def ai_assist_endpoint(input_data: dict):
     }
 
 # Store deepsearch requests temporarily
-
+deepsearch_jobs = {}
 
 @router.post("/start_deepsearch")
 async def start_deepsearch(request: Request):
@@ -866,10 +866,9 @@ async def start_deepsearch(request: Request):
     {
         "user_id": "...",
         "session_id": "...",
-        "prompt": "Explain quantum physics",
+        "prompt": "...",
         "filenames": []
     }
-
     Returns: { "query_id": "uuid" }
     """
     data = await request.json()
@@ -879,16 +878,17 @@ async def start_deepsearch(request: Request):
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
     query_id = str(uuid.uuid4())
-    deepsearch_jobs[query_id] = data  # Save job until WS connects
+    deepsearch_jobs[query_id] = data   # save job for websocket
 
     return {"query_id": query_id}
 
 
-#websocket-deepsearch
+# WebSocket DeepSearch
 @router.websocket("/ws/deepsearch/{query_id}")
 async def ws_deepsearch(websocket: WebSocket, query_id: str):
     await websocket.accept()
 
+    # Validate incoming query_id
     if query_id not in deepsearch_jobs:
         await websocket.send_json({"step": "error", "message": "Invalid query_id"})
         await websocket.close()
@@ -898,18 +898,26 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
     prompt = job["prompt"]
 
     try:
-        await websocket.send_json({"step": "started", "message": "Running deepsearch..."})
+        # Step 1 — tell frontend we're starting
+        await websocket.send_json({
+            "step": "started",
+            "message": "Running deepsearch..."
+        })
 
-        # TODO: replace this with your real deepsearch logic
+        # Step 2 — simulate progress (you’ll replace this later)
         await asyncio.sleep(1)
-        await websocket.send_json({"step": "collecting", "message": "Gathering research..."})
+        await websocket.send_json({
+            "step": "collecting",
+            "message": "Gathering research..."
+        })
         await asyncio.sleep(1)
 
+        # Step 3 — FINAL ANSWER GOES HERE!
         final_answer = f"DeepSearch result for: {prompt}"
 
         await websocket.send_json({
             "step": "done",
-            "result": final_answer
+            "result": final_answer   # <---- THIS LINE FIXES YOUR EMPTY RESULT
         })
 
     except WebSocketDisconnect:
@@ -920,6 +928,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
 
     finally:
         await websocket.close()
+
 
 #post&websocket-visulaize
 
