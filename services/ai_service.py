@@ -597,7 +597,7 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
         clarify = deepsearch_client.chat.completions.create(
             model="compound-beta",
             messages=[
-                {"role": "system", "content": "Rewrite this query to be better for internet research."},
+                {"role": "system", "content": "You are an elite research analyst. Your job is to investigate any topic deeply, provide evidence-backed insights, and explain the reasoning in a structured, academically rigorous style. Cite sources when possible."},
                 {"role": "user", "content": query}
             ]
         )
