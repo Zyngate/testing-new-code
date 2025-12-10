@@ -925,7 +925,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             max_completion_tokens=1500,
         )
 
-        final_answer = response.choices[0].message["content"]
+        final_answer = response.choices[0].message.content
 
         # Step 4 — Send final answer to frontend
         await websocket.send_json({
