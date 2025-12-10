@@ -635,16 +635,15 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
 
 async def visualize_content(context_text: str) -> Dict[str, Any]:
     """
-    Generates a structured visualization summary using Groq.
-    Used by chat_routes when user asks to 'visualize', 'analyze', or 'insight'.
+    Fast + reliable visualization using llama-3.3-70b-versatile.
     """
     try:
         prompt = (
-            "Analyze the following content and return JSON with:"
-            "\n- summary: a short high-level overview"
-            "\n- themes: list of key themes"
-            "\n- insights: 3–5 bullet insights"
-            "\n\nContent:\n" + context_text
+            "Analyze the following content and return JSON:\n"
+            "summary: short overview\n"
+            "themes: list of main themes\n"
+            "insights: 3–5 actionable insights\n\n"
+            f"CONTENT:\n{context_text}"
         )
 
         completion = await asyncio.to_thread(
@@ -653,15 +652,13 @@ async def visualize_content(context_text: str) -> Dict[str, Any]:
             messages=[{"role": "user", "content": prompt}]
         )
 
-        raw = completion.choices[0].message.content or ""
+        raw = completion.choices[0].message.content.strip()
 
         try:
-            data = json.loads(raw)
-            return data
-        except Exception:
-            # fallback: extract text even if JSON not valid
+            return json.loads(raw)
+        except:
             return {
-                "summary": raw[:300],
+                "summary": raw[:400],
                 "themes": [],
                 "insights": []
             }

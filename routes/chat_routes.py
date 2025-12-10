@@ -954,14 +954,13 @@ async def start_visualize(request: Request):
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
     visualize_id = str(uuid.uuid4())
-    visualize_jobs[visualize_id] = data
+    visualize_jobs[visualize_id] = {"text": text}
 
     return {"visualize_id": visualize_id}
 
-#websocket
 
 @router.websocket("/ws/visualize/{visualize_id}")
-async def ws_visualize(websocket: WebSocket, visualize_id: str):
+async def visualize_ws(websocket: WebSocket, visualize_id: str):
     await websocket.accept()
 
     if visualize_id not in visualize_jobs:
@@ -969,29 +968,29 @@ async def ws_visualize(websocket: WebSocket, visualize_id: str):
         await websocket.close()
         return
 
-    job = visualize_jobs.pop(visualize_id)
-    text = job["text"]
+    text = visualize_jobs.pop(visualize_id)["text"]
 
     try:
-        await websocket.send_json({"status": "processing", "message": "Analyzing content..."})
-        await asyncio.sleep(1)
-        await websocket.send_json({"status": "thinking", "message": "Building JSON representation..."})
-        await asyncio.sleep(1)
+        await websocket.send_json({
+            "status": "processing",
+            "message": "Analyzing content..."
+        })
 
-        result = {
-            "nodes": ["Idea A", "Idea B", "Idea C"],
-            "links": [["A", "B"], ["B", "C"]],
-            "raw_text": text
-        }
+        analysis = await visualize_content(text)
 
-        await websocket.send_json({"status": "done", "visualize": result})
+        await websocket.send_json({
+            "status": "success",
+            "analysis": analysis
+        })
 
     except Exception as e:
-        await websocket.send_json({"status": "error", "message": str(e)})
+        await websocket.send_json({
+            "status": "failed",
+            "error": str(e)
+        })
 
     finally:
         await websocket.close()
-
 
 
 
