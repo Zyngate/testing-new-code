@@ -916,7 +916,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
         client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
         response = await client.chat.completions.create(
-            model="deepseek-r1",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a deep research assistant. Provide detailed factual analysis."},
                 {"role": "user", "content": prompt}
