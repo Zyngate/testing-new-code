@@ -963,20 +963,42 @@ async def start_visualize(request: Request):
 async def visualize_ws(websocket: WebSocket, visualize_id: str):
     await websocket.accept()
 
-    if visualize_id not in visualize_jobs:
-        await websocket.send_json({"status": "error", "message": "Invalid visualize_id"})
-        await websocket.close()
+    # 1. Retrieve saved job
+    job = visualize_jobs.pop(visualize_id, None)
+    if not job:
+        await websocket.send_json({"status": "failed", "error": "Invalid visualize_id"})
         return
 
-    text = visualize_jobs.pop(visualize_id)["text"]
+    # 2. Accept multiple possible keys from frontend
+    text = job.get("text") or job.get("prompt") or job.get("message")
+
+    if not text:
+        await websocket.send_json({
+            "status": "failed",
+            "error": "No text provided for visualization"
+        })
+        return
 
     try:
-        await websocket.send_json({
-            "status": "processing",
-            "message": "Analyzing content..."
-        })
+        # Notify frontend
+        await websocket.send_json({"status": "processing"})
 
-        analysis = await visualize_content(text)
+        # --- FIXED: Use stable Groq model ---
+        client = Groq(api_key=random.choice(GENERATE_API_KEYS))
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "Analyze text and return JSON with summary, themes, insights."},
+                {"role": "user", "content": text}
+            ]
+        )
+
+        content = response.choices[0].message.content
+
+        try:
+            analysis = json.loads(content)
+        except:
+            analysis = {"summary": content, "themes": [], "insights": []}
 
         await websocket.send_json({
             "status": "success",
@@ -984,11 +1006,7 @@ async def visualize_ws(websocket: WebSocket, visualize_id: str):
         })
 
     except Exception as e:
-        await websocket.send_json({
-            "status": "failed",
-            "error": str(e)
-        })
-
+        await websocket.send_json({"status": "failed", "error": str(e)})
     finally:
         await websocket.close()
 
