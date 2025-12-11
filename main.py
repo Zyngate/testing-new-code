@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import logger
 from database import load_faiss_indices
 
+from routes import recommendation_routes
+
+
 # Services (Schedulers)
 from services.subscription_service import (
     daily_checkin_scheduler,
@@ -67,6 +70,21 @@ app.include_router(
     prefix="/auth",
     tags=["Authentication"]
 )
+
+app.include_router(
+    post_generation_routes.router,
+    prefix="/caption-generator",
+    tags=["Caption & Hashtag Generator"]
+)
+
+
+# ✅ Recommendation Engine Module
+app.include_router(
+    recommendation_routes.router,
+    prefix="/recommendation",
+    tags=["Recommendation Engine"]
+)
+
 
 # ✅ Chat / AI-Assistance Module
 app.include_router(

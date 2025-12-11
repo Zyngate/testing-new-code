@@ -1012,58 +1012,6 @@ async def visualize_ws(websocket: WebSocket, visualize_id: str):
 
 
 
-from fastapi import WebSocket
-from services.post_generator_service import (
-    generate_keywords_post,
-    fetch_platform_hashtags,
-    generate_caption_post
-)
-
-@router.websocket("/wss/aiassist")
-async def websocket_ai_assist_endpoint(websocket: WebSocket):
-    """Streams caption + keyword + hashtag generation."""
-    await websocket.accept()
-
-    try:
-        data = await websocket.receive_json()
-        query = data.get("query")
-        platforms = data.get("platforms", ["instagram"])
-
-        if not query:
-            await websocket.send_json({"error": "Missing 'query' field"})
-            await websocket.close()
-            return
-
-        # Step 1 — notify frontend
-        await websocket.send_json({"step": "processing", "message": "Generating keywords..."})
-
-        # Step 2 — generate keywords
-        seed_keywords = await generate_keywords_post(None, query)
-        await websocket.send_json({"step": "keywords", "keywords": seed_keywords})
-
-        # Step 3 — hashtags for each platform
-        hashtags = {}
-        for p in platforms:
-            tags = await fetch_platform_hashtags(None, seed_keywords, p, query)
-            hashtags[p] = tags
-
-        await websocket.send_json({"step": "hashtags", "hashtags": hashtags})
-
-        # Step 4 — generate captions
-        result = await generate_caption_post(query, seed_keywords, platforms)
-
-        await websocket.send_json({
-            "step": "complete",
-            "captions": result["captions"],
-            "hashtags": result["platform_hashtags"],
-            "keywords": seed_keywords
-        })
-
-    except Exception as e:
-        await websocket.send_json({"error": str(e)})
-
-    finally:
-        await websocket.close()
         
 # -------------------------
 # SIMPLE CHAT ENDPOINT
