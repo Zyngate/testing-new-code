@@ -4,12 +4,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List
 
-from config import settings
+from config import GROQ_API_KEY_STELLE_MODEL
 from services.recommendation_service import RecommendationService
 
 router = APIRouter()
 
-service = RecommendationService(settings.GROQ_API_KEY_STELLE_MODEL)
+service = RecommendationService(GROQ_API_KEY_STELLE_MODEL)
 
 class PostItem(BaseModel):
     link: str
