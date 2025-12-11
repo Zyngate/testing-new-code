@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import logger
 from database import load_faiss_indices
 
-from routes import recommendation_routes
+#from routes import recommendation_routes
 
 
 # Services (Schedulers)
@@ -19,6 +19,9 @@ from services.subscription_service import (
     notification_sender_loop
 )
 from services.task_service import task_thread
+
+from routes import post_generation_routes
+
 
 # Routers grouped by FEATURES
 from routes import (
@@ -78,12 +81,6 @@ app.include_router(
 )
 
 
-# ✅ Recommendation Engine Module
-app.include_router(
-    recommendation_routes.router,
-    prefix="/recommendation",
-    tags=["Recommendation Engine"]
-)
 
 
 # ✅ Chat / AI-Assistance Module
@@ -135,12 +132,6 @@ app.include_router(
     tags=["Integrations"]
 )
 
-# ✅ Post Generation (captions, content writing)
-app.include_router(
-    post_generation_routes.router,
-    prefix="/content-generation",
-    tags=["Content Generation"]
-)
 
 # -------------------------
 #   STARTUP EVENTS
