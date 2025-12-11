@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import logger
 from database import load_faiss_indices
-
+from routes import image_caption_routes
 from routes import recommendation_routes
 from routes import video_caption_routes
 
@@ -147,6 +147,11 @@ app.include_router(
     tags=["Integrations"]
 )
 
+app.include_router(
+    image_caption_routes.router,
+    prefix="/caption-generator",
+    tags=["Caption & Hashtag Generator"]
+)
 
 # -------------------------
 #   STARTUP EVENTS
