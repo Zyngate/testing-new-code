@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import logger
 from database import load_faiss_indices
 
+from routes import recommendation_routes
+
+
 #from routes import recommendation_routes
 
 
@@ -80,6 +83,11 @@ app.include_router(
     tags=["Caption & Hashtag Generator"]
 )
 
+app.include_router(
+    recommendation_routes.router,
+    prefix="/recommendation",
+    tags=["Recommendation Engine"]
+)
 
 
 

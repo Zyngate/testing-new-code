@@ -5,12 +5,12 @@ from pydantic import BaseModel
 from typing import List
 
 from config import settings
-from services.combined_engine import RecommendationEngine
+from services.recommendation_service import RecommendationService
 
+router = APIRouter()
 
-# -------------------------
-#  Request Model
-# -------------------------
+service = RecommendationService(settings.GROQ_API_KEY_STELLE_MODEL)
+
 class PostItem(BaseModel):
     link: str
     type: str
@@ -23,30 +23,13 @@ class PostItem(BaseModel):
     caption: str
     time_zone: str = "UTC"
 
-
 class RecommendationRequest(BaseModel):
     posts: List[PostItem]
 
-
-# -------------------------
-#  Router Init
-# -------------------------
-router = APIRouter()
-
-# Initialize engine once
-engine = RecommendationEngine(settings.GROQ_API_KEY)
-
-
-# -------------------------
-#  ENDPOINT: POST /recommend/analyze
-# -------------------------
 @router.post("/analyze")
-async def analyze_recommendations(request: RecommendationRequest):
+async def analyze_recommendation(request: RecommendationRequest):
     try:
-        if not request.posts:
-            raise HTTPException(status_code=400, detail="No posts provided")
-
-        result = engine.generate_recommendations(request.posts)
+        result = service.generate_recommendations([p.dict() for p in request.posts])
         return {"status": "success", "data": result}
 
     except Exception as e:
