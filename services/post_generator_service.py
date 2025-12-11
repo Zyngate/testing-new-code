@@ -174,6 +174,7 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         p_norm = p.lower().strip()
         tone = PLATFORM_STYLES.get(p_norm, "Write a clean, engaging caption.")
 
+        # Generate hashtags
         try:
             tags = await fetch_platform_hashtags(None, seed_keywords, p_norm, query)
         except Exception as e:
@@ -182,22 +183,32 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
 
         platform_hashtags[p_norm] = tags
 
+        # ---------- CAPTION PROMPT ----------
         caption_prompt = f"""
 You are a senior marketing strategist and expert social media copywriter.
-Write a single caption for platform: {p_norm}.
+Write one high-quality caption tailored for the platform: {p_norm}.
 
-Topic: {query}
-Keywords: {', '.join([k for k in seed_keywords if k])}
-Tone: {tone}
+ABOUT THE POST:
+- Topic: {query}
+- Keywords: {', '.join([k for k in seed_keywords if k])}
+- Style/Tone: {tone}
 
-Strict Rules:
-- Write ONE final caption only.
-- No hashtags.
-- No slang: lowkey, low-key, highkey, fr, no cap, obsessed, literally.
-- Provide meaningful context.
-- Keep it short and platform-appropriate.
+STRICT RULES:
+- Output ONLY the caption text (no quotes, no bullets, no lists).
+- Do NOT use slang (lowkey, highkey, fr, no cap, obsessed, literally).
+- Do NOT add hashtags.
+- Use natural, human-sounding language.
+- Add emotional pull or storytelling when appropriate.
+- Keep it concise, engaging, and platform-appropriate.
+- Avoid repeating the same words.
+- Never start with generic words like: Introducing, Presenting, Experience.
+- Never wrap the caption in quotes.
+
+GOAL:
+Craft a compelling caption that feels written by a professional content creator, not an AI.
 """
 
+        # ---------- GENERATE RAW CAPTION ----------
         try:
             caption_text = await groq_generate_text(MODEL, caption_prompt)
             caption_text = caption_text.strip() if caption_text else f"A {p_norm} caption about {query}"
@@ -205,10 +216,19 @@ Strict Rules:
             logger.error(f"Caption generation failed for {p_norm}: {e}")
             caption_text = f"A {p_norm} caption about {query}"
 
+        # ---------- CLEANING STEPS ----------
+        # Remove quotes
+        caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
+
+        # Remove duplicate emojis at the start (optional)
+        while len(caption_text) > 1 and caption_text[0] == caption_text[1] and not caption_text[0].isalnum():
+            caption_text = caption_text[1:]
+
         # Remove banned slang
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
 
+        # Fix spacing
         caption_text = " ".join(caption_text.split())
 
         captions[p_norm] = caption_text
