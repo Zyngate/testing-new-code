@@ -10,6 +10,7 @@ import asyncio
 import base64
 
 from config import logger
+from config import GROQ_API_KEY_VIDEO_CAPTION
 from groq import Groq
 from services.ai_service import groq_generate_text
 from services.post_generator_service import (
@@ -85,7 +86,7 @@ def extract_frames_from_video(video_path: str, out_dir: Optional[str] = None, fp
 # 2. TRANSCRIPTION USING GROQ WHISPER (STT)
 # -----------------------------------------------------
 async def get_transcript_groq(audio_path: str) -> str:
-    api_key = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
+    api_key = GROQ_API_KEY_VIDEO_CAPTION
     if not api_key:
         raise RuntimeError("GROQ_API_KEY_VIDEO_CAPTION is not set in environment.")
 
@@ -138,7 +139,8 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
       - objects: unique list of objects
       - actions: unique list of actions
     """
-    api_key = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
+    api_key = GROQ_API_KEY_VIDEO_CAPTION
+
     if not api_key:
         raise RuntimeError("GROQ_API_KEY_VIDEO_CAPTION is not set.")
 

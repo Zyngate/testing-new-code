@@ -70,7 +70,10 @@ PLANNING_KEY              = os.getenv("GROQ_API_KEY_PLANNING", BASE_GROQ_KEY)
 GOAL_SETTING_KEY          = os.getenv("GROQ_API_KEY_GOAL_SETTING", BASE_GROQ_KEY)
 MEMORY_SUMMARY_KEY        = os.getenv("GROQ_API_KEY_MEMORY_SUMMARY", BASE_GROQ_KEY)
 GROQ_API_KEY_RECOMMENDATION = os.getenv("GROQ_API_KEY_RECOMMENDATION")
+# --- NEW: Video Captioning Key (STRICT — no fallback) ---
 GROQ_API_KEY_VIDEO_CAPTION = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
+if not GROQ_API_KEY_VIDEO_CAPTION:
+    logger.warning("GROQ_API_KEY_VIDEO_CAPTION is missing! Video caption endpoints will fail.")
 
 
 # Browsing / DeepSearch
