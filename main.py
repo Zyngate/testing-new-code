@@ -10,6 +10,7 @@ from config import logger
 from database import load_faiss_indices
 
 from routes import recommendation_routes
+from routes import video_caption_routes
 
 
 #from routes import recommendation_routes
@@ -89,6 +90,12 @@ app.include_router(
     tags=["Recommendation Engine"]
 )
 
+# VIDEO Caption Generator (video → captions)
+app.include_router(
+    video_caption_routes.router,
+    prefix="/caption-generator",
+    tags=["Video Caption Generator"]
+)
 
 
 # ✅ Chat / AI-Assistance Module
