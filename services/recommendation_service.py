@@ -2,7 +2,6 @@
 
 import json
 import re
-import numpy as np
 import pandas as pd
 from datetime import datetime
 from pydantic import BaseModel
@@ -11,7 +10,7 @@ from typing import List
 import pytz
 
 # ---------------------------------------
-# Utility Functions (moved from combined file)
+# Utility Functions
 # ---------------------------------------
 
 def extract_platform_from_url(url: str) -> str:
@@ -61,6 +60,7 @@ class ContentAnalyzer:
         self.client = Groq(api_key=api_key)
         self.cache = {}
 
+    # Extract basic category from caption
     def extract_category_from_caption(self, caption: str, platform: str) -> str:
         cache_key = f"{platform}_{hash(caption)}"
         if cache_key in self.cache:
@@ -73,7 +73,7 @@ Entertainment, Lifestyle, Travel, Food, Fitness, Technology,
 Art, Music, Fashion, Beauty, Other
 
 Caption: "{caption}"
-Platform: {platform}"
+Platform: "{platform}"
 """
 
         valid = {
@@ -102,6 +102,7 @@ Platform: {platform}"
         self.cache[cache_key] = category
         return category
 
+    # Full caption analysis
     def analyze_content(self, link: str, caption: str, platform: str):
         category = self.extract_category_from_caption(caption, platform)
         cache_key = f"{link}_{category}_{hash(caption)}"
@@ -110,7 +111,7 @@ Platform: {platform}"
             return self.cache[cache_key]
 
         prompt = f"""
-Analyze this post and return only JSON:
+Analyze this post and return ONLY JSON with:
 content_theme,
 content_sentiment,
 engagement_prediction,
@@ -121,11 +122,11 @@ content_strengths,
 improvement_suggestions
 
 Caption: "{caption}"
-Platform: {platform}"
+Platform: "{platform}"
 """
 
         try:
-            response = self.client.chat.completions.create(
+            resp = self.client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 response_format={"type": "json_object"},
                 messages=[
@@ -133,8 +134,7 @@ Platform: {platform}"
                     {"role": "user", "content": prompt},
                 ]
             )
-            data = json.loads(response.choices[0].message.content)
-
+            data = json.loads(resp.choices[0].message.content)
         except:
             data = {
                 "content_theme": "unknown",
@@ -152,7 +152,7 @@ Platform: {platform}"
             caption=caption,
             category=category,
             platform=platform,
-            **data,
+            **data
         )
 
         self.cache[cache_key] = analysis
@@ -170,12 +170,13 @@ class RecommendationService:
         self.user_timezone = "UTC"
         self.df = None
 
+    # Process raw post list → DataFrame
     def process_posts(self, posts: List[dict]):
         processed = []
 
         if len(posts) > 0:
-            tz_name, tz_code = get_timezone_display_name(posts[0]["time_zone"])
-            self.timezone_display = tz_name
+            tz_display, tz_code = get_timezone_display_name(posts[0]["time_zone"])
+            self.timezone_display = tz_display
             self.user_timezone = tz_code
 
         tz = pytz.timezone(self.user_timezone)
@@ -204,39 +205,36 @@ class RecommendationService:
         self.df = pd.DataFrame(processed)
         return self.df
 
-def generate_recommendations(self, posts):
-    df = self.process_posts(posts)
+    # FINAL RECOMMENDATION ENGINE
+    def generate_recommendations(self, posts: List[dict]):
+        df = self.process_posts(posts)
 
-    # Basic winners
-    best_hour = df.groupby("hour")["engagement_score"].mean().idxmax()
-    best_day = df.groupby("day_of_week")["engagement_score"].mean().idxmax()
-    best_category = df.groupby("category")["engagement_score"].mean().idxmax()
+        best_hour = df.groupby("hour")["engagement_score"].mean().idxmax()
+        best_day = df.groupby("day")["engagement_score"].mean().idxmax()
+        best_category = df.groupby("category")["engagement_score"].mean().idxmax()
+        best_platform = df.groupby("platform")["engagement_score"].mean().idxmax()
 
-    # NEW — Best performing platform
-    best_platform = df.groupby("platform")["engagement_score"].mean().idxmax()
+        recommendations = {
+            "when_to_post": f"Post around {format_hour_12h(best_hour)} on "
+                            f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}.",
+            "what_to_post": f"{best_category} content performs best.",
+            "where_to_post": f"{best_platform.capitalize()} gives the highest engagement."
+        }
 
-    # --- Build Recommendations ---
-    recommendations = {
-        "when_to_post": f"Post around {format_hour_12h(best_hour)} on {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}.",
-        "what_to_post": f"{best_category} content performs best for your audience.",
-        "where_to_post": f"{best_platform.capitalize()} gives you the highest engagement."
-    }
+        insights = [
+            f"{best_category} posts perform the best.",
+            f"Your strongest platform is {best_platform.capitalize()}.",
+            f"Engagement peaks around {format_hour_12h(best_hour)} on "
+            f"{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}."
+        ]
 
-    # --- Build Insights ---
-    insights = []
-    insights.append(f"{best_category} posts perform best overall.")
-    insights.append(f"Your audience responds strongest on {best_platform.capitalize()}.")
-    insights.append(
-        f"Engagement spikes around {format_hour_12h(best_hour)} on {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}."
-    )
-
-    return {
-        "timezone": self.timezone_display_name,
-        "best_hour": format_hour_12h(best_hour),
-        "best_day": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][best_day],
-        "best_category": best_category,
-        "best_platform": best_platform.capitalize(),
-        "recommendations": recommendations,
-        "insights": insights,
-        "total_posts": len(df)
-    }
+        return {
+            "timezone": self.timezone_display,
+            "best_hour": format_hour_12h(best_hour),
+            "best_day": ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][best_day],
+            "best_category": best_category,
+            "best_platform": best_platform.capitalize(),
+            "recommendations": recommendations,
+            "insights": insights,
+            "total_posts": len(df)
+        }

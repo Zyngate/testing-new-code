@@ -20,20 +20,18 @@ from services.post_generator_service import (
 )
 
 # LLM / Vision model names
-VISION_MODEL = "llava-v1.5-7b"  # change if you prefer another Groq vision model
+VISION_MODEL = "llava-v1.5-7b"
 STT_MODEL = "whisper-large-v3"
-SUMMARIZE_MODEL = "gpt-4o-mini"  # used only for text-compression if desired
+SUMMARIZE_MODEL = "gpt-4o-mini"
 
 # TEMP directory
 TEMP_DIR = Path(os.path.join(os.getcwd(), "tmp_stelle_video"))
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# Utility: run shell command
 def run_cmd(cmd: str) -> Tuple[int, str, str]:
     proc = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = proc.communicate()
     return proc.returncode, out.decode(errors="ignore"), err.decode(errors="ignore")
-
 
 # -----------------------------------------------------
 # 1. EXTRACT AUDIO (FFmpeg)
@@ -45,7 +43,6 @@ async def extract_audio_from_video(video_path: str, out_audio: Optional[str] = N
     video_quoted = shlex.quote(video_path)
     audio_quoted = shlex.quote(out_audio)
 
-    # create 16k mono WAV (LINEAR16) which works well with STT
     cmd = f'ffmpeg -y -i {video_quoted} -vn -ac 1 -ar 16000 -sample_fmt s16 {audio_quoted} -hide_banner -loglevel error'
     logger.info(f"Running ffmpeg to extract audio: {cmd}")
     returncode, out, err = await asyncio.to_thread(run_cmd, cmd)
@@ -54,9 +51,8 @@ async def extract_audio_from_video(video_path: str, out_audio: Optional[str] = N
         raise RuntimeError("Audio extraction failed. Ensure ffmpeg is installed and video file exists.")
     return out_audio
 
-
 # -----------------------------------------------------
-# 1b. EXTRACT FRAMES (FFmpeg)
+# 1b. EXTRACT FRAMES
 # -----------------------------------------------------
 def extract_frames_from_video(video_path: str, out_dir: Optional[str] = None, fps: int = 1, max_frames: int = 6) -> List[str]:
     if out_dir is None:
@@ -81,9 +77,8 @@ def extract_frames_from_video(video_path: str, out_dir: Optional[str] = None, fp
         selected = all_frames
     return selected
 
-
 # -----------------------------------------------------
-# 2. TRANSCRIPTION USING GROQ WHISPER (STT)
+# 2. TRANSCRIPTION USING GROQ
 # -----------------------------------------------------
 async def get_transcript_groq(audio_path: str) -> str:
     api_key = GROQ_API_KEY_VIDEO_CAPTION
@@ -92,11 +87,9 @@ async def get_transcript_groq(audio_path: str) -> str:
 
     client = Groq(api_key=api_key)
 
-    # Groq client is sync in many installs; wrap in thread
     def _blocking_transcribe(path: str) -> str:
         with open(path, "rb") as f:
             resp = client.audio.transcriptions.create(file=f, model=STT_MODEL)
-        # response shape varies; try common fields
         if hasattr(resp, "text"):
             return (resp.text or "").strip()
         if isinstance(resp, dict):
@@ -110,69 +103,43 @@ async def get_transcript_groq(audio_path: str) -> str:
         logger.error(f"Groq STT transcription failed: {e}")
         return ""
 
-
 # -----------------------------------------------------
-# Helpers: image to data URL
+# Helpers
 # -----------------------------------------------------
 def image_to_data_url(path: str) -> str:
-    """Encode local image to data URL (PNG)."""
     with open(path, "rb") as f:
         b = f.read()
     b64 = base64.b64encode(b).decode("utf-8")
     return f"data:image/png;base64,{b64}"
 
-
 # -----------------------------------------------------
-# 3. VISUAL ANALYSIS + OCR USING GROQ SCOUT VISION MODEL
+# 3. FRAME ANALYSIS
 # -----------------------------------------------------
 async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
-    """
-    Uses Groq Scout (meta-llama/llama-4-scout-17b-16e-instruct) in JSON mode to:
-      - produce a one-line caption per frame
-      - extract OCR text (ocr_text)
-      - list objects and actions
-      - return a short visual summary
-    Returns dict with keys:
-      - visual_captions: [(basename, caption_str), ...]
-      - visual_summary: "one-line summary"
-      - detected_text: [ocr_text_for_frame, ...]
-      - objects: unique list of objects
-      - actions: unique list of actions
-    """
     api_key = GROQ_API_KEY_VIDEO_CAPTION
-
     if not api_key:
         raise RuntimeError("GROQ_API_KEY_VIDEO_CAPTION is not set.")
 
     client = Groq(api_key=api_key)
 
-    visual_captions: List[Tuple[str, str]] = []
-    detected_text_list: List[str] = []
-    objects_list: List[str] = []
-    actions_list: List[str] = []
+    visual_captions = []
+    detected_text_list = []
+    objects_list = []
+    actions_list = []
 
     for fp in frame_paths:
         try:
-            # encode frame to base64 data URL
             data_url = image_to_data_url(fp)
 
-            # JSON-mode prompt content (image + instruction)
             prompt_content = [
                 {
                     "type": "text",
                     "text": (
                         "Analyze this image and return a JSON object with keys:\n"
-                        "caption: one-line description\n"
-                        "ocr_text: full extracted visible text from the image (empty string if none)\n"
-                        "objects: list of main objects (strings)\n"
-                        "actions: list of visible actions (strings)\n"
-                        "scene: short scene description\n"
+                        "caption\nocr_text\nobjects\nactions\nscene\n"
                     )
                 },
-                {
-                    "type": "image_url",
-                    "image_url": {"url": data_url}
-                }
+                {"type": "image_url", "image_url": {"url": data_url}},
             ]
 
             response = client.chat.completions.create(
@@ -182,61 +149,45 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
                 temperature=0.2,
             )
 
-            # response.choices[0].message.content should already be JSON (string or dict)
             parsed = response.choices[0].message.content
-            # parsed may be a string or dict; handle both
             if isinstance(parsed, str):
                 parsed_json = json.loads(parsed)
-            elif isinstance(parsed, dict):
-                parsed_json = parsed
             else:
-                parsed_json = json.loads(str(parsed))
+                parsed_json = parsed
 
-            caption = parsed_json.get("caption", "") or ""
-            ocr_text = parsed_json.get("ocr_text", "") or ""
-            objs = parsed_json.get("objects", []) or []
-            acts = parsed_json.get("actions", []) or []
+            caption = parsed_json.get("caption", "")
+            ocr_text = parsed_json.get("ocr_text", "")
+            objs = parsed_json.get("objects", [])
+            acts = parsed_json.get("actions", [])
 
-            visual_captions.append((os.path.basename(fp), caption.strip() if caption else ""))
+            visual_captions.append((os.path.basename(fp), caption.strip()))
 
             if ocr_text:
                 detected_text_list.append(ocr_text.strip())
-
-            if objs:
-                # normalize strings
-                objects_list.extend([str(o).strip() for o in objs if o])
-            if acts:
-                actions_list.extend([str(a).strip() for a in acts if a])
+            objects_list.extend([str(o).strip() for o in objs if o])
+            actions_list.extend([str(a).strip() for a in acts if a])
 
         except Exception as e:
             logger.warning(f"Vision analysis failed for {fp}: {e}")
             visual_captions.append((os.path.basename(fp), ""))
 
-    # ---- COMBINE FOR VISUAL SUMMARY ----
     all_caps = " | ".join([cap for _, cap in visual_captions if cap])
-    objects_unique = list(dict.fromkeys([o for o in objects_list if o]))
-    actions_unique = list(dict.fromkeys([a for a in actions_list if a]))
+    objects_unique = list(dict.fromkeys(objects_list))
+    actions_unique = list(dict.fromkeys(actions_list))
 
     visual_summary = ""
     if all_caps:
-        visual_summary_prompt = (
-            "Summarize this scene using the combined captions, objects, and actions below.\n\n"
-            f"Captions: {all_caps}\n"
-            f"Objects: {objects_unique}\n"
-            f"Actions: {actions_unique}\n\n"
-            "Write ONE line (max 20 words)."
+        prompt = (
+            f"Summarize this visually:\nCaptions:{all_caps}\nObjects:{objects_unique}\nActions:{actions_unique}\n"
+            "One line max."
         )
         try:
-            ai_resp = groq_generate_text(SUMMARIZE_MODEL, visual_summary_prompt)
+            ai_resp = groq_generate_text(SUMMARIZE_MODEL, prompt)
             if hasattr(ai_resp, "__await__"):
                 ai_resp = await ai_resp
-            visual_summary = (ai_resp or "").strip()
-        except Exception as e:
-            logger.warning(f"Could not generate visual summary: {e}")
-            # fallback: pick first caption or truncated combined captions
-            visual_summary = all_caps.split(" | ")[0][:120]
-    else:
-        visual_summary = ""
+            visual_summary = ai_resp.strip()
+        except:
+            visual_summary = all_caps.split("|")[0][:120]
 
     return {
         "visual_captions": visual_captions,
@@ -246,27 +197,23 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
         "actions": actions_unique,
     }
 
-
 # -----------------------------------------------------
-# 4. SUMMARIZE TRANSCRIPT & SCENE
+# 4. TRANSCRIPT SUMMARY
 # -----------------------------------------------------
 async def summarize_transcript_for_caption(transcript: str) -> Dict[str, str]:
     prompt = f"""
-You are a senior marketing content strategist. Given the transcript below,
-produce:
-1) A short (1–2 line) summary.
-2) A line describing the visible scene.
-3) A marketing prompt useful for hashtag/caption generation.
+You are a marketing strategist. Summarize the transcript.
 
 Transcript:
 \"\"\"{transcript}\"\"\" 
 
-Output JSON with keys: summary, scene, marketing_prompt.
+Output JSON: summary, scene, marketing_prompt
 """
     try:
         ai_resp = groq_generate_text(SUMMARIZE_MODEL, prompt)
         if hasattr(ai_resp, "__await__"):
             ai_resp = await ai_resp
+
         try:
             parsed = json.loads(ai_resp)
             return {
@@ -274,122 +221,113 @@ Output JSON with keys: summary, scene, marketing_prompt.
                 "scene": parsed.get("scene", "").strip(),
                 "marketing_prompt": parsed.get("marketing_prompt", "").strip(),
             }
-        except Exception:
+        except:
             return {
-                "summary": (ai_resp or "").strip().split("\n")[0],
+                "summary": ai_resp.strip().split("\n")[0],
                 "scene": "",
-                "marketing_prompt": (ai_resp or "").strip(),
+                "marketing_prompt": ai_resp.strip(),
             }
+
     except Exception as e:
-        logger.error(f"Error summarizing transcript: {e}", exc_info=True)
+        logger.error(f"Transcript summary failed: {e}")
         return {
             "summary": transcript[:150],
             "scene": "",
             "marketing_prompt": transcript[:200],
         }
 
-
 # -----------------------------------------------------
-# 5. MAIN PIPELINE (Groq STT + Vision)
+# 5. MAIN PIPELINE
 # -----------------------------------------------------
 async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None) -> Dict[str, Any]:
-    # 1. audio
-    try:
-        audio_path = await extract_audio_from_video(video_filepath)
-    except Exception as e:
-        logger.error("extract_audio_from_video failed: " + str(e))
-        raise
 
-    # 2. frames
-    frame_paths = []
+    # 1 audio
+    audio_path = await extract_audio_from_video(video_filepath)
+
+    # 2 frames
     try:
         frame_paths = extract_frames_from_video(video_filepath, fps=1, max_frames=6)
-    except Exception as e:
-        logger.warning(f"Frame extraction failed or produced no frames: {e}")
+    except:
         frame_paths = []
 
-    # 3. STT (Groq Whisper)
-    transcript = ""
-    try:
-        transcript = await get_transcript_groq(audio_path)
-    except Exception as e:
-        logger.warning(f"Transcription failed or produced empty result: {e}")
-        transcript = ""
+    # 3 transcript
+    transcript = await get_transcript_groq(audio_path)
 
-    # 4. Visual analysis
-    visual_result = {"visual_captions": [], "visual_summary": ""}
-    try:
-        visual_result = await analyze_frames_with_groq(frame_paths)
-    except Exception as e:
-        logger.warning(f"Visual analysis failed: {e}")
-        visual_result = {"visual_captions": [], "visual_summary": ""}
+    # 4 visual analysis
+    visual_result = await analyze_frames_with_groq(frame_paths)
 
     visual_summary = visual_result.get("visual_summary", "")
     visual_captions = visual_result.get("visual_captions", [])
     detected_texts = visual_result.get("detected_text", [])
 
-    # 5. Summarize transcript
+    # 5 transcript summary
     summary_obj = await summarize_transcript_for_caption(transcript)
-    text_summary = summary_obj.get("summary", "")
-    text_scene = summary_obj.get("scene", "")
-    marketing_prompt_text = summary_obj.get("marketing_prompt", "") or text_summary or transcript[:300]
+    text_summary = summary_obj["summary"]
+    text_scene = summary_obj["scene"]
+    marketing_prompt_text = summary_obj["marketing_prompt"] or text_summary
 
-    # 6. Merge signals (include detected OCR text)
-    ocr_text_combined = "\n".join([t for t in detected_texts if t]).strip()
+    # 6 merge signals
+    ocr_text_combined = "\n".join(detected_texts)
     merge_parts = [marketing_prompt_text]
     if visual_summary:
         merge_parts.append(f"Visual: {visual_summary}")
     if ocr_text_combined:
         merge_parts.append(f"OCR: {ocr_text_combined}")
-    marketing_prompt = "\n".join([p for p in merge_parts if p]).strip()
 
-    # 7. Generate keywords
+    marketing_prompt = "\n".join([m for m in merge_parts if m])
+
+    # 7 keywords
     try:
         keywords = await generate_keywords_post(client, marketing_prompt)
-    except Exception as e:
-        logger.error("Keyword generation failed: " + str(e))
+    except:
         keywords = ["", "", ""]
 
-    # 8. Platform hashtags
-    platform_hashtags: Dict[str, List[str]] = {}
+    # 8 hashtags
+    platform_hashtags = {}
     for p in platforms:
         try:
-            try:
-                tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
-            except TypeError:
-                tags = await fetch_platform_hashtags(client, keywords, p)
+            tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
             platform_hashtags[p] = tags or []
-        except Exception as e:
-            logger.warning(f"fetch_platform_hashtags failed for {p}: {e}")
+        except:
             platform_hashtags[p] = []
 
-    # 9. Captions
-    try:
-        captions_result = await generate_caption_post(marketing_prompt, keywords, platforms)
-        captions = captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
-    except Exception as e:
-        logger.error(f"generate_caption_post failed: {e}", exc_info=True)
-        captions = {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}
+    # -----------------------------------------------------
+    # ✅ FIXED INDENTATION BLOCK — captions generation
+    # -----------------------------------------------------
+    captions = {}
+    for p in platforms:
+        try:
+            single_caption_result = await generate_caption_post(
+                marketing_prompt, keywords, [p]
+            )
+            if isinstance(single_caption_result, dict):
+                captions[p] = single_caption_result.get("captions", {}).get(p)
+            else:
+                captions[p] = single_caption_result
+        except Exception as e:
+            logger.error(f"Caption generation failed for {p}: {e}")
+            captions[p] = f"Short {p} caption: {marketing_prompt[:100]}"
 
-    # 10. Cleanup
+    # 10 cleanup
     try:
         if audio_path and os.path.exists(audio_path):
             os.remove(audio_path)
-    except Exception:
+    except:
         pass
+
     try:
         if frame_paths:
             frames_dir = os.path.dirname(frame_paths[0])
             for f in glob.glob(os.path.join(frames_dir, "*")):
                 try:
                     os.remove(f)
-                except Exception:
+                except:
                     pass
             try:
                 os.rmdir(frames_dir)
-            except Exception:
+            except:
                 pass
-    except Exception:
+    except:
         pass
 
     return {
@@ -404,13 +342,3 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         "captions": captions,
         "platform_hashtags": platform_hashtags,
     }
-
-
-# Example usage:
-# import asyncio
-# asyncio.run(caption_from_video_file(r"C:\path\to\video.mp4", ["instagram", "linkedin"]))
-
-# NOTE:
-# - Set GROQ_API_KEY_VIDEO_CAPTION env var to your Groq API key.
-# - This file uses Groq's chat completions (Scout) for vision and Groq audio.transcriptions for STT.
-# - Adjust model names if you want to use a different vision or summarization model.
