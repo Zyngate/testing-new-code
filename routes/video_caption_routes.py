@@ -1,5 +1,5 @@
 # routes/video_caption_routes.py
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 import uuid
 import os
 from pathlib import Path
@@ -13,32 +13,45 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @router.post("/generate_video_caption")
 async def generate_video_caption(
     video: UploadFile = File(...),
-    platforms: list[str] = ["instagram"]
+    platforms: list[str] = Form(...)   # ⭐ User can choose platforms properly
 ):
     """
-    Upload a video, process it and return captions + hashtags (minimal, uses your existing service).
+    Upload a video, process it and return captions + hashtags.
     """
-    # save temp file
+
+    # -----------------------------
+    # SAVE UPLOADED VIDEO FILE
+    # -----------------------------
     try:
         ext = video.filename.split(".")[-1] if video.filename else "mp4"
         tmp_path = UPLOAD_DIR / f"{uuid.uuid4().hex}.{ext}"
+
         with open(tmp_path, "wb") as f:
             f.write(await video.read())
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save uploaded video: {e}")
 
+    # -----------------------------
+    # PROCESS VIDEO FOR CAPTIONS
+    # -----------------------------
     try:
         result = await caption_from_video_file(str(tmp_path), platforms)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Video captioning failed: {e}")
+
     finally:
-        # cleanup
+        # Cleanup temp file
         try:
             if tmp_path.exists():
                 os.remove(tmp_path)
         except:
             pass
 
+    # -----------------------------
+    # RETURN EXACT STRUCTURE LIKE BEFORE
+    # -----------------------------
     return {
         "message": "Video processed successfully",
         "transcript": result.get("transcript"),
