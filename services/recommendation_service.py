@@ -204,17 +204,45 @@ class RecommendationService:
         self.df = pd.DataFrame(processed)
         return self.df
 
-    def generate_recommendations(self, posts: List[dict]):
+        def generate_recommendations(self, posts: List[dict]):
         df = self.process_posts(posts)
 
+        # Basic winners
         best_hour = df.groupby("hour")["engagement_score"].mean().idxmax()
         best_day = df.groupby("day")["engagement_score"].mean().idxmax()
         best_category = df.groupby("category")["engagement_score"].mean().idxmax()
+
+        # NEW — Best performing platform
+        best_platform = df.groupby("platform")["engagement_score"].mean().idxmax()
+
+        # --- Build Recommendations ---
+        recommendations = {
+            "when_to_post": f"Post around {format_hour_12h(best_hour)} on {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}.",
+            "what_to_post": f"{best_category} content performs best for your audience.",
+            "where_to_post": f"{best_platform.capitalize()} gives you the highest engagement."
+        }
+
+        # --- Build Insights ---
+        insights = []
+
+        # Insight 1: category performance
+        insights.append(f"{best_category} posts perform best overall.")
+
+        # Insight 2: platform performance
+        insights.append(f"Your audience responds strongly on {best_platform.capitalize()}.")
+
+        # Insight 3: time-based behavior
+        insights.append(
+            f"Engagement spikes around {format_hour_12h(best_hour)} especially on {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][best_day]}."
+        )
 
         return {
             "timezone": self.timezone_display,
             "best_hour": format_hour_12h(best_hour),
             "best_day": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][best_day],
             "best_category": best_category,
-            "total_posts": len(df),
+            "best_platform": best_platform.capitalize(),
+            "recommendations": recommendations,
+            "insights": insights,
+            "total_posts": len(df)
         }
