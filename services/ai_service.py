@@ -37,7 +37,8 @@ from config import (
     GOAL_SETTING_KEY,
     GENERATE_API_KEYS,
     logger,
-    GROQ_API_KEY_CAPTION
+    GROQ_API_KEY_CAPTION,
+    GROQ_API_KEY_VISUALIZE
 )
 from services.file_service import split_text_into_chunks
 
@@ -217,6 +218,13 @@ async def get_groq_client() -> AsyncGroq:
     consider using a separate helper. For caption flows this ensures stability.
     """
     return get_caption_client()
+
+def get_visualize_groq_client() -> Groq:
+    """
+    Dedicated Groq client for visualization flows.
+    Keeps caption and visualization traffic isolated.
+    """
+    return Groq(api_key=GROQ_API_KEY_VISUALIZE)
 
 
 async def generate_text_embedding(text: str | None) -> list:
