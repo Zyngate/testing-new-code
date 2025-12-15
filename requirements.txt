@@ -30,3 +30,4 @@ moviepy             # ⭐ For video audio/frame handling
 ffmpeg-python       # ⭐ Needed for video processing
 tqdm                # Optional but good for progress handling
 python-multipart    # ⭐ REQUIRED for file upload in FastAPI
+bleach
