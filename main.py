@@ -11,6 +11,7 @@ from database import load_faiss_indices
 from routes import image_caption_routes
 from routes import recommendation_routes
 from routes import video_caption_routes
+from routes import visualize_routes
 
 
 #from routes import recommendation_routes
@@ -104,6 +105,12 @@ app.include_router(
     prefix="/aiassist",
     tags=["Chat"]
 )
+
+app.include_router(
+    visualize_routes.router,
+    tags=["Visualization"]
+)
+
 
 # ✅ Content Intelligence (upload, images, visualization)
 app.include_router(
