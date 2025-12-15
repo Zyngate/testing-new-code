@@ -75,6 +75,9 @@ GROQ_API_KEY_VIDEO_CAPTION = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
 if not GROQ_API_KEY_VIDEO_CAPTION:
     logger.warning("GROQ_API_KEY_VIDEO_CAPTION is missing! Video caption endpoints will fail.")
 
+GROQ_API_KEY_VISUALIZE = os.getenv("GROQ_API_KEY_VISUALIZE")
+if not GROQ_API_KEY_VISUALIZE:
+    raise RuntimeError("GROQ_API_KEY_VISUALIZE is not set")
 
 # Browsing / DeepSearch
 INTERNET_CLIENT_KEY = os.getenv("GROQ_API_KEY_BROWSE", BASE_GROQ_KEY)
