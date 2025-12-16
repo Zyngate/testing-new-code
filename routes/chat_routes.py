@@ -973,6 +973,42 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             "result": full_answer
         })
 
+        # ----------------------------
+        # 💾 STORE DEEPSEARCH IN CHAT HISTORY
+        # ----------------------------
+        user_id = job.get("user_id")
+        session_id = job.get("session_id")
+
+        if user_id and session_id and full_answer.strip():
+            chat_entry = await chats_collection.find_one({
+                "user_id": user_id,
+                "session_id": session_id
+            })
+
+            deepsearch_message = {
+                "role": "assistant",
+                "content": full_answer.strip(),
+                "type": "deepsearch",
+                "timestamp": datetime.now(timezone.utc)
+            }
+
+            if chat_entry:
+                await chats_collection.update_one(
+                    {"_id": chat_entry["_id"]},
+                    {
+                        "$push": {"messages": deepsearch_message},
+                        "$set": {"last_updated": datetime.now(timezone.utc)}
+                    }
+                )
+            else:
+                await chats_collection.insert_one({
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "messages": [deepsearch_message],
+                    "last_updated": datetime.now(timezone.utc)
+                })
+
+
     except WebSocketDisconnect:
         logger.info("DeepSearch client disconnected")
 
