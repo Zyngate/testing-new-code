@@ -883,66 +883,75 @@ async def start_deepsearch(request: Request):
     return {"query_id": query_id}
 
 
-# WebSocket DeepSearch
 @router.websocket("/ws/deepsearch/{query_id}")
 async def ws_deepsearch(websocket: WebSocket, query_id: str):
     await websocket.accept()
 
-    # Validate incoming query_id
-    if query_id not in deepsearch_jobs:
+    job = deepsearch_jobs.pop(query_id, None)
+    if not job:
         await websocket.send_json({"step": "error", "message": "Invalid query_id"})
         await websocket.close()
         return
 
-    job = deepsearch_jobs.pop(query_id)
     prompt = job["prompt"]
 
     try:
-        # Step 1 — tell frontend we're starting
         await websocket.send_json({
             "step": "started",
-            "message": "Running deepsearch..."
+            "message": "Running deep search..."
         })
 
-        # Step 2 — simulate progress (optional)
-        await asyncio.sleep(1)
-        await websocket.send_json({
-            "step": "collecting",
-            "message": "Gathering research..."
-        })
-        await asyncio.sleep(1)
-
-        # Step 3 — REAL DEEPSEARCH LLM CALL (correct indentation)
         client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
-        response = await client.chat.completions.create(
+        # 🔥 STREAMING ENABLED HERE
+        stream = await client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a deep research assistant. Provide detailed factual analysis."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system",
+                    "content": "You are a research assistant. Think step by step and explain clearly."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
             ],
             temperature=0.4,
             max_completion_tokens=1500,
+            stream=True,  # 🚀 THIS IS STREAMING
         )
 
-        final_answer = response.choices[0].message.content
+        full_answer = ""
 
-        # Step 4 — Send final answer to frontend
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                full_answer += delta
+
+                # 🔥 SEND TOKEN CHUNKS LIVE
+                await websocket.send_json({
+                    "step": "stream",
+                    "delta": delta
+                })
+
+        # 🔥 FINAL MESSAGE
         await websocket.send_json({
             "step": "done",
-            "result": final_answer
+            "result": full_answer
         })
 
     except WebSocketDisconnect:
-        print("Deepsearch client disconnected")
+        logger.info("DeepSearch client disconnected")
 
     except Exception as e:
-        await websocket.send_json({"step": "error", "message": str(e)})
+        logger.error(f"DeepSearch WS error: {e}")
+        await websocket.send_json({
+            "step": "error",
+            "message": str(e)
+        })
 
     finally:
         await websocket.close()
-
-
 
         
 # -------------------------
