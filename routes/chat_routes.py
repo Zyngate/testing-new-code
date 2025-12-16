@@ -883,33 +883,64 @@ async def start_deepsearch(request: Request):
     return {"query_id": query_id}
 
 
+# WebSocket DeepSearch
+
 @router.websocket("/ws/deepsearch/{query_id}")
 async def ws_deepsearch(websocket: WebSocket, query_id: str):
     await websocket.accept()
 
     job = deepsearch_jobs.pop(query_id, None)
     if not job:
-        await websocket.send_json({"step": "error", "message": "Invalid query_id"})
+        await websocket.send_json({
+            "step": "error",
+            "message": "Invalid query_id"
+        })
         await websocket.close()
         return
 
     prompt = job["prompt"]
 
     try:
+        # ----------------------------
+        # 🧭 PHASE UPDATES (UX ONLY)
+        # ----------------------------
         await websocket.send_json({
-            "step": "started",
-            "message": "Running deep search..."
+            "step": "phase",
+            "message": "Searching sources..."
+        })
+        await asyncio.sleep(0.4)
+
+        await websocket.send_json({
+            "step": "phase",
+            "message": "Reading articles..."
+        })
+        await asyncio.sleep(0.4)
+
+        await websocket.send_json({
+            "step": "phase",
+            "message": "Analyzing data..."
+        })
+        await asyncio.sleep(0.4)
+
+        await websocket.send_json({
+            "step": "phase",
+            "message": "Drafting answer..."
         })
 
+        # ----------------------------
+        # 🤖 LLM STREAMING STARTS
+        # ----------------------------
         client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
-        # 🔥 STREAMING ENABLED HERE
         stream = await client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a research assistant. Think step by step and explain clearly."
+                    "content": (
+                        "You are a research assistant. "
+                        "Give a clear, structured, factual answer."
+                    )
                 },
                 {
                     "role": "user",
@@ -918,7 +949,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             ],
             temperature=0.4,
             max_completion_tokens=1500,
-            stream=True,  # 🚀 THIS IS STREAMING
+            stream=True,
         )
 
         full_answer = ""
@@ -928,13 +959,15 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             if delta:
                 full_answer += delta
 
-                # 🔥 SEND TOKEN CHUNKS LIVE
+                # 🔥 LIVE STREAMING TO FRONTEND
                 await websocket.send_json({
                     "step": "stream",
                     "delta": delta
                 })
 
-        # 🔥 FINAL MESSAGE
+        # ----------------------------
+        # ✅ FINAL MESSAGE
+        # ----------------------------
         await websocket.send_json({
             "step": "done",
             "result": full_answer
