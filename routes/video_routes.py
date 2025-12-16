@@ -65,20 +65,14 @@ async def video_caption_endpoint(
     hashtags = result.get("platform_hashtags", {})
     keywords = result.get("keywords", [])
 
-    response_data = {
-        "keywords": keywords,
-        "platforms": {}
-    }
-
-    for platform in requested_platforms:
-        response_data["platforms"][platform] = {
-            "caption": captions.get(platform, ""),
-            "hashtags": hashtags.get(platform, [])
-        }
-
     return JSONResponse(
-        {
-            "status": "success",
-            "data": response_data
-        }
-    )
+    {
+        "status": "success",
+        "keywords": result.get("keywords", []),
+        "captions": result.get("captions", {}),
+        "platform_hashtags": result.get("platform_hashtags", {})
+    }
+)
+
+
+    
