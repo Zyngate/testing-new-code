@@ -16,24 +16,24 @@ router = APIRouter(tags=["VideoCaption"])
 @router.post("/video_caption")
 async def video_caption_endpoint(
     file: UploadFile = File(...),
-    platforms: str = Form(None),  # comma-separated list of platforms e.g. "instagram,tiktok"
+    platforms: str = Form(None),  # comma-separated list
 ):
     """
-    Upload a video file (multipart/form). Optional form field `platforms` (CSV).
-    Returns captions + platform hashtags + keywords.
+    Upload a video file and get platform-wise captions + hashtags + keywords.
     """
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded.")
 
-    # parse platforms
+    # Parse platforms
     if platforms:
         requested_platforms = [p.strip().lower() for p in platforms.split(",") if p.strip()]
     else:
         requested_platforms = ["instagram", "facebook", "linkedin", "tiktok", "youtube"]
 
-    # save uploaded file temporarily
+    # Save uploaded file
     uid = file.filename or f"video_{os.urandom(4).hex()}"
     out_path = TEMP_DIR / f"{uid}_{os.urandom(4).hex()}"
+
     try:
         with open(out_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
@@ -41,12 +41,16 @@ async def video_caption_endpoint(
         logger.error(f"Failed saving uploaded video: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file.")
 
-    # create AsyncGroq client (if needed by services)
+    # Create Groq client
     api_key = random.choice(GENERATE_API_KEYS) if GENERATE_API_KEYS else None
     client = AsyncGroq(api_key=api_key) if api_key else None
 
     try:
-        result = await caption_from_video_file(str(out_path), requested_platforms, client=client)
+        result = await caption_from_video_file(
+            str(out_path),
+            requested_platforms,
+            client=client
+        )
     except Exception as e:
         logger.error(f"Video caption pipeline failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -56,4 +60,25 @@ async def video_caption_endpoint(
         except Exception:
             pass
 
-    return JSONResponse(result)
+    # 🔒 FILTERED PUBLIC RESPONSE
+    captions = result.get("captions", {})
+    hashtags = result.get("platform_hashtags", {})
+    keywords = result.get("keywords", [])
+
+    response_data = {
+        "keywords": keywords,
+        "platforms": {}
+    }
+
+    for platform in requested_platforms:
+        response_data["platforms"][platform] = {
+            "caption": captions.get(platform, ""),
+            "hashtags": hashtags.get(platform, [])
+        }
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "data": response_data
+        }
+    )
