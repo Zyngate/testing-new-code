@@ -949,6 +949,39 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
 # SIMPLE CHAT ENDPOINT
 # -------------------------
 
+@router.get("/chat-history")
+async def get_chat_history(
+    user_id: str = Query(...),
+    session_id: str = Query(...)
+):
+    """
+    Backend endpoint to fetch chat history for a user session.
+    Read-only. Used for debugging / compatibility.
+    """
+    try:
+        chat_entry = await chats_collection.find_one(
+            {"user_id": user_id, "session_id": session_id},
+            {"_id": 0, "messages": 1}
+        )
+
+        if chat_entry and chat_entry.get("messages"):
+            return {
+                "messages": filter_think_messages(chat_entry["messages"])
+            }
+
+        return {"messages": []}
+
+    except Exception as e:
+        logger.error(
+            f"Chat history retrieval error: user_id={user_id}, session_id={session_id}, error={e}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Error retrieving chat history"
+        )
+
+
 @router.post("/chat")
 async def chat_endpoint(request: Request):
     """
