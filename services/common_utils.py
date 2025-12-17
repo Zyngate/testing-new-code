@@ -11,6 +11,32 @@ def get_current_datetime() -> str:
     """Returns the current formatted datetime string."""
     return datetime.now().strftime("%B %d, %Y, %I:%M %p")
 
+def sanitize_chat_history(messages):
+    """
+    Remove non-standard messages before sending to LLM
+    """
+    clean = []
+
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+
+        # must have role + content only
+        if "role" not in msg or "content" not in msg:
+            continue
+
+        # ❌ exclude deepsearch / visualize / system-only artifacts
+        if msg.get("type") in ("deepsearch", "visualize", "thinking"):
+            continue
+
+        clean.append({
+            "role": msg["role"],
+            "content": msg["content"]
+        })
+
+    return clean
+
+
 def filter_think_messages(messages: list) -> list:
     """Removes internal <think>...</think> blocks from message content."""
     filtered = []
