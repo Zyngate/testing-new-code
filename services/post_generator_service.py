@@ -77,87 +77,100 @@ async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
         logger.error(f"Keyword generation failed: {e}")
         return ["brand", "marketing", "content"]
 
+#hashtag
+
+async def generate_trending_hashtags(platform: str, topic: str) -> List[str]:
+    prompt = f"""
+Generate 4 currently trending hashtags for {platform}.
+They must feel natural, platform-native, and not generic spam.
+
+Context:
+{topic}
+
+Rules:
+- Output ONLY hashtags
+- No explanations
+- No generic words like viral, trending unless platform-native
+"""
+    try:
+        text = await groq_generate_text(MODEL, prompt)
+        return [t for t in text.split() if t.startswith("#")][:4]
+    except:
+        return []
+
 
 # ---------------------------
 # 2) platform hashtag generator
 # ---------------------------
-async def fetch_platform_hashtags(client: AsyncGroq, seed_keywords: List[str], platform: str, query: str) -> List[str]:
+async def fetch_platform_hashtags(
+    client: AsyncGroq,
+    seed_keywords: List[str],
+    platform: str,
+    query: str
+) -> List[str]:
 
-    COMMON_TAGS = {
-        "instagram": ["#reels", "#reelitfeelit", "#viral", "#trending", "#explorepage", "#instadaily",
-                      "#ExplorePage", "#TrendingNow", "#InstaVibes", "#ReelsDaily", "#ViralReels", "#InstaGood"],
-        
-        "tiktok": ["#fyp", "#foryou", "#tiktokviral", "#tiktoktrend", "#viralvideo",
-                   "#foryoupage", "#tiktokmademedoit", "#watchtiltheend", "#creatorspotlight", "#viralmoments", "#trendingsounds"],
-        
-        "youtube": ["#shorts", "#youtubeshorts", "#viralshorts", "#subscribe", "#creatorlife",
-                    "#ContentCreator", "#SubscribeNow"],
-        
-        "linkedin": ["#leadership", "#careerdevelopment", "#professionalnetworking", "#businessstrategy",
-                     "#Leadership", "#CareerGrowth", "#BusinessInsights", "#ProfessionalDevelopment",
-                     "#FutureOfWork", "#IndustryTrends"],
-        
-        "facebook": ["#community", "#friendsandfamily", "#socialvibes", "#SocialVibes", "#CommunityLove",
-                     "#FBFamily", "#GoodVibesOnly", "#StayConnected", "#FriendsAndFamily"],
-        
-        "threads": ["#threadsapp", "#trendingNow", "#ThreadsApp", "#HotTake", "#TrendingNow",
-                    "#DailyThoughts", "#CreatorsOnThreads", "#TechTalks"],
-        
-        "pinterest": ["#aesthetic", "#moodboard", "#creativeinspo", "#AestheticInspo", "#DreamyVibes",
-                      "#CreativeIdeas", "#PinterestFinds", "#InspoDaily", "#MoodBoardMagic"],
-        
-        "twitter": ["#trending", "#viralpost", "#newpost"],
-        
-        "reddit": ["#askreddit", "#discussion", "#redditcommunity"]
-    }
+    platform = platform.lower()
 
-    platform_context = {
-        "instagram": "clean, aesthetic content",
-        "facebook": "friendly, community vibes",
-        "linkedin": "professional, business language",
-        "pinterest": "aesthetic, creative moodboard",
-        "threads": "expressive, bold",
-        "tiktok": "engaging, fast-paced",
-        "youtube": "SEO, creator-focused",
-        "twitter": "short and bold",
-        "reddit": "discussion-based"
-    }.get(platform.lower(), "general")
+    # -------------------------------
+    # 1) TRENDING (dynamic) → 4
+    # -------------------------------
+    if platform in ["instagram", "tiktok"]:
+        trending_tags = await generate_trending_hashtags(platform, query)
+    else:
+        trending_tags = []
 
-    prompt = f"""
-Generate 12 platform-specific hashtags.
+    trending_tags = trending_tags[:4]
 
-Platform: {platform}
-Platform style: {platform_context}
+    # -------------------------------
+    # 2) RELEVANT (contextual) → 3
+    # -------------------------------
+    try:
+        relevant_prompt = f"""
+Generate 3 highly relevant hashtags directly describing this content.
 
-Topic: {query}
-Keywords: {', '.join(seed_keywords)}
+Content:
+{query}
 
 Rules:
-- Only output hashtags separated by spaces.
-- No explanations.
-- No slang (lowkey, highkey, no cap, fr, obsessed).
+- Very specific to this content
+- No generic discovery tags
+- Output ONLY hashtags
 """
-
-    try:
-        text = await groq_generate_text(MODEL, prompt)
-        ai_tags = [t for t in text.split() if t.startswith("#")]
+        text = await groq_generate_text(MODEL, relevant_prompt)
+        relevant_tags = [t for t in text.split() if t.startswith("#")][:3]
     except Exception:
-        ai_tags = []
-
-    if not ai_tags:
-        ai_tags = [f"#{k.lower()}" for k in seed_keywords if k]
+        relevant_tags = [f"#{k.replace(' ', '')}" for k in seed_keywords][:3]
 
     # -------------------------------
-    # ✅ LIMITS & MERGING LOGIC HERE
+    # 3) BROAD (category-level) → 3  ✅ FIXED
     # -------------------------------
-    ai_tags = ai_tags[:6]                 # limit AI-generated hashtags
-    common = COMMON_TAGS.get(platform.lower(), [])[:10]  # limit common hashtags
+    try:
+        broad_prompt = f"""
+Generate 3 broad, category-level hashtags.
 
-    # Merge: common first, then AI
-    merged = common + [tag for tag in ai_tags if tag not in common]
+They should describe the general domain of the content,
+not specific details.
 
-    # Remove duplicates while preserving order
-    final_tags = list(dict.fromkeys(merged))
+Content:
+{query}
+
+Rules:
+- High-level categories
+- No trending or viral tags
+- Output ONLY hashtags
+"""
+        text = await groq_generate_text(MODEL, broad_prompt)
+        broad_tags = [t for t in text.split() if t.startswith("#")][:3]
+    except Exception:
+        broad_tags = []
+
+    # -------------------------------
+    # FINAL MERGE (4 + 3 + 3)
+    # -------------------------------
+    final_tags = trending_tags + relevant_tags + broad_tags
+
+    # Remove duplicates, preserve order
+    final_tags = list(dict.fromkeys(final_tags))
 
     return final_tags
 
