@@ -50,16 +50,14 @@ BANNED_WORDS = [
 ]
 
 TRENDING_POOLS = {
+
     "instagram": [
+        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
         "#reels", "#instareels", "#reelsinstagram", "#reelsoftheday",
         "#explore", "#explorepage", "#viral", "#trending",
-        "#instadaily", "#fypシ", "#fypviral",
-        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
-        "#reelsdaily", "#reelsvideo", "#viralreels",
-        "#reelscommunity", "#trendingsound",
-        "#discover", "#mustwatch", "#watchthis",
-        "#shortformvideo", "#videocontent", "#digitalcreator",
-        "#instamood", "#instavibes", "#reelsinsta",
+        "#instadaily", "#instagood", "#creatorlife",
+        "#reelsdaily", "#viralreels", "#discover",
+        "#watchthis", "#shortformvideo", "#digitalcreator",
         "#reeltrend", "#socialreels"
     ],
 
@@ -67,55 +65,49 @@ TRENDING_POOLS = {
         "#fyp", "#foryou", "#foryoupage", "#fypvideo",
         "#viralvideo", "#tiktoktrend", "#trending",
         "#watchthis", "#discover", "#trendingsound",
-        "#tiktokcontent", "#contenttok", "#creator",
         "#creatorcontent", "#videocreator",
-        "#tiktokdaily", "#dailyvideo", "#shortvideo",
-        "#viralcontent", "#tiktokcommunity",
-        "#tiktoklife", "#realtalk", "#mustwatch",
-        "#fypシ", "#fypviral"
+        "#dailyvideo", "#shortvideo",
+        "#tiktokcommunity", "#fypviral"
     ],
 
     "youtube": [
         "#shorts", "#youtubeshorts", "#viralshorts",
         "#watchnow", "#mustwatch", "#trendingnow",
-        "#creatorcontent", "#contentcreator",
-        "#videocontent", "#shortformcontent",
-        "#youtubevideo", "#youtubecreator",
+        "#contentcreator", "#videocontent",
         "#discover", "#recommended",
-        "#digitalcontent", "#onlinevideo",
-        "#subscribe", "#newvideo",
-        "#creatorlife", "#contentdaily"
+        "#subscribe", "#newvideo"
     ],
 
     "threads": [
         "#threadsapp", "#threadscommunity",
         "#trendingnow", "#dailythoughts",
-        "#hotdiscussion", "#conversationstarter",
-        "#creatorvoices", "#contentcreator",
+        "#conversationstarter", "#creatorvoices",
         "#digitalculture", "#modernlife",
-        "#discoverthreads", "#threadtalk",
-        "#socialconversation", "#thoughtoftheday",
-        "#creatorcommunity", "#onlineculture"
+        "#discoverthreads", "#threadtalk"
     ],
 
     "pinterest": [
         "#pinterestinspo", "#pinterestideas",
         "#aestheticinspo", "#creativeideas",
         "#moodboard", "#visualinspo",
-        "#designinspiration", "#contentideas",
-        "#inspirationdaily", "#creativecontent",
-        "#discoverideas", "#ideaexploration",
-        "#visualcontent", "#digitalinspo"
+        "#designinspiration", "#discoverideas"
     ],
 
     "facebook": [
-        "#trendingnow", "#watchthis",
-        "#mustsee", "#viralcontent",
+        "#watchthis", "#mustsee", "#viralcontent",
         "#socialmedia", "#onlinecontent",
-        "#digitalstories", "#contentcreator",
         "#communitypost", "#shareworthy",
-        "#discovercontent", "#socialvibes",
-        "#dailycontent", "#videooftheday"
+        "#discovercontent", "#videooftheday"
+    ],
+
+    # ✅ ADD THIS
+    "linkedin": [
+        "#leadership", "#careerdevelopment",
+        "#professionalgrowth", "#industryinsights",
+        "#businessstrategy", "#futureofwork",
+        "#innovation", "#thoughtleadership",
+        "#workplaceculture", "#professionaldevelopment",
+        "#careertips", "#businesscontent"
     ]
 }
 
@@ -308,6 +300,7 @@ STRICT RULES:
 - Use natural, human-sounding language.
 - Keep it concise, engaging, and platform-appropriate.
 - Avoid repeating the same words.
+- No personal pronouns (I, we, my, our).
 - Never start with generic words like: Introducing, Presenting, Experience.
 - Never wrap the caption in quotes.
 """
