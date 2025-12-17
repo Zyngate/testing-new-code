@@ -901,9 +901,26 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
     prompt = job["prompt"]
 
     try:
-        # ----------------------------
+        # --------------------------------
+        # 🧠 HUMAN-LIKE THINKING (VISIBLE)
+        # --------------------------------
+        thinking_steps = [
+            "Okay, I understand what the user is asking.",
+            "Let me recall relevant concepts and background.",
+            "I should structure the answer step by step.",
+            "I’ll start with an introduction, then explain clearly."
+        ]
+
+        for thought in thinking_steps:
+            await websocket.send_json({
+                "step": "thinking",
+                "message": thought
+            })
+            await asyncio.sleep(0.5)
+
+        # --------------------------------
         # 🧭 PHASE UPDATES (UX ONLY)
-        # ----------------------------
+        # --------------------------------
         await websocket.send_json({
             "step": "phase",
             "message": "Searching sources..."
@@ -927,9 +944,9 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             "message": "Drafting answer..."
         })
 
-        # ----------------------------
+        # --------------------------------
         # 🤖 LLM STREAMING STARTS
-        # ----------------------------
+        # --------------------------------
         client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
         stream = await client.chat.completions.create(
@@ -939,7 +956,8 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                     "role": "system",
                     "content": (
                         "You are a research assistant. "
-                        "Give a clear, structured, factual answer."
+                        "Explain in a clear, structured, human-like way. "
+                        "Do not mention internal reasoning explicitly."
                     )
                 },
                 {
@@ -959,23 +977,23 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             if delta:
                 full_answer += delta
 
-                # 🔥 LIVE STREAMING TO FRONTEND
+                # 🔥 LIVE TOKEN STREAM
                 await websocket.send_json({
                     "step": "stream",
                     "delta": delta
                 })
 
-        # ----------------------------
+        # --------------------------------
         # ✅ FINAL MESSAGE
-        # ----------------------------
+        # --------------------------------
         await websocket.send_json({
             "step": "done",
             "result": full_answer
         })
 
-        # ----------------------------
+        # --------------------------------
         # 💾 STORE DEEPSEARCH IN CHAT HISTORY
-        # ----------------------------
+        # --------------------------------
         user_id = job.get("user_id")
         session_id = job.get("session_id")
 
@@ -1007,7 +1025,6 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                     "messages": [deepsearch_message],
                     "last_updated": datetime.now(timezone.utc)
                 })
-
 
     except WebSocketDisconnect:
         logger.info("DeepSearch client disconnected")
