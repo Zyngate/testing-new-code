@@ -917,28 +917,17 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
         # --------------------------------
         # 🧭 PHASE UPDATES (UX ONLY)
         # --------------------------------
-        await websocket.send_json({
-            "step": "phase",
-            "message": "Searching sources..."
-        })
-        await asyncio.sleep(0.4)
-
-        await websocket.send_json({
-            "step": "phase",
-            "message": "Reading articles..."
-        })
-        await asyncio.sleep(0.4)
-
-        await websocket.send_json({
-            "step": "phase",
-            "message": "Analyzing data..."
-        })
-        await asyncio.sleep(0.4)
-
-        await websocket.send_json({
-            "step": "phase",
-            "message": "Drafting answer..."
-        })
+        for phase in [
+            "Searching sources...",
+            "Reading articles...",
+            "Analyzing data...",
+            "Drafting answer..."
+        ]:
+            await websocket.send_json({
+                "step": "phase",
+                "message": phase
+            })
+            await asyncio.sleep(0.4)
 
         # --------------------------------
         # 🤖 LLM STREAMING STARTS
@@ -997,18 +986,26 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                 "session_id": session_id
             })
 
-            deepsearch_message = {
-                "role": "assistant",
-                "content": full_answer.strip(),
-                "type": "deepsearch",
-                "timestamp": datetime.now(timezone.utc)
-            }
+            messages_to_store = [
+                {
+                    "role": "user",
+                    "content": prompt.strip(),
+                    "type": "deepsearch",
+                    "timestamp": datetime.now(timezone.utc)
+                },
+                {
+                    "role": "assistant",
+                    "content": full_answer.strip(),
+                    "type": "deepsearch",
+                    "timestamp": datetime.now(timezone.utc)
+                }
+            ]
 
             if chat_entry:
                 await chats_collection.update_one(
                     {"_id": chat_entry["_id"]},
                     {
-                        "$push": {"messages": deepsearch_message},
+                        "$push": {"messages": {"$each": messages_to_store}},
                         "$set": {"last_updated": datetime.now(timezone.utc)}
                     }
                 )
@@ -1016,7 +1013,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                 await chats_collection.insert_one({
                     "user_id": user_id,
                     "session_id": session_id,
-                    "messages": [deepsearch_message],
+                    "messages": messages_to_store,
                     "last_updated": datetime.now(timezone.utc)
                 })
 
@@ -1032,7 +1029,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
 
     finally:
         await websocket.close()
-        
+
 # -------------------------
 # SIMPLE CHAT ENDPOINT
 # -------------------------
