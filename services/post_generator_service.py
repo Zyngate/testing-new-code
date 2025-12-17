@@ -268,21 +268,43 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         # ---------- CAPTION PROMPT ----------
         if p_norm == "instagram":
             caption_prompt = f"""
-You are a senior Instagram content strategist.
+You are writing an Instagram caption in a calm, neutral, observational tone.
 
-Write a caption in PARAGRAPH form with:
-1) A strong, scroll-stopping hook in the FIRST sentence using contrast or a surprising statement.
-2) Followed by an elaborated context that explains the situation emotionally and clearly.
-3) The tone should feel relatable, observational, and human.
-4) No hashtags.
-5) No emojis overload.
-6) No explicit CTA words like “comment”, “share”, “follow”.
+STRICT RULES:
+- Write ONLY in third-person or neutral narration.
+- Do NOT use first-person words (I, we, my, our, me, us).
+- Do NOT make bold, audacious, dramatic, or exaggerated claims.
+- Do NOT hype or overstate the situation.
+- No hashtags.
+- No emojis overload.
+- No explicit CTA words (comment, share, follow).
+
+STRUCTURE (MANDATORY):
+1) HOOK:
+   - A subtle, curiosity-based opening sentence.
+   - Observational, not dramatic.
+   - Introduces the situation without judgment.
+
+2) CONTEXT:
+   - Clearly explain what is happening.
+   - Grounded, realistic, emotionally restrained.
+
+3) SOFT CTA (IMPLICIT):
+   - End with a reflective observation.
+   - Invites thought without asking for action.
+   - No direct questions.
+
+STYLE:
+- Paragraph form (1–2 short paragraphs).
+- Calm, grounded, human.
+- Feels like a moment being noticed, not marketed.
 
 Context:
 {query}
 
-The caption must feel like a thoughtful observation, not a promotion.
+Return ONLY the caption text.
 """
+
         else:
             caption_prompt = f"""
 You are a senior marketing strategist and expert social media copywriter.
