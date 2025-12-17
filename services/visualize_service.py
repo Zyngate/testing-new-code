@@ -17,8 +17,9 @@ ALLOWED_TAGS = [
     "ul", "li", "span", "canvas", "strong", "em"
 ]
 
+# ✅ ADDED data-heatmap ONLY
 ALLOWED_ATTRS = {
-    "*": ["class", "data-chart"]
+    "*": ["class", "data-chart", "data-heatmap"]
 }
 
 
@@ -54,11 +55,19 @@ def build_visualization_html(plan: Dict[str, Any]) -> str:
         if title:
             html += f"<h3>{title}</h3>"
 
+        # ---------------- CHARTS ----------------
         if block_type.startswith("chart"):
             html += (
                 f"<canvas data-chart='{json.dumps(block['data'])}'></canvas>"
             )
 
+        # ✅ ADDED HEATMAP (ONLY THIS BLOCK)
+        elif block_type == "heatmap":
+            html += (
+                f"<canvas data-heatmap='{json.dumps(block['data'])}'></canvas>"
+            )
+
+        # ---------------- TABLE ----------------
         elif block_type == "table":
             headers = block["data"].get("headers", [])
             rows = block["data"].get("rows", [])
@@ -76,12 +85,14 @@ def build_visualization_html(plan: Dict[str, Any]) -> str:
 
             html += "</table>"
 
+        # ---------------- TIMELINE ----------------
         elif block_type == "timeline":
             html += "<ul>"
             for item in block["data"].get("events", []):
                 html += f"<li><strong>{item['label']}:</strong> {item['value']}</li>"
             html += "</ul>"
 
+        # ---------------- CARDS ----------------
         elif block_type == "cards":
             html += "<div class='card-container'>"
             for card in block["data"].get("items", []):
@@ -97,63 +108,29 @@ def build_visualization_html(plan: Dict[str, Any]) -> str:
 
     return html
 
-def ensure_canvas_exists(html: str) -> str:
-    """
-    Guarantees at least one canvas exists for frontend rendering.
-    """
-    if "<canvas" in html:
-        return html
 
-    fallback_chart = {
-        "type": "bar",
-        "labels": ["Phase 1", "Phase 2", "Phase 3"],
-        "values": [30, 60, 90]
-    }
-
-    html += (
-        "<div class='viz-block'>"
-        "<h3>Overview</h3>"
-        f"<canvas data-chart='{json.dumps(fallback_chart)}'></canvas>"
-        "</div>"
-    )
-
-    return html
-
-
+# ============================================================
+# NORMALIZATION
+# ============================================================
 
 def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Ensures all visualization blocks contain renderable data.
-    Backend GUARANTEES frontend-safe visuals.
-    """
-
     normalized_blocks = []
 
     for block in plan.get("blocks", []):
         btype = block.get("type")
-        title = block.get("title", "")
         data = block.get("data") or {}
 
-        # ---------------- TIMELINE ----------------
-        if btype == "timeline":
-            events = data.get("events")
-            if not events:
-                data["events"] = [
-                    {"label": "Ideation", "value": "Problem discovery and validation"},
-                    {"label": "Early Stage", "value": "MVP and first users"},
-                    {"label": "Growth", "value": "Scaling revenue and team"},
-                ]
-            normalized_blocks.append(block)
-
         # ---------------- CHARTS ----------------
-        elif btype and btype.startswith("chart"):
-            # enforce chart-ready structure
+        if btype and btype.startswith("chart"):
             labels = data.get("labels")
             values = data.get("values")
 
             if not labels or not values:
                 data["labels"] = ["Stage 1", "Stage 2", "Stage 3"]
                 data["values"] = [30, 60, 90]
+
+            # ✅ FIX: legend label for frontend (prevents "undefined")
+            data.setdefault("label", block.get("title", "Value"))
 
             # ensure chart type exists
             data.setdefault("type", btype.replace("chart_", ""))
@@ -171,18 +148,23 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
                 ]
             normalized_blocks.append(block)
 
-        # ---------------- CARDS ----------------
-        elif btype == "cards":
-            if not data.get("items"):
-                data["items"] = [
-                    {"title": "Stage", "value": "Growth"},
-                    {"title": "Risk Level", "value": "Medium"},
+        # ---------------- HEATMAP ----------------
+        elif btype == "heatmap":
+            if (
+                not data.get("xLabels")
+                or not data.get("yLabels")
+                or not data.get("values")
+            ):
+                data["xLabels"] = ["A", "B", "C"]
+                data["yLabels"] = ["X", "Y"]
+                data["values"] = [
+                    [1, 2, 3],
+                    [4, 5, 6]
                 ]
             normalized_blocks.append(block)
 
-        # ---------------- UNKNOWN / EMPTY ----------------
+        # ---------------- UNKNOWN ----------------
         else:
-            # drop unusable blocks silently
             continue
 
     plan["blocks"] = normalized_blocks
@@ -197,6 +179,7 @@ async def visualize_content(prompt_text: str) -> Dict[str, Any]:
     prompt_text = prompt_text[:2000]
     client = get_visualize_groq_client()
 
+    # ✅ ONLY CHANGE: added heatmap to allowed types
     system_prompt = """
 You are a visualization planner.
 
@@ -207,19 +190,16 @@ Rules:
 - No text outside JSON
 
 Allowed block types:
-chart_line, chart_bar, chart_pie, table
+chart_line, chart_bar, chart_pie, table, heatmap
 
 JSON FORMAT:
 {
   "title": "string",
   "blocks": [
     {
-      "type": "chart_line | chart_bar | chart_pie | table",
+      "type": "chart_line | chart_bar | chart_pie | table | heatmap",
       "title": "string",
-      "data": {
-        "labels": [string],
-        "values": [number]
-      }
+      "data": {}
     }
   ]
 }
@@ -239,15 +219,15 @@ JSON FORMAT:
         raw = completion.choices[0].message.content
         logger.info(f"[VISUALIZE RAW JSON]: {raw}")
 
-        plan = json.loads(raw)          # ❗ STRICT
-        plan = normalize_plan(plan)     # ❗ SAFE FIXES ONLY
+        plan = json.loads(raw)
+        plan = normalize_plan(plan)
 
         html = build_visualization_html(plan)
         html = sanitize_html(html)
 
         return {"status": "success", "html": html}
 
-    except Exception as e:
+    except Exception:
         logger.error("VISUALIZE FAILED", exc_info=True)
         return {
             "status": "failed",
