@@ -1,5 +1,7 @@
 # stelle_backend/services/post_generator_service.py
 import asyncio
+import itertools
+import random
 from typing import List, Dict, Any
 from groq import AsyncGroq
 from enum import Enum
@@ -46,6 +48,84 @@ BANNED_WORDS = [
     "obsessed", "literally", "fr", "no cap",
     "delulu"
 ]
+
+TRENDING_POOLS = {
+    "instagram": [
+        "#reels", "#instareels", "#reelsinstagram", "#reelsoftheday",
+        "#explore", "#explorepage", "#viral", "#trending",
+        "#instadaily", "#fypシ", "#fypviral",
+        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
+        "#reelsdaily", "#reelsvideo", "#viralreels",
+        "#reelscommunity", "#trendingsound",
+        "#discover", "#mustwatch", "#watchthis",
+        "#shortformvideo", "#videocontent", "#digitalcreator",
+        "#instamood", "#instavibes", "#reelsinsta",
+        "#reeltrend", "#socialreels"
+    ],
+
+    "tiktok": [
+        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
+        "#viralvideo", "#tiktoktrend", "#trending",
+        "#watchthis", "#discover", "#trendingsound",
+        "#tiktokcontent", "#contenttok", "#creator",
+        "#creatorcontent", "#videocreator",
+        "#tiktokdaily", "#dailyvideo", "#shortvideo",
+        "#viralcontent", "#tiktokcommunity",
+        "#tiktoklife", "#realtalk", "#mustwatch",
+        "#fypシ", "#fypviral"
+    ],
+
+    "youtube": [
+        "#shorts", "#youtubeshorts", "#viralshorts",
+        "#watchnow", "#mustwatch", "#trendingnow",
+        "#creatorcontent", "#contentcreator",
+        "#videocontent", "#shortformcontent",
+        "#youtubevideo", "#youtubecreator",
+        "#discover", "#recommended",
+        "#digitalcontent", "#onlinevideo",
+        "#subscribe", "#newvideo",
+        "#creatorlife", "#contentdaily"
+    ],
+
+    "threads": [
+        "#threadsapp", "#threadscommunity",
+        "#trendingnow", "#dailythoughts",
+        "#hotdiscussion", "#conversationstarter",
+        "#creatorvoices", "#contentcreator",
+        "#digitalculture", "#modernlife",
+        "#discoverthreads", "#threadtalk",
+        "#socialconversation", "#thoughtoftheday",
+        "#creatorcommunity", "#onlineculture"
+    ],
+
+    "pinterest": [
+        "#pinterestinspo", "#pinterestideas",
+        "#aestheticinspo", "#creativeideas",
+        "#moodboard", "#visualinspo",
+        "#designinspiration", "#contentideas",
+        "#inspirationdaily", "#creativecontent",
+        "#discoverideas", "#ideaexploration",
+        "#visualcontent", "#digitalinspo"
+    ],
+
+    "facebook": [
+        "#trendingnow", "#watchthis",
+        "#mustsee", "#viralcontent",
+        "#socialmedia", "#onlinecontent",
+        "#digitalstories", "#contentcreator",
+        "#communitypost", "#shareworthy",
+        "#discovercontent", "#socialvibes",
+        "#dailycontent", "#videooftheday"
+    ]
+}
+
+def rotating_hashtag_picker(pool: list, k: int = 4):
+    pool = pool[:]  # copy
+    random.shuffle(pool)
+    cycle = itertools.cycle(pool)
+    while True:
+        yield [next(cycle) for _ in range(k)]
+
 
 # ---------------------------
 # 1) keyword generation
@@ -98,10 +178,11 @@ Rules:
     except:
         return []
 
+TRENDING_GENERATORS = {
+    platform: rotating_hashtag_picker(tags, 4)
+    for platform, tags in TRENDING_POOLS.items()
+}
 
-# ---------------------------
-# 2) platform hashtag generator
-# ---------------------------
 async def fetch_platform_hashtags(
     client: AsyncGroq,
     seed_keywords: List[str],
@@ -112,14 +193,10 @@ async def fetch_platform_hashtags(
     platform = platform.lower()
 
     # -------------------------------
-    # 1) TRENDING (dynamic) → 4
+    # 1) TRENDING / DISCOVERY → 4 (ROTATING)
     # -------------------------------
-    if platform in ["instagram", "tiktok"]:
-        trending_tags = await generate_trending_hashtags(platform, query)
-    else:
-        trending_tags = []
-
-    trending_tags = trending_tags[:4]
+    gen = TRENDING_GENERATORS.get(platform)
+    trending_tags = next(gen) if gen else []
 
     # -------------------------------
     # 2) RELEVANT (contextual) → 3
@@ -142,7 +219,7 @@ Rules:
         relevant_tags = [f"#{k.replace(' ', '')}" for k in seed_keywords][:3]
 
     # -------------------------------
-    # 3) BROAD (category-level) → 3  ✅ FIXED
+    # 3) BROAD (category-level) → 3
     # -------------------------------
     try:
         broad_prompt = f"""
