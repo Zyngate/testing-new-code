@@ -35,7 +35,7 @@ from services.ai_service import (
     generate_thinking_steps
 )
 from services.goal_service import update_task_goal_status, schedule_immediate_reminder
-from services.common_utils import get_current_datetime, filter_think_messages, convert_object_ids
+from services.common_utils import get_current_datetime, filter_think_messages, convert_object_ids,sanitize_chat_history
 from config import logger, GENERATE_API_KEYS
 from database import doc_index, code_index, file_doc_memory_map, code_memory_map
 
@@ -44,11 +44,9 @@ router = APIRouter(tags=["Chat"])
 visualize_queries = {}
 visualize_jobs = {}
 deepsearch_queries = {}
-deepsearch_jobs={}
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
 # -------------------------
-
 POSSIBLE_PLATFORM_FIELDS = ["platform", "default_platform", "selected_platform", "social_platform"]
 
 
@@ -326,6 +324,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         # d) Multimodal RAG Context
         multimodal_context, used_filenames = await retrieve_multimodal_context(user_message, session_id, hooked_filenames)
+       
 
         # --- 2. Construct Unified Prompt ---
         unified_prompt = f"User Query: {user_message}\n"
@@ -370,6 +369,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         # --- 3. Build Message History (Retrieval Augmented) ---
         chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
         past_messages = chat_entry.get("messages", []) if chat_entry else []
+        past_messages = sanitize_chat_history(past_messages)
         chat_history = []
 
         if past_messages:
