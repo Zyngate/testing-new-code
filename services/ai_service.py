@@ -641,6 +641,46 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
         return "DeepSearch unavailable.", []
 
 
+async def generate_thinking_steps(prompt: str) -> list[str]:
+    """
+    Generates SAFE, user-visible thinking narration.
+    NOT real chain-of-thought.
+    """
+
+    client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
+
+    response = await client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an AI assistant that explains WHAT you will do, "
+                    "not HOW you reason internally. "
+                    "Return 3–5 short sentences describing your approach."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"User question: {prompt}"
+            }
+        ],
+        temperature=0.3,
+        max_completion_tokens=150,
+    )
+
+    text = response.choices[0].message.content.strip()
+
+    # Split into steps safely
+    steps = [
+        line.strip("•- ")
+        for line in text.split("\n")
+        if line.strip()
+    ]
+
+    return steps[:5]
+
+
 async def visualize_content(context_text: str) -> Dict[str, Any]:
     """
     Fast + reliable visualization using llama-3.3-70b-versatile.

@@ -32,6 +32,7 @@ from services.ai_service import (
     # newly used helpers (must exist in ai_service.py)
     query_deepsearch,
     visualize_content,
+    generate_thinking_steps
 )
 from services.goal_service import update_task_goal_status, schedule_immediate_reminder
 from services.common_utils import get_current_datetime, filter_think_messages, convert_object_ids
@@ -904,12 +905,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
         # --------------------------------
         # 🧠 HUMAN-LIKE THINKING (VISIBLE)
         # --------------------------------
-        thinking_steps = [
-            "Okay, I understand what the user is asking.",
-            "Let me recall relevant concepts and background.",
-            "I should structure the answer step by step.",
-            "I’ll start with an introduction, then explain clearly."
-        ]
+        thinking_steps = await generate_thinking_steps(prompt)
 
         for thought in thinking_steps:
             await websocket.send_json({
@@ -976,8 +972,6 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
             delta = chunk.choices[0].delta.content
             if delta:
                 full_answer += delta
-
-                # 🔥 LIVE TOKEN STREAM
                 await websocket.send_json({
                     "step": "stream",
                     "delta": delta
@@ -1038,7 +1032,6 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
 
     finally:
         await websocket.close()
-
         
 # -------------------------
 # SIMPLE CHAT ENDPOINT
