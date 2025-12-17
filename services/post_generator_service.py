@@ -189,7 +189,7 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
 You are a senior Instagram content strategist.
 
 Write a caption in PARAGRAPH form with:
-1) A strong hook in the opening sentence that creates curiosity.
+1) A strong, scroll-stopping hook in the FIRST sentence using contrast or a surprising statement.
 2) Followed by an elaborated context that explains the situation emotionally and clearly.
 3) The tone should feel relatable, observational, and human.
 4) No hashtags.
