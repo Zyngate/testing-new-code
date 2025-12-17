@@ -1030,7 +1030,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
     finally:
         await websocket.close()
 
-# -------------------------
+
 # SIMPLE CHAT ENDPOINT
 # -------------------------
 
