@@ -184,7 +184,25 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         platform_hashtags[p_norm] = tags
 
         # ---------- CAPTION PROMPT ----------
-        caption_prompt = f"""
+        if p_norm == "instagram":
+            caption_prompt = f"""
+You are a senior Instagram content strategist.
+
+Write a caption in PARAGRAPH form with:
+1) A strong hook in the opening sentence that creates curiosity.
+2) Followed by an elaborated context that explains the situation emotionally and clearly.
+3) The tone should feel relatable, observational, and human.
+4) No hashtags.
+5) No emojis overload.
+6) No explicit CTA words like “comment”, “share”, “follow”.
+
+Context:
+{query}
+
+The caption must feel like a thoughtful observation, not a promotion.
+"""
+        else:
+            caption_prompt = f"""
 You are a senior marketing strategist and expert social media copywriter.
 Write one high-quality caption tailored for the platform: {p_norm}.
 
@@ -198,14 +216,10 @@ STRICT RULES:
 - Do NOT use slang (lowkey, highkey, fr, no cap, obsessed, literally).
 - Do NOT add hashtags.
 - Use natural, human-sounding language.
-- Add emotional pull or storytelling when appropriate.
 - Keep it concise, engaging, and platform-appropriate.
 - Avoid repeating the same words.
 - Never start with generic words like: Introducing, Presenting, Experience.
 - Never wrap the caption in quotes.
-
-GOAL:
-Craft a compelling caption that feels written by a professional content creator, not an AI.
 """
 
         # ---------- GENERATE RAW CAPTION ----------
@@ -217,18 +231,11 @@ Craft a compelling caption that feels written by a professional content creator,
             caption_text = f"A {p_norm} caption about {query}"
 
         # ---------- CLEANING STEPS ----------
-        # Remove quotes
         caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
 
-        # Remove duplicate emojis at the start (optional)
-        while len(caption_text) > 1 and caption_text[0] == caption_text[1] and not caption_text[0].isalnum():
-            caption_text = caption_text[1:]
-
-        # Remove banned slang
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
 
-        # Fix spacing
         caption_text = " ".join(caption_text.split())
 
         captions[p_norm] = caption_text
