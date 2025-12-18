@@ -120,8 +120,19 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         btype = block.get("type")
         data = block.get("data") or {}
 
-        # ---------------- CHARTS ----------------
+        # ================= CHARTS =================
         if btype and btype.startswith("chart"):
+            # Always set chart type
+            data["type"] = btype.replace("chart_", "")
+
+            # Case 1: Chart.js style datasets (KEEP THEM)
+            if data.get("datasets"):
+                # ensure labels exist
+                data.setdefault("labels", [])
+                normalized_blocks.append(block)
+                continue
+
+            # Case 2: Simple labels + values
             labels = data.get("labels")
             values = data.get("values")
 
@@ -129,15 +140,11 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
                 data["labels"] = ["Stage 1", "Stage 2", "Stage 3"]
                 data["values"] = [30, 60, 90]
 
-            # ✅ FIX: legend label for frontend (prevents "undefined")
             data.setdefault("label", block.get("title", "Value"))
-
-            # ensure chart type exists
-            data.setdefault("type", btype.replace("chart_", ""))
-
             normalized_blocks.append(block)
+            continue
 
-        # ---------------- TABLE ----------------
+        # ================= TABLE =================
         elif btype == "table":
             if not data.get("rows"):
                 data["headers"] = ["Stage", "Focus"]
@@ -147,9 +154,18 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
                     ["Growth", "Scaling operations"],
                 ]
             normalized_blocks.append(block)
+            continue
 
-        # ---------------- HEATMAP ----------------
+        # ================= HEATMAP =================
         elif btype == "heatmap":
+            # Convert dataset-based heatmap
+            if data.get("datasets"):
+                matrix = data["datasets"][0].get("data", [])
+                data["values"] = matrix
+                data["xLabels"] = data.get("labels", [])
+                data["yLabels"] = [f"Row {i+1}" for i in range(len(matrix))]
+
+            # Fallback only if still broken
             if (
                 not data.get("xLabels")
                 or not data.get("yLabels")
@@ -161,14 +177,13 @@ def normalize_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
                     [1, 2, 3],
                     [4, 5, 6]
                 ]
-            normalized_blocks.append(block)
 
-        # ---------------- UNKNOWN ----------------
-        else:
+            normalized_blocks.append(block)
             continue
 
     plan["blocks"] = normalized_blocks
     return plan
+
 
 
 # ============================================================
