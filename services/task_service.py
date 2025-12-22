@@ -155,6 +155,9 @@ def execute_task(task: Dict):
         logger.error("DB unavailable. Task skipped.")
         return
 
+    # ------------------------------------------------------------------
+    # Lock task to avoid duplicate execution
+    # ------------------------------------------------------------------
     locked = tasks_col.find_one_and_update(
         {"_id": task["_id"], "retrieved": False},
         {"$set": {"retrieved": True, "last_run_at": datetime.now()}}
@@ -173,6 +176,9 @@ def execute_task(task: Dict):
     logger.info(f"Executing task {task['_id']} for user_id={user_id}")
 
     try:
+        # ------------------------------------------------------------------
+        # Run task
+        # ------------------------------------------------------------------
         result = ask_stelle(description)
 
         output_col.insert_one({
@@ -182,13 +188,15 @@ def execute_task(task: Dict):
             "created_at": datetime.now()
         })
 
+        # ------------------------------------------------------------------
+        # Schedule next run
+        # ------------------------------------------------------------------
         next_run = calculate_next_run(
-            task["scheduled_datetime"],
+            task.get("scheduled_datetime"),
             task.get("frequency"),
             task.get("days"),
             task.get("date")
         )
-
 
         if next_run:
             tasks_col.update_one(
@@ -206,10 +214,18 @@ def execute_task(task: Dict):
         logger.exception(f"Task execution failed: {task['_id']}")
         tasks_col.update_one(
             {"_id": task["_id"]},
-            {"$set": {"retrieved": False, "last_error": str(e)}}
+            {"$set": {
+                "retrieved": False,
+                "last_error": str(e)
+            }}
         )
+        return
 
+    # ------------------------------------------------------------------
+    # Generate task name if missing
+    # ------------------------------------------------------------------
     task_name = task.get("task_name")
+
     if not task_name:
         try:
             task_name = generate_task_name(description)
@@ -219,7 +235,11 @@ def execute_task(task: Dict):
             )
         except Exception:
             logger.exception("Failed to generate task name")
-            task_name = "Automated Task"
+            tasks_col.update_one(
+                {"_id": task["_id"]},
+                {"$set": {"task_name": "Automated Task"}}
+            )
+
 
 
 
