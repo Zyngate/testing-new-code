@@ -18,6 +18,7 @@ router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
 class TaskCreateRequest(BaseModel):
     user_id: str
+    task_name: Optional[str] = None
     description: str
     date: str              # YYYY-MM-DD
     time: str              # HH:MM
