@@ -1,8 +1,6 @@
-# stelle_backend/services/task_service.py
-
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 
 import requests
@@ -50,9 +48,7 @@ def ask_stelle(prompt: str) -> str:
 
 
 def generate_task_name(description: str) -> str:
-    """
-    Generate a short, human-readable task name from user description.
-    """
+    """Generate a short, human-readable task name from user description."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY_STELLE_MODEL}",
         "Content-Type": "application/json"
@@ -82,9 +78,7 @@ def generate_task_name(description: str) -> str:
 
     response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
     response.raise_for_status()
-
     return response.json()["choices"][0]["message"]["content"].strip()
-
 
 
 # -------------------------------------------------------------------
@@ -97,20 +91,14 @@ def calculate_next_run(
     days: Optional[List[str]],
     date: Optional[int] = None
 ) -> Optional[datetime]:
-    """Calculate next execution time based on clean recurrence rules."""
+    """Calculate next execution time based on recurrence rules."""
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
-    # -------------------------
-    # DAILY
-    # -------------------------
     if frequency == "daily":
         next_dt = scheduled_dt + timedelta(days=1)
         return next_dt if next_dt > now else None
 
-    # -------------------------
-    # WEEKLY (uses days)
-    # -------------------------
     if frequency == "weekly":
         if not days:
             return None
@@ -120,28 +108,25 @@ def calculate_next_run(
 
         while True:
             if next_day.weekday() in valid_days:
-                next_dt = datetime.combine(next_day, scheduled_dt.time())
+                next_dt = datetime.combine(
+                    next_day,
+                    scheduled_dt.time(),
+                    tzinfo=timezone.utc
+                )
                 return next_dt if next_dt > now else None
             next_day += timedelta(days=1)
 
-    # -------------------------
-    # MONTHLY (uses date-of-month)
-    # -------------------------
     if frequency == "monthly":
         run_date = date or scheduled_dt.day
-
         candidate = scheduled_dt + relativedelta(months=1)
         last_day = (candidate + relativedelta(day=31)).day
-
         safe_day = min(run_date, last_day)
-
         next_dt = candidate.replace(day=safe_day)
         return next_dt if next_dt > now else None
 
-    # -------------------------
-    # ONE-TIME
-    # -------------------------
+    # once
     return None
+
 
 # -------------------------------------------------------------------
 # Core Task Execution
@@ -155,12 +140,12 @@ def execute_task(task: Dict):
         logger.error("DB unavailable. Task skipped.")
         return
 
-    # ------------------------------------------------------------------
-    # Lock task to avoid duplicate execution
-    # ------------------------------------------------------------------
     locked = tasks_col.find_one_and_update(
         {"_id": task["_id"], "retrieved": False},
-        {"$set": {"retrieved": True, "last_run_at": datetime.now()}}
+        {"$set": {
+            "retrieved": True,
+            "last_run_at": datetime.now(timezone.utc)
+        }}
     )
 
     if not locked:
@@ -176,21 +161,15 @@ def execute_task(task: Dict):
     logger.info(f"Executing task {task['_id']} for user_id={user_id}")
 
     try:
-        # ------------------------------------------------------------------
-        # Run task
-        # ------------------------------------------------------------------
         result = ask_stelle(description)
 
         output_col.insert_one({
             "task_id": task["_id"],
             "user_id": user_id,
             "content": result,
-            "created_at": datetime.now()
+            "created_at": datetime.now(timezone.utc)
         })
 
-        # ------------------------------------------------------------------
-        # Schedule next run
-        # ------------------------------------------------------------------
         next_run = calculate_next_run(
             task.get("scheduled_datetime"),
             task.get("frequency"),
@@ -208,6 +187,10 @@ def execute_task(task: Dict):
             )
             logger.info(f"Task rescheduled for {next_run}")
         else:
+            tasks_col.update_one(
+                {"_id": task["_id"]},
+                {"$set": {"status": "completed"}}
+            )
             logger.info(f"One-time task completed: {task['_id']}")
 
     except Exception as e:
@@ -221,11 +204,7 @@ def execute_task(task: Dict):
         )
         return
 
-    # ------------------------------------------------------------------
-    # Generate task name if missing
-    # ------------------------------------------------------------------
     task_name = task.get("task_name")
-
     if not task_name:
         try:
             task_name = generate_task_name(description)
@@ -234,13 +213,10 @@ def execute_task(task: Dict):
                 {"$set": {"task_name": task_name}}
             )
         except Exception:
-            logger.exception("Failed to generate task name")
             tasks_col.update_one(
                 {"_id": task["_id"]},
                 {"$set": {"task_name": "Automated Task"}}
             )
-
-
 
 
 # -------------------------------------------------------------------
@@ -258,7 +234,8 @@ def scheduler_loop():
                 time.sleep(SCHEDULER_POLL_INTERVAL)
                 continue
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
+
             due_tasks = list(tasks_col.find({
                 "scheduled_datetime": {"$lte": now},
                 "retrieved": False

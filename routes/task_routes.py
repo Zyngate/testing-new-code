@@ -1,7 +1,5 @@
-# stelle_backend/routes/task_routes.py
-
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
+from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -52,7 +50,7 @@ def create_task(request: TaskCreateRequest):
         scheduled_datetime = datetime.strptime(
             f"{request.date} {request.time}",
             "%Y-%m-%d %H:%M"
-        )
+        ).replace(tzinfo=timezone.utc)  # ✅ REQUIRED FIX
     except ValueError:
         raise HTTPException(
             status_code=400,
