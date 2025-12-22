@@ -83,9 +83,7 @@ def create_task(request: TaskCreateRequest):
 
 @router.get("/blogs")
 def get_generated_content():
-    _, blogs_col = get_or_init_sync_collections()
-    if blogs_col is None:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    blogs = list(blogs_col.find({}, {"_id": 0}))
+    _, output_col = get_or_init_sync_collections()
+    blogs = list(output_col.find({}, {"_id": 0}))
     return JSONResponse(content=blogs)
+
