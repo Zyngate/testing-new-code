@@ -31,13 +31,16 @@ class TaskCreateRequest(BaseModel):
 # -------------------------------------------------------------------
 
 @router.get("/")
-def get_tasks():
+def get_tasks(user_id: str):
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    tasks = list(tasks_col.find({}, {"_id": 0}))
+    tasks = list(
+        tasks_col.find({"user_id": user_id}, {"_id": 0})
+    )
     return JSONResponse(content=tasks)
+
 
 
 @router.post("/")
@@ -80,10 +83,17 @@ def create_task(request: TaskCreateRequest):
         status_code=201
     )
 
-
 @router.get("/blogs")
-def get_generated_content():
+def get_generated_content(user_id: str):
     _, output_col = get_or_init_sync_collections()
-    blogs = list(output_col.find({}, {"_id": 0}))
+    if output_col is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    blogs = list(
+        output_col.find({"user_id": user_id}, {"_id": 0})
+    )
     return JSONResponse(content=blogs)
+
+
+
 
