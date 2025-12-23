@@ -12,7 +12,7 @@ from routes import image_caption_routes
 from routes import recommendation_routes
 from routes import video_routes
 from routes import visualize_routes
-from fastapi.responses import HTMLResponse
+
 
 #from routes import recommendation_routes
 
@@ -38,7 +38,8 @@ from routes import (
     subscription_routes,
     task_routes,
     integration_routes,
-    post_generation_routes
+    post_generation_routes,
+    plan_routes
 )
 
 app = FastAPI(
@@ -73,6 +74,13 @@ app.include_router(
     post_router,
     prefix="/posts",
     tags=["Posts"]
+)
+
+# ✅ Weekly Plan Manager
+app.include_router(
+    plan_routes.router,
+    prefix="/plans",
+    tags=["Plan Manager"]
 )
 
 
@@ -181,12 +189,6 @@ async def startup():
 
     if not task_thread.is_alive():
         task_thread.start()
-
-@app.get("/demo", response_class=HTMLResponse)
-def demo():
-    with open("task_workflow.html", "r", encoding="utf-8") as f:
-        return f.read()
-
 
 # -------------------------
 #   ROOT ENDPOINT
