@@ -5,14 +5,14 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-
+import threading
 from config import logger
 from database import load_faiss_indices
 from routes import image_caption_routes
 from routes import recommendation_routes
 from routes import video_routes
 from routes import visualize_routes
-
+from fastapi.responses import HTMLResponse
 
 #from routes import recommendation_routes
 
@@ -26,7 +26,7 @@ from services.subscription_service import (
 from services.task_service import task_thread
 
 from routes import post_generation_routes
-
+from routes.post_routes import router as post_router
 
 # Routers grouped by FEATURES
 from routes import (
@@ -67,6 +67,14 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Unexpected server error"}
     )
+
+# ✅ Post Scheduling Module
+app.include_router(
+    post_router,
+    prefix="/posts",
+    tags=["Posts"]
+)
+
 
 # -------------------------
 #   FEATURE-WISE ROUTERS
@@ -174,9 +182,16 @@ async def startup():
     if not task_thread.is_alive():
         task_thread.start()
 
+@app.get("/demo", response_class=HTMLResponse)
+def demo():
+    with open("task_workflow.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
 # -------------------------
 #   ROOT ENDPOINT
 # -------------------------
 @app.get("/", tags=["Root"])
 async def root():
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+
