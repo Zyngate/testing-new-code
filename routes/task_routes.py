@@ -30,7 +30,7 @@ class TaskCreateRequest(BaseModel):
 # Endpoints
 # -------------------------------------------------------------------
 
-@router.get("/tasks")
+@router.get("/")
 def get_tasks():
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is None:
@@ -40,7 +40,7 @@ def get_tasks():
     return JSONResponse(content=tasks)
 
 
-@router.post("/tasks")
+@router.post("/")
 def create_task(request: TaskCreateRequest):
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is None:
