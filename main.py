@@ -37,7 +37,7 @@ from routes import (
     misc_routes,
     subscription_routes,
     task_routes,
-    integration_routes,
+    integration_routes, 
     post_generation_routes,
     plan_routes
 )
@@ -52,12 +52,15 @@ app = FastAPI(
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://www.stelle.chat",
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # -------------------------
 #   GLOBAL ERROR HANDLER
 # -------------------------
