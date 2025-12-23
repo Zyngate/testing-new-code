@@ -80,6 +80,10 @@ def generate_task_name(description: str) -> str:
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"].strip()
 
+def ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 # -------------------------------------------------------------------
 # Scheduling Logic
@@ -91,38 +95,41 @@ def calculate_next_run(
     days: Optional[List[str]],
     date: Optional[int] = None
 ) -> Optional[datetime]:
-    """Calculate next execution time based on recurrence rules."""
 
+    scheduled_dt = ensure_utc(scheduled_dt)
     now = datetime.now(timezone.utc)
+
 
     if frequency == "daily":
         next_dt = scheduled_dt + timedelta(days=1)
+        next_dt = ensure_utc(next_dt)
         return next_dt if next_dt > now else None
 
     if frequency == "weekly":
         if not days:
             return None
-
         valid_days = [CALENDAR_DAY_MAP[d[:3]] for d in days if d[:3] in CALENDAR_DAY_MAP]
-        next_day = scheduled_dt.date() + timedelta(days=1)
-
-        while True:
+        next_day = scheduled_dt.date()
+        for _ in range(14):  # max 2 weeks safety
+            next_day += timedelta(days=1)
             if next_day.weekday() in valid_days:
                 next_dt = datetime.combine(
                     next_day,
                     scheduled_dt.time(),
                     tzinfo=timezone.utc
-                )
-                return next_dt if next_dt > now else None
-            next_day += timedelta(days=1)
+            )
+            return next_dt if next_dt > now else None
+        return None
+
 
     if frequency == "monthly":
         run_date = date or scheduled_dt.day
         candidate = scheduled_dt + relativedelta(months=1)
         last_day = (candidate + relativedelta(day=31)).day
         safe_day = min(run_date, last_day)
-        next_dt = candidate.replace(day=safe_day)
+        next_dt = candidate.replace(day=safe_day, tzinfo=timezone.utc)
         return next_dt if next_dt > now else None
+
 
     # once
     return None
