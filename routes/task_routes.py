@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from database import get_or_init_sync_collections
 from config import logger
-
+from bson import ObjectId
 router = APIRouter(tags=["Tasks"])
 
 
@@ -91,9 +91,13 @@ def get_generated_content(user_id: str):
     if output_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    blogs = list(output_col.find({"user_id": user_id}, {"_id": 0}))
+    blogs = list(output_col.find({"user_id": user_id}))
 
-    return jsonable_encoder(blogs)
+    # ✅ Convert ObjectId → string
+    for blog in blogs:
+        blog["_id"] = str(blog["_id"])
+        blog["task_id"] = str(blog.get("task_id"))
 
+    return blogs
 
 
