@@ -8,7 +8,8 @@ from pydantic import BaseModel
 from database import get_or_init_sync_collections
 from config import logger
 
-router = APIRouter(prefix="/tasks", tags=["Tasks"])
+router = APIRouter(tags=["Tasks"])
+
 
 # -------------------------------------------------------------------
 # Request Models
