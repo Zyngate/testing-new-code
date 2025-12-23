@@ -700,42 +700,85 @@ class RecommendationEngine:
         df = self.processed_data
         insights = []
 
+        # Total engagement explanation
         total_engagement = df['engagement_score'].sum()
-        insights.append(f"📊 Analyzed {len(df)} posts with {total_engagement:,.0f} total engagement")
+        total_likes = df['likes'].sum() if 'likes' in df.columns else 0
+        total_comments = df['comments'].sum() if 'comments' in df.columns else 0
+        total_shares = df['shares'].sum() if 'shares' in df.columns else 0
+        
+        insights.append(
+            f"📊 We analyzed {len(df)} of your posts and found they received a total of {total_engagement:,.0f} interactions. "
+            f"This includes {total_likes:,.0f} likes, {total_comments:,.0f} comments, and {total_shares:,.0f} shares combined."
+        )
 
+        # Engagement rate explanation
         avg_rate = df['engagement_rate'].mean()
-        insights.append(f"📈 Average engagement rate: {avg_rate:.1f}%")
+        if avg_rate >= 5.0:
+            rate_feedback = "which is excellent! Your audience is highly engaged."
+        elif avg_rate >= 3.0:
+            rate_feedback = "which is pretty good! Your content is connecting with your audience."
+        elif avg_rate >= 1.0:
+            rate_feedback = "which is decent, but there's room to grow your audience engagement."
+        else:
+            rate_feedback = "which means we have opportunities to improve how your audience interacts with your content."
+        insights.append(f"📈 On average, {avg_rate:.1f}% of your audience engages with each post, {rate_feedback}")
 
+        # Platform distribution
         platform_counts = df['platform'].value_counts()
         if len(platform_counts) > 0:
             top_platform = platform_counts.index[0]
             top_platform_count = platform_counts.iloc[0]
             platform_pct = (top_platform_count / len(df)) * 100
-            insights.append(f"📱 {platform_pct:.0f}% of content on {top_platform}")
+            insights.append(
+                f"📱 You're posting {platform_pct:.0f}% of your content on {top_platform.capitalize()}, "
+                f"that's {top_platform_count} out of {len(df)} posts."
+            )
 
+        # Engagement trend
         if len(df) >= 3:
             split_point = int(len(df) * 0.7)
             early_df = df.iloc[:split_point]
             recent_df = df.iloc[split_point:]
             early_engagement = early_df['engagement_score'].mean()
             recent_engagement = recent_df['engagement_score'].mean()
+            change_pct = ((recent_engagement - early_engagement) / early_engagement * 100) if early_engagement > 0 else 0
+            
             if recent_engagement > early_engagement * 1.1:
-                insights.append("📈 Engagement growing")
+                insights.append(
+                    f"📈 Great news! Your engagement is growing. Your recent posts are performing {abs(change_pct):.0f}% "
+                    f"better than your earlier ones."
+                )
             elif recent_engagement < early_engagement * 0.9:
-                insights.append("📉 Engagement needs attention")
+                insights.append(
+                    f"📉 Your engagement has dropped by {abs(change_pct):.0f}% in recent posts. "
+                    f"Let's work on getting those numbers back up!"
+                )
             else:
-                insights.append("➡️ Engagement consistent")
+                insights.append(
+                    "➡️ Your engagement is staying consistent, which is good. "
+                    "Now let's find ways to take it to the next level!"
+                )
 
+        # Best performing category
         category_perf = self.analyze_content_performance()
         if len(category_perf) > 0:
             best_category = max(category_perf, key=category_perf.get)
             best_engagement = category_perf[best_category]
             post_count = len(df[df['category'] == best_category])
-            insights.append(f"🏆 {best_category} performed best ({best_engagement:.0f} avg, {post_count} posts)")
+            category_pct = (post_count / len(df)) * 100
+            insights.append(
+                f"🏆 Your {best_category} content is your superstar! It gets an average of {best_engagement:,.0f} interactions per post. "
+                f"You've posted {post_count} pieces of {best_category} content, which is {category_pct:.0f}% of all your posts."
+            )
 
+        # Best posting day
         time_perf = self.analyze_time_performance()
         best_day = time_perf.get('best_day_name', 'Monday')
-        insights.append(f"📅 Best day: {best_day}")
+        best_day_engagement = time_perf.get('daily_performance', {}).get(time_perf.get('best_day', 0), 0)
+        insights.append(
+            f"📅 {best_day} is your best day to post! Your content gets an average of {best_day_engagement:,.0f} interactions "
+            f"when you share it on {best_day}s."
+        )
 
         return insights
 
@@ -746,46 +789,135 @@ class RecommendationEngine:
         category_perf = self.analyze_content_performance()
         time_perf = self.analyze_time_performance()
 
+        # Content strategy recommendation
         if len(category_perf) > 0:
             best_category = max(category_perf, key=category_perf.get)
             best_engagement = category_perf[best_category]
             category_posts = len(df[df['category'] == best_category])
             category_pct = (category_posts / len(df)) * 100
+            
+            # Calculate how many more posts to recommend
+            total_posts = len(df)
+            current_posts = category_posts
+            target_percentage = 45  # Target 40-50%
+            needed_posts = max(3, int((target_percentage / 100) * total_posts) - current_posts)
+            
             recommendations.append({
                 'priority': 'high',
                 'category': 'Content Strategy',
-                'action': f'Post 3-4 more {best_category.lower()} pieces next week',
-                'reason': f'{best_category} averaged {best_engagement:.0f} engagement ({category_pct:.0f}% of mix)',
-                'target': f'40-50% {best_category.lower()} content'
+                'action': f'Create {needed_posts} more {best_category} posts over the next week',
+                'reason': (
+                    f"Your {best_category} content performs amazingly well, getting an average of {best_engagement:,.0f} likes, "
+                    f"comments, and shares combined per post. Right now, only {category_pct:.0f}% of your content falls into this category."
+                ),
+                'expected_outcome': (
+                    f"By increasing your {best_category} content to 40-50% of your total posts, you could significantly "
+                    f"boost your overall engagement and grow your audience faster."
+                )
             })
 
+        # Optimal timing recommendation
         hourly_perf = time_perf.get('hourly_performance', {})
         if len(hourly_perf) > 0:
             best_hours = sorted(hourly_perf.items(), key=lambda x: x[1], reverse=True)[:3]
-            day_names = ['Tuesday', 'Wednesday', 'Friday']
+            best_hour_value = best_hours[0][1]
+            
+            # Get best days
+            daily_perf = time_perf.get('daily_performance', {})
+            best_days_sorted = sorted(daily_perf.items(), key=lambda x: x[1], reverse=True)[:3]
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            top_day_names = [day_names[int(day)] for day, _ in best_days_sorted]
+            
+            # Create time slots
             times_list = []
             for i, (hour, engagement) in enumerate(best_hours):
                 hour_fmt = format_hour_12h(int(hour))
-                day_name = day_names[i % len(day_names)]
-                times_list.append(f"{day_name} {hour_fmt} {self.timezone_display_name}")
-            time_text = ", ".join(times_list[:-1]) + f" and {times_list[-1]}" if len(times_list) > 1 else times_list[0]
+                day_name = top_day_names[i % len(top_day_names)]
+                times_list.append(f"{day_name} at {hour_fmt} {self.timezone_display_name}")
+            
+            time_text = ", ".join(times_list[:-1]) + f", and {times_list[-1]}" if len(times_list) > 1 else times_list[0]
+            
             recommendations.append({
                 'priority': 'high',
                 'category': 'Posting Schedule',
-                'action': f'Post at: {time_text}',
-                'reason': f'Top hours averaged {best_hours[0][1]:.0f}+ engagement',
-                'target': f'2-3 posts through these {len(times_list)} slots'
+                'action': f'Schedule your posts for these times: {time_text}',
+                'reason': (
+                    f"Based on your past posts, these time slots get the highest engagement, averaging {best_hour_value:,.0f} "
+                    f"interactions. Your audience is most active and ready to engage during these windows."
+                ),
+                'expected_outcome': (
+                    f"Posting during these peak times can increase your reach and engagement by 30-50% compared to off-peak hours. "
+                    f"Aim to publish 2-3 posts during these optimal time slots each week."
+                )
             })
 
+        # Engagement strategy recommendation
         total_comments = df['comments'].sum()
         total_posts_with_comments = len(df[df['comments'] > 0])
+        avg_comments_per_post = total_comments / len(df) if len(df) > 0 else 0
+        
         recommendations.append({
             'priority': 'high',
-            'category': 'Algorithm Hack',
-            'action': 'SHARE posts → Ask "What do you think?" → Reply ALL comments within 24h',
-            'reason': f'{total_comments:,} comments across {total_posts_with_comments} posts. Replying = 2-3x boost',
-            'target': '100% comment reply rate → Watch reach double'
+            'category': 'Engagement Strategy',
+            'action': (
+                'Boost your engagement with this proven strategy: '
+                '1) Share your post with a question like "What do you think?" or "Have you tried this?" '
+                '2) Respond to every single comment within the first 24 hours of posting '
+                '3) Ask follow-up questions to keep the conversation going'
+            ),
+            'reason': (
+                f"You've received {total_comments:,} comments across {total_posts_with_comments} of your posts "
+                f"(that's about {avg_comments_per_post:.1f} comments per post). When you actively reply to comments, "
+                f"social media algorithms see your content as valuable and show it to 2-3 times more people."
+            ),
+            'expected_outcome': (
+                "By replying to 100% of your comments within 24 hours, you can potentially double your post reach. "
+                "The algorithm rewards creators who foster genuine conversations, which means more visibility and more followers for you!"
+            )
         })
+
+        # Platform diversification (if heavily focused on one platform)
+        platform_counts = df['platform'].value_counts()
+        if len(platform_counts) > 0:
+            top_platform = platform_counts.index[0]
+            top_platform_pct = (platform_counts.iloc[0] / len(df)) * 100
+            
+            if top_platform_pct > 70:
+                other_platforms = [p for p in ['instagram', 'youtube', 'linkedin', 'threads', 'tiktok', 'facebook'] 
+                                 if p != top_platform and p not in platform_counts.index[:2]]
+                suggested_platform = other_platforms[0] if other_platforms else 'Instagram'
+                
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Platform Diversification',
+                    'action': f'Start posting on {suggested_platform.capitalize()} to expand your reach',
+                    'reason': (
+                        f"Currently, {top_platform_pct:.0f}% of your content is on {top_platform.capitalize()}. "
+                        f"While it's great to focus on one platform, diversifying can help you reach new audiences "
+                        f"and protect your brand if algorithms change."
+                    ),
+                    'expected_outcome': (
+                        f"By repurposing your best {top_platform.capitalize()} content for {suggested_platform.capitalize()}, "
+                        f"you can tap into a fresh audience without creating entirely new content. Start with 1-2 posts per week."
+                    )
+                })
+
+        # Content consistency recommendation
+        if len(df) < 10:
+            posts_needed = 12 - len(df)
+            recommendations.append({
+                'priority': 'medium',
+                'category': 'Content Consistency',
+                'action': f'Increase your posting frequency by adding {posts_needed} more posts in the next two weeks',
+                'reason': (
+                    f"You've posted {len(df)} times recently. To build momentum and train the algorithm to favor your content, "
+                    f"you need to post more consistently. The algorithm rewards accounts that post regularly."
+                ),
+                'expected_outcome': (
+                    "Posting at least 3-4 times per week helps you stay top-of-mind with your audience and signals to the "
+                    "algorithm that you're an active creator worth promoting. This can lead to 40-60% more reach over time."
+                )
+            })
 
         return recommendations
 
