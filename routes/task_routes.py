@@ -30,16 +30,17 @@ class TaskCreateRequest(BaseModel):
 # Endpoints
 # -------------------------------------------------------------------
 
+from fastapi.encoders import jsonable_encoder
+
 @router.get("/")
 def get_tasks(user_id: str):
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    tasks = list(
-        tasks_col.find({"user_id": user_id}, {"_id": 0})
-    )
-    return JSONResponse(content=tasks)
+    tasks = list(tasks_col.find({"user_id": user_id}, {"_id": 0}))
+
+    return jsonable_encoder(tasks)
 
 
 
@@ -89,11 +90,9 @@ def get_generated_content(user_id: str):
     if output_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    blogs = list(
-        output_col.find({"user_id": user_id}, {"_id": 0})
-    )
-    return JSONResponse(content=blogs)
+    blogs = list(output_col.find({"user_id": user_id}, {"_id": 0}))
 
+    return jsonable_encoder(blogs)
 
 
 
