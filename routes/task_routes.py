@@ -33,33 +33,41 @@ class TaskCreateRequest(BaseModel):
 
 from fastapi.encoders import jsonable_encoder
 
+from fastapi.encoders import jsonable_encoder
+from datetime import datetime
+
 @router.get("/")
 def get_tasks(user_id: str):
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    tasks = list(tasks_col.find(
-        {"user_id": user_id},
-        {"_id": 0}
-    ))
+    tasks = list(tasks_col.find({"user_id": user_id}))
 
     scheduled = []
     completed = []
 
     for task in tasks:
-        if task.get("retrieved") is False:
-            scheduled.append(task)
-        else:
-            completed.append(task)
+        # convert ObjectId
+        task["_id"] = str(task["_id"])
 
-    return JSONResponse(content={
+        # convert datetime fields (THIS FIXES YOUR 500 ERROR)
+        if isinstance(task.get("scheduled_datetime"), datetime):
+            task["scheduled_datetime"] = task["scheduled_datetime"].isoformat()
+
+        if isinstance(task.get("last_run_at"), datetime):
+            task["last_run_at"] = task["last_run_at"].isoformat()
+
+        # status-based separation (NOT retrieved)
+        if task.get("status") == "completed":
+            completed.append(task)
+        else:
+            scheduled.append(task)
+
+    return jsonable_encoder({
         "scheduled": scheduled,
         "completed": completed
     })
-
-
-
 
 @router.post("/")
 def create_task(request: TaskCreateRequest):
