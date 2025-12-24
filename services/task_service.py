@@ -110,16 +110,16 @@ def calculate_next_run(
             return None
         valid_days = [CALENDAR_DAY_MAP[d[:3]] for d in days if d[:3] in CALENDAR_DAY_MAP]
         next_day = scheduled_dt.date()
-        for _ in range(14):  # max 2 weeks safety
+        for _ in range(14):
             next_day += timedelta(days=1)
             if next_day.weekday() in valid_days:
                 next_dt = datetime.combine(
                     next_day,
                     scheduled_dt.time(),
                     tzinfo=timezone.utc
-            )
-            return next_dt if next_dt > now else None
-        return None
+                )
+                return next_dt if next_dt > now else None
+
 
 
     if frequency == "monthly":
@@ -148,12 +148,17 @@ def execute_task(task: Dict):
         return
 
     locked = tasks_col.find_one_and_update(
-        {"_id": task["_id"], "retrieved": False},
+        {
+            "_id": task["_id"],
+            "retrieved": False,
+            "status": {"$ne": "running"}
+            },
         {"$set": {
-            "retrieved": True,
+            "status": "running",
             "last_run_at": datetime.now(timezone.utc)
-        }}
+            }}
     )
+
 
     if not locked:
         return
@@ -189,8 +194,10 @@ def execute_task(task: Dict):
                 {"_id": task["_id"]},
                 {"$set": {
                     "scheduled_datetime": next_run,
-                    "retrieved": False
+                    "retrieved": False,
+                    "status": "scheduled"
                 }}
+
             )
             logger.info(f"Task rescheduled for {next_run}")
         else:

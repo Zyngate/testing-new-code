@@ -31,7 +31,7 @@ class TaskCreateRequest(BaseModel):
 # Endpoints
 # -------------------------------------------------------------------
 
-from fastapi.encoders import jsonable_encoder
+
 
 from fastapi.encoders import jsonable_encoder
 from datetime import datetime
@@ -60,10 +60,8 @@ def get_tasks(user_id: str):
         else:
             scheduled.append(task)
 
-    return {
-        "scheduled": scheduled,
-        "completed": completed
-    }
+    return scheduled + completed
+
 
 
 @router.post("/")
@@ -107,17 +105,16 @@ def create_task(request: TaskCreateRequest):
     )
 
 @router.get("/blogs")
-def get_generated_content(user_id: str):
+def get_generated_content(task_id: str):
     _, output_col = get_or_init_sync_collections()
-    if output_col is None:
-        raise HTTPException(status_code=503, detail="Database unavailable")
 
-    blogs = list(output_col.find({"user_id": user_id}))
+    blogs = list(output_col.find(
+        {"task_id": ObjectId(task_id)}
+    ))
 
-    # ✅ Convert ObjectId → string
     for blog in blogs:
         blog["_id"] = str(blog["_id"])
-        blog["task_id"] = str(blog.get("task_id"))
+        blog["task_id"] = str(blog["task_id"])
 
     return blogs
 
