@@ -39,9 +39,25 @@ def get_tasks(user_id: str):
     if tasks_col is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    tasks = list(tasks_col.find({"user_id": user_id}, {"_id": 0}))
+    tasks = list(tasks_col.find(
+        {"user_id": user_id},
+        {"_id": 0}
+    ))
 
-    return jsonable_encoder(tasks)
+    scheduled = []
+    completed = []
+
+    for task in tasks:
+        if task.get("retrieved") is False:
+            scheduled.append(task)
+        else:
+            completed.append(task)
+
+    return JSONResponse(content={
+        "scheduled": scheduled,
+        "completed": completed
+    })
+
 
 
 
@@ -93,7 +109,6 @@ def get_generated_content(user_id: str):
 
     blogs = list(output_col.find({"user_id": user_id}))
 
-    # ✅ Convert ObjectId → string
     for blog in blogs:
         blog["_id"] = str(blog["_id"])
         blog["task_id"] = str(blog.get("task_id"))
