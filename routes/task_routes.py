@@ -48,27 +48,32 @@ def get_tasks(user_id: str):
     completed = []
 
     for task in tasks:
-        # convert ObjectId
+        # ObjectId → string
         task["_id"] = str(task["_id"])
 
-        # convert datetime fields (THIS FIXES YOUR 500 ERROR)
+        # datetime → iso
         if isinstance(task.get("scheduled_datetime"), datetime):
             task["scheduled_datetime"] = task["scheduled_datetime"].isoformat()
-
         if isinstance(task.get("last_run_at"), datetime):
             task["last_run_at"] = task["last_run_at"].isoformat()
 
-        # status-based separation (NOT retrieved)
-        if task.get("status") == "completed":
+        # 🔑 NORMALIZE STATUS
+        if task.get("status") is None:
+            if task.get("retrieved") is True:
+                task["status"] = "completed"
+            else:
+                task["status"] = "scheduled"
+
+        # 🔑 USE STATUS FOR UI SPLIT
+        if task["status"] == "completed":
             completed.append(task)
         else:
             scheduled.append(task)
 
-    return jsonable_encoder({
+    return {
         "scheduled": scheduled,
         "completed": completed
-    })
-
+    }
 @router.post("/")
 def create_task(request: TaskCreateRequest):
     tasks_col, _ = get_or_init_sync_collections()
