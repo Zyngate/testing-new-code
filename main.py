@@ -39,13 +39,16 @@ from routes import (
     task_routes,
     integration_routes, 
     post_generation_routes,
-    plan_routes
+    plan_routes,
+    cloudinary_routes
 )
 
 app = FastAPI(
     title="Stelle Backend API",
     version="1.0.0",
 )
+
+app.include_router(cloudinary_routes.router)
 
 # -------------------------
 #   CORS CONFIG
