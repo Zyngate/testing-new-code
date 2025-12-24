@@ -39,8 +39,6 @@ from datetime import datetime
 @router.get("/")
 def get_tasks(user_id: str):
     tasks_col, _ = get_or_init_sync_collections()
-    if tasks_col is None:
-        raise HTTPException(status_code=503, detail="Database unavailable")
 
     tasks = list(tasks_col.find({"user_id": user_id}))
 
@@ -48,23 +46,15 @@ def get_tasks(user_id: str):
     completed = []
 
     for task in tasks:
-        # ObjectId → string
         task["_id"] = str(task["_id"])
 
-        # datetime → iso
         if isinstance(task.get("scheduled_datetime"), datetime):
             task["scheduled_datetime"] = task["scheduled_datetime"].isoformat()
-        if isinstance(task.get("last_run_at"), datetime):
-            task["last_run_at"] = task["last_run_at"].isoformat()
 
-        # 🔑 NORMALIZE STATUS
-        if task.get("status") is None:
-            if task.get("retrieved") is True:
-                task["status"] = "completed"
-            else:
-                task["status"] = "scheduled"
+        # 🔴 THIS FIELD MUST EXIST
+        if "status" not in task:
+            task["status"] = "completed" if task.get("retrieved") else "scheduled"
 
-        # 🔑 USE STATUS FOR UI SPLIT
         if task["status"] == "completed":
             completed.append(task)
         else:
@@ -74,6 +64,8 @@ def get_tasks(user_id: str):
         "scheduled": scheduled,
         "completed": completed
     }
+
+
 @router.post("/")
 def create_task(request: TaskCreateRequest):
     tasks_col, _ = get_or_init_sync_collections()
@@ -122,10 +114,10 @@ def get_generated_content(user_id: str):
 
     blogs = list(output_col.find({"user_id": user_id}))
 
+    # ✅ Convert ObjectId → string
     for blog in blogs:
         blog["_id"] = str(blog["_id"])
         blog["task_id"] = str(blog.get("task_id"))
 
     return blogs
-
 
