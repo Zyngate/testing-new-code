@@ -3,6 +3,7 @@ import os
 import random
 import logging
 from dotenv import load_dotenv
+import cloudinary
 
 # --- Load Environment Variables ---
 load_dotenv()  # Load .env file in project root
@@ -17,6 +18,11 @@ logger = logging.getLogger("stelle_backend")
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
     logger.error("MONGO_URI environment variable is missing.")
+
+GROK_REASONING = os.getenv("GROK_REASONING")
+if not GROK_REASONING:
+    logger.warning("GROK_REASONING key missing")
+
 
 # --- VAPID Keys (WebPush) ---
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
@@ -43,6 +49,26 @@ EMAIL_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 # --- Pexels API ---
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
+
+# --- Cloudinary (Post Scheduler Media Storage) ---
+POST_CLOUDINARY_CLOUD_NAME = os.getenv("POST_CLOUDINARY_CLOUD_NAME")
+POST_CLOUDINARY_API_KEY = os.getenv("POST_CLOUDINARY_API_KEY")
+POST_CLOUDINARY_API_SECRET = os.getenv("POST_CLOUDINARY_API_SECRET")
+
+if not all([
+    POST_CLOUDINARY_CLOUD_NAME,
+    POST_CLOUDINARY_API_KEY,
+    POST_CLOUDINARY_API_SECRET
+]):
+    logger.warning("⚠️ Cloudinary credentials for post scheduler are missing")
+
+cloudinary.config(
+    cloud_name=POST_CLOUDINARY_CLOUD_NAME,
+    api_key=POST_CLOUDINARY_API_KEY,
+    api_secret=POST_CLOUDINARY_API_SECRET,
+    secure=True
+)
+
 
 # --- Redis Configuration ---
 USE_REDIS = os.getenv("USE_REDIS", "false").lower() == "true"

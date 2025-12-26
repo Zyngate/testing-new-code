@@ -6,6 +6,8 @@ from typing import Dict, Any, List
 
 from database import db
 from config import logger
+from services.post_creation_service import create_post_from_uploaded_video
+
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
@@ -109,21 +111,21 @@ async def schedule_post(payload: Dict[str, Any]):
 # -------------------------------------------------------
 @router.get("/", response_model=Dict[str, Any])
 async def get_user_posts(userId: str):
-    """
-    Fetch all scheduled posts for a user.
-    """
-
     try:
         posts = list(
-            db["scheduledposts"].find(
-                {"userId": userId},
-                {"__v": 0}
-            ).sort("scheduledAt", -1)
+            db["scheduledposts"].find({"userId": userId}).sort("scheduledAt", -1)
         )
 
-        # Convert ObjectId to string
-        for post in posts:
-            post["_id"] = str(post["_id"])
+        from bson import ObjectId
+
+        def serialize_post(post: dict) -> dict:
+            post["_id"] = str(post["_id"]) if isinstance(post.get("_id"), ObjectId) else post.get("_id")
+            for key in ["scheduledAt", "createdAt", "updatedAt"]:
+                if key in post and post[key]:
+                    post[key] = post[key].isoformat()
+            return post
+
+        posts = [serialize_post(post) for post in posts]
 
         return {
             "success": True,
@@ -137,3 +139,35 @@ async def get_user_posts(userId: str):
             status_code=500,
             detail="Failed to fetch posts"
         )
+
+
+@router.post("/upload-video")
+async def upload_video_and_schedule(payload: dict):
+    """
+    Orchestrates:
+    Cloudinary URL → AI → Best time → Scheduler
+    """
+
+    user_id = payload.get("userId")
+    cloudinary_url = payload.get("cloudinaryUrl")
+    platform = payload.get("platform")
+
+    if not all([user_id, cloudinary_url, platform]):
+        raise HTTPException(status_code=400, detail="Missing fields")
+
+    post = await create_post_from_uploaded_video(
+        user_id=user_id,
+        cloudinary_url=cloudinary_url,
+        platform=platform
+    )
+
+    return {
+    "success": True,
+    "scheduledAt": post["scheduledAt"],
+    "caption": post["caption"],
+    "platform": platform,
+    "reason": post["recommendationReason"]
+}
+
+
+
