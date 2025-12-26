@@ -89,6 +89,16 @@ def ensure_utc(dt: datetime) -> datetime:
 # Scheduling Logic
 # -------------------------------------------------------------------
 
+def next_daily_run(scheduled_dt: datetime, now: datetime) -> datetime:
+    base_time = scheduled_dt.time()
+    candidate = datetime.combine(now.date(), base_time, tzinfo=timezone.utc)
+
+    if candidate <= now:
+        candidate += timedelta(days=1)
+
+    return candidate
+
+
 def calculate_next_run(
     scheduled_dt: datetime,
     frequency: Optional[str],
@@ -96,44 +106,49 @@ def calculate_next_run(
     date: Optional[int] = None
 ) -> Optional[datetime]:
 
-    scheduled_dt = ensure_utc(scheduled_dt)
     now = datetime.now(timezone.utc)
-
+    scheduled_dt = ensure_utc(scheduled_dt)
 
     if frequency == "daily":
-        next_dt = scheduled_dt + timedelta(days=1)
-        next_dt = ensure_utc(next_dt)
-        return next_dt if next_dt > now else None
+        return next_daily_run(scheduled_dt, now)
 
     if frequency == "weekly":
         if not days:
             return None
+
+        base_time = scheduled_dt.time()
         valid_days = [CALENDAR_DAY_MAP[d[:3]] for d in days if d[:3] in CALENDAR_DAY_MAP]
-        next_day = scheduled_dt.date()
-        for _ in range(14):
-            next_day += timedelta(days=1)
-            if next_day.weekday() in valid_days:
-                next_dt = datetime.combine(
-                    next_day,
-                    scheduled_dt.time(),
+
+        for i in range(1, 8):
+            candidate_date = now.date() + timedelta(days=i)
+            if candidate_date.weekday() in valid_days:
+                return datetime.combine(
+                    candidate_date,
+                    base_time,
                     tzinfo=timezone.utc
                 )
-                return next_dt if next_dt > now else None
 
-
+        return None
 
     if frequency == "monthly":
-        run_date = date or scheduled_dt.day
-        candidate = scheduled_dt + relativedelta(months=1)
-        last_day = (candidate + relativedelta(day=31)).day
-        safe_day = min(run_date, last_day)
-        next_dt = candidate.replace(day=safe_day, tzinfo=timezone.utc)
-        return next_dt if next_dt > now else None
+        base_time = scheduled_dt.time()
+        run_day = date or scheduled_dt.day
 
+        candidate = now + relativedelta(months=1)
+        last_day = (candidate + relativedelta(day=31)).day
+        safe_day = min(run_day, last_day)
+
+        return datetime(
+            candidate.year,
+            candidate.month,
+            safe_day,
+            base_time.hour,
+            base_time.minute,
+            tzinfo=timezone.utc
+        )
 
     # once
     return None
-
 
 # -------------------------------------------------------------------
 # Core Task Execution
