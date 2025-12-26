@@ -185,9 +185,19 @@ app.include_router(
 # -------------------------
 #   STARTUP EVENTS
 # -------------------------
+from database import get_or_init_sync_collections
+
 @app.on_event("startup")
 async def startup():
     await load_faiss_indices()
+
+    # 🔥 RESET STUCK TASKS
+    tasks_col, _ = get_or_init_sync_collections()
+    if tasks_col:
+        tasks_col.update_many(
+            {"status": "running"},
+            {"$set": {"status": "scheduled", "retrieved": False}}
+        )
 
     asyncio.create_task(notification_sender_loop())
     asyncio.create_task(daily_checkin_scheduler())
@@ -195,6 +205,7 @@ async def startup():
 
     if not task_thread.is_alive():
         task_thread.start()
+
 
 # -------------------------
 #   ROOT ENDPOINT
