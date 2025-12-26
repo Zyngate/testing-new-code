@@ -188,6 +188,8 @@ def execute_task(task: Dict):
     logger.info(f"Executing task {task['_id']} for user_id={user_id}")
 
     try:
+        time.sleep(2)   # ⬅️ ADD THIS LINE HERE
+
         result = ask_stelle(description)
 
         output_col.insert_one({
@@ -196,6 +198,7 @@ def execute_task(task: Dict):
             "content": result,
             "created_at": datetime.now(timezone.utc)
         })
+
 
         next_run = calculate_next_run(
             task.get("scheduled_datetime"),
@@ -231,26 +234,12 @@ def execute_task(task: Dict):
         tasks_col.update_one(
             {"_id": task["_id"]},
             {"$set": {
+                "status": "scheduled",   # 🔥 REQUIRED
                 "retrieved": False,
                 "last_error": str(e)
             }}
-        )
-        return
-
-    task_name = task.get("task_name")
-    if not task_name:
-        try:
-            task_name = generate_task_name(description)
-            tasks_col.update_one(
-                {"_id": task["_id"]},
-                {"$set": {"task_name": task_name}}
-            )
-        except Exception:
-            tasks_col.update_one(
-                {"_id": task["_id"]},
-                {"$set": {"task_name": "Automated Task"}}
-            )
-
+    )
+    return
 
 # -------------------------------------------------------------------
 # Scheduler Loop

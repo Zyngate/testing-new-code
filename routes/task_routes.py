@@ -4,7 +4,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
+from services.task_utils import generate_task_name
 from database import get_or_init_sync_collections
 from config import logger
 from bson import ObjectId
@@ -62,8 +62,6 @@ def get_tasks(user_id: str):
 
     return scheduled + completed
 
-
-
 @router.post("/")
 def create_task(request: TaskCreateRequest):
     tasks_col, _ = get_or_init_sync_collections()
@@ -74,15 +72,16 @@ def create_task(request: TaskCreateRequest):
         scheduled_datetime = datetime.strptime(
             f"{request.date} {request.time}",
             "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=timezone.utc)  # ✅ REQUIRED FIX
+        ).replace(tzinfo=timezone.utc)
     except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid date or time format"
-        )
+        raise HTTPException(status_code=400, detail="Invalid date or time format")
+
+    # ✅ ALWAYS generate task_name here (ONCE)
+    task_name = request.task_name or generate_task_name(request.description)
 
     task_doc = {
         "user_id": request.user_id,
+        "task_name": task_name,
         "description": request.description,
         "scheduled_datetime": scheduled_datetime,
         "frequency": request.frequency,
@@ -90,19 +89,17 @@ def create_task(request: TaskCreateRequest):
         "date": request.date_of_month,
         "category": request.category,
         "retrieved": False,
+        "status": "scheduled"
     }
 
     result = tasks_col.insert_one(task_doc)
-    logger.info(f"Task created: {result.inserted_id}")
 
-    return JSONResponse(
-        content={
-            "status": "Task scheduled",
-            "task_id": str(result.inserted_id),
-            "scheduled_datetime": scheduled_datetime.isoformat()
-        },
-        status_code=201
-    )
+    return {
+        "status": "Task scheduled",
+        "task_id": str(result.inserted_id),
+        "scheduled_datetime": scheduled_datetime.isoformat()
+    }
+
 
 @router.get("/blogs")
 def get_generated_content(task_id: str):
