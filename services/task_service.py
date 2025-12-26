@@ -203,8 +203,12 @@ def execute_task(task: Dict):
         else:
             tasks_col.update_one(
                 {"_id": task["_id"]},
-                {"$set": {"status": "completed"}}
+                {"$set": {
+                    "status": "completed",
+                    "retrieved": True
+                }}
             )
+
             logger.info(f"One-time task completed: {task['_id']}")
 
     except Exception as e:
@@ -252,8 +256,9 @@ def scheduler_loop():
 
             due_tasks = list(tasks_col.find({
                 "scheduled_datetime": {"$lte": now},
-                "retrieved": False
+                "status": "scheduled"
             }))
+
 
             for task in due_tasks:
                 threading.Thread(
