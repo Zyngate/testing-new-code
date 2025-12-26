@@ -193,7 +193,7 @@ async def startup():
 
     # 🔥 RESET STUCK TASKS
     tasks_col, _ = get_or_init_sync_collections()
-    if tasks_col:
+    if tasks_col is not None:
         tasks_col.update_many(
             {"status": "running"},
             {"$set": {"status": "scheduled", "retrieved": False}}
