@@ -105,13 +105,16 @@ def create_task(request: TaskCreateRequest):
 def get_generated_content(task_id: str):
     _, output_col = get_or_init_sync_collections()
 
-    blogs = list(output_col.find(
-        {"task_id": ObjectId(task_id)}
-    ))
+    blog = output_col.find_one(
+        {"task_id": ObjectId(task_id)},
+        sort=[("created_at", -1)]
+    )
 
-    for blog in blogs:
-        blog["_id"] = str(blog["_id"])
-        blog["task_id"] = str(blog["task_id"])
+    if not blog:
+        return []
 
-    return blogs
+    blog["_id"] = str(blog["_id"])
+    blog["task_id"] = str(blog["task_id"])
+
+    return [blog]
 

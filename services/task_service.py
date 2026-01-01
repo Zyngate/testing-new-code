@@ -162,18 +162,20 @@ def execute_task(task: Dict):
         logger.error("DB unavailable. Task skipped.")
         return
 
+    # 🔒 Lock the task to prevent duplicate execution
     locked = tasks_col.find_one_and_update(
         {
             "_id": task["_id"],
             "retrieved": False,
             "status": {"$ne": "running"}
-            },
-        {"$set": {
-            "status": "running",
-            "last_run_at": datetime.now(timezone.utc)
-            }}
+        },
+        {
+            "$set": {
+                "status": "running",
+                "last_run_at": datetime.now(timezone.utc)
+            }
+        }
     )
-
 
     if not locked:
         return
@@ -188,10 +190,51 @@ def execute_task(task: Dict):
     logger.info(f"Executing task {task['_id']} for user_id={user_id}")
 
     try:
-        time.sleep(2)   # ⬅️ ADD THIS LINE HERE
+        # 🔒 Small delay to avoid Groq rate-limit bursts
+        time.sleep(2)
 
-        result = ask_stelle(description)
+        # 🔢 Increment execution count (state)
+        run_count = task.get("run_count", 0) + 1
+        tasks_col.update_one(
+            {"_id": task["_id"]},
+            {"$set": {"run_count": run_count}}
+        )
 
+        # ✅ NORMALIZED EXECUTOR PROMPT
+        executor_prompt = f"""
+You are executing ONE step of a recurring task.
+
+User goal:
+{description}
+
+Execution number:
+{run_count}
+
+Context:
+This task runs repeatedly over time.
+Each execution should progress the user toward the goal.
+
+Rules:
+- Produce content for THIS execution only
+- Do NOT include multiple days or future steps
+- Do NOT use lists or numbering unless absolutely necessary
+- Do NOT mention recurrence, frequency, or time
+- Assume this is the next logical step in a sequence
+- Keep the output concise, focused, and actionable
+
+Output:
+Return only the content for this execution.
+"""
+
+        result = ask_stelle(executor_prompt)
+
+        # 🧹 CLEAN OLD OUTPUTS FOR RECURRING TASKS
+        if task.get("frequency") in ("daily", "weekly", "monthly"):
+            output_col.delete_many(
+                {"task_id": task["_id"]}
+            )
+
+        # ✅ STORE NEW RESULT
         output_col.insert_one({
             "task_id": task["_id"],
             "user_id": user_id,
@@ -199,7 +242,7 @@ def execute_task(task: Dict):
             "created_at": datetime.now(timezone.utc)
         })
 
-
+        # 🔁 RESCHEDULE OR COMPLETE
         next_run = calculate_next_run(
             task.get("scheduled_datetime"),
             task.get("frequency"),
@@ -215,7 +258,6 @@ def execute_task(task: Dict):
                     "retrieved": False,
                     "status": "scheduled"
                 }}
-
             )
             logger.info(f"Task rescheduled for {next_run}")
         else:
@@ -226,7 +268,6 @@ def execute_task(task: Dict):
                     "retrieved": True
                 }}
             )
-
             logger.info(f"One-time task completed: {task['_id']}")
 
     except Exception as e:
@@ -234,12 +275,12 @@ def execute_task(task: Dict):
         tasks_col.update_one(
             {"_id": task["_id"]},
             {"$set": {
-                "status": "scheduled",   # 🔥 REQUIRED
+                "status": "scheduled",
                 "retrieved": False,
                 "last_error": str(e)
             }}
-    )
-    return
+        )
+        return
 
 # -------------------------------------------------------------------
 # Scheduler Loop
