@@ -49,9 +49,6 @@ def get_tasks(user_id: str):
     for task in tasks:
         task["_id"] = str(task["_id"])
 
-        if isinstance(task.get("scheduled_datetime"), datetime):
-            task["scheduled_datetime"] = task["scheduled_datetime"].isoformat()
-
         # 🔴 THIS FIELD MUST EXIST
         if "status" not in task:
             task["status"] = "completed" if task.get("retrieved") else "scheduled"
