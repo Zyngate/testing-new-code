@@ -49,6 +49,14 @@ def get_tasks(user_id: str):
     for task in tasks:
         task["_id"] = str(task["_id"])
 
+        # ✅ FIX: force ISO with milliseconds + timezone
+        if isinstance(task.get("scheduled_datetime"), datetime):
+            task["scheduled_datetime"] = (
+                task["scheduled_datetime"]
+                .astimezone(timezone.utc)
+                .isoformat(timespec="milliseconds")
+            )
+
         # 🔴 THIS FIELD MUST EXIST
         if "status" not in task:
             task["status"] = "completed" if task.get("retrieved") else "scheduled"
