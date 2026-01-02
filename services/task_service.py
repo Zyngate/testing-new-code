@@ -46,6 +46,32 @@ def ask_stelle(prompt: str) -> str:
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
+def normalize_prompt(user_prompt: str) -> str:
+    """
+    Convert raw user input into a clear, executable goal
+    WITHOUT hardcoding domains or topics.
+    """
+
+    improver_prompt = f"""
+You are a prompt normalizer.
+
+Your task:
+Rewrite the user's input into a SINGLE clear goal
+that an AI content generator can execute directly.
+
+Rules:
+- Describe WHAT should be generated, not HOW
+- Remove instructions, steps, or meta-explanations
+- Do NOT include formatting rules
+- Do NOT mention time, frequency, or repetition
+- Output ONE concise sentence
+- Output ONLY the rewritten goal
+
+User input:
+{user_prompt}
+"""
+
+    return ask_stelle(improver_prompt).strip()
 
 def generate_task_name(description: str) -> str:
     """Generate a short, human-readable task name from user description."""
@@ -181,11 +207,24 @@ def execute_task(task: Dict):
         return
 
     user_id = task.get("user_id")
-    description = task.get("description")
+    user_description = task.get("description")
 
-    if not user_id or not description:
+    if not user_id or not user_description:
         logger.error(f"Invalid task payload: {task.get('_id')}")
         return
+    normalized_prompt = task.get("normalized_prompt")
+    if not normalized_prompt:
+        logger.warning(
+            f"Normalizing legacy task on-the-fly: {task['_id']}"
+        )
+
+        normalized_prompt = normalize_prompt(user_description)
+        tasks_col.update_one(
+            {"_id": task["_id"]},
+            {"$set": {"normalized_prompt": normalized_prompt}}
+        )
+
+
 
     logger.info(f"Executing task {task['_id']} for user_id={user_id}")
 
@@ -205,7 +244,7 @@ def execute_task(task: Dict):
 You are executing ONE step of a recurring task.
 
 User goal:
-{description}
+{normalized_prompt}
 
 Execution number:
 {run_count}
@@ -221,18 +260,14 @@ Rules:
 - Do NOT mention recurrence, frequency, or time
 - Assume this is the next logical step in a sequence
 - Keep the output concise, focused, and actionable
+- Do NOT explain how to write content or give instructions
+- Always generate the final user-facing content directly
 
 Output:
 Return only the content for this execution.
 """
 
         result = ask_stelle(executor_prompt)
-
-        # 🧹 CLEAN OLD OUTPUTS FOR RECURRING TASKS
-        if task.get("frequency") in ("daily", "weekly", "monthly"):
-            output_col.delete_many(
-                {"task_id": task["_id"]}
-            )
 
         # ✅ STORE NEW RESULT
         output_col.insert_one({

@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from services.task_utils import generate_task_name
 from database import get_or_init_sync_collections
+from services.task_service import normalize_prompt
 from config import logger
 from bson import ObjectId
 router = APIRouter(tags=["Tasks"])
@@ -78,18 +79,26 @@ def create_task(request: TaskCreateRequest):
 
     # ✅ ALWAYS generate task_name here (ONCE)
     task_name = request.task_name or generate_task_name(request.description)
+    normalized_prompt = (
+        normalize_prompt(request.description)
+        if request.frequency != "once"
+        else request.description
+    )
+
 
     task_doc = {
         "user_id": request.user_id,
         "task_name": task_name,
         "description": request.description,
+        "normalized_prompt": normalized_prompt, 
         "scheduled_datetime": scheduled_datetime,
         "frequency": request.frequency,
         "days": request.days or [],
         "date": request.date_of_month,
         "category": request.category,
         "retrieved": False,
-        "status": "scheduled"
+        "status": "scheduled",
+        "run_count": 0
     }
 
     result = tasks_col.insert_one(task_doc)
