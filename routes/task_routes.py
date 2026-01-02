@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
-
+from dateutil import parser
+from datetime import timezone
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -20,8 +21,7 @@ class TaskCreateRequest(BaseModel):
     user_id: str
     task_name: Optional[str] = None
     description: str
-    date: str              # YYYY-MM-DD
-    time: str              # HH:MM
+    scheduled_datetime: str  # ISO 8601 with timezone
     frequency: Optional[str] = "once"   # once | daily | weekly | monthly
     days: Optional[List[str]] = []
     date_of_month: Optional[int] = None   # for monthly
@@ -70,13 +70,14 @@ def create_task(request: TaskCreateRequest):
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     try:
-        scheduled_datetime = datetime.strptime(
-            f"{request.date} {request.time}",
-            "%Y-%m-%d %H:%M"
-        ).replace(tzinfo=timezone.utc)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date or time format")
-
+        scheduled_datetime = parser.isoparse(
+            request.scheduled_datetime
+        ).astimezone(timezone.utc)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid scheduled_datetime. Must be ISO 8601 with timezone."
+        )
     # ✅ ALWAYS generate task_name here (ONCE)
     task_name = request.task_name or generate_task_name(request.description)
     normalized_prompt = (

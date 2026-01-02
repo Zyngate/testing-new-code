@@ -47,31 +47,29 @@ def ask_stelle(prompt: str) -> str:
     return response.json()["choices"][0]["message"]["content"]
 
 def normalize_prompt(user_prompt: str) -> str:
-    """
-    Convert raw user input into a clear, executable goal
-    WITHOUT hardcoding domains or topics.
-    """
-
     improver_prompt = f"""
-You are a prompt normalizer.
+You are a prompt normalizer for a content generation system.
 
 Your task:
-Rewrite the user's input into a SINGLE clear goal
-that an AI content generator can execute directly.
+Rewrite the user's input into ONE clear, specific, executable content goal.
 
-Rules:
-- Describe WHAT should be generated, not HOW
-- Remove instructions, steps, or meta-explanations
-- Do NOT include formatting rules
+STRICT RULES:
+- Preserve the original intent, scope, and topic
+- Preserve important qualifiers such as:
+  trending, exclusive, practical, examples, in-depth, beginner, advanced
+- Do NOT generalize the topic
+- Do NOT turn it into motivational or philosophical writing
+- The output MUST result in concrete, informative, or practical content
+- Describe WHAT content should be generated, not HOW to write it
 - Do NOT mention time, frequency, or repetition
-- Output ONE concise sentence
+- Output ONE concise but SPECIFIC sentence
 - Output ONLY the rewritten goal
 
 User input:
 {user_prompt}
 """
-
     return ask_stelle(improver_prompt).strip()
+
 
 def generate_task_name(description: str) -> str:
     """Generate a short, human-readable task name from user description."""
@@ -248,6 +246,13 @@ User goal:
 
 Execution number:
 {run_count}
+
+Depth guidance:
+- If execution number is 1 → give a clear, structured overview with key concepts
+- If execution number is 2 → go deeper into components, mechanisms, or subtopics
+- If execution number is 3 or higher → provide practical insights, examples, use cases, or applied knowledge
+- NEVER repeat previous explanations
+- NEVER stay at surface level after the first execution
 
 Context:
 This task runs repeatedly over time.
