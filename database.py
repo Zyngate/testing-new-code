@@ -34,6 +34,8 @@ users_collection = db["WebPush"]
 notifications_collection = db["notifications"]
 otp_collection = db["user_otps"]
 weekly_plans_collection = db["weekly_plans"]
+calendar_events_collection = db["calendar_events"]
+user_profiles_collection = db["user_profiles"]
 
 # ----------------------------------------------------------------------
 # --- Synchronous MongoDB Setup (Lazy & Robust Initialization) ---
