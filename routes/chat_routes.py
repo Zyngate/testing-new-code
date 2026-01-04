@@ -230,54 +230,114 @@ async def update_rag_usage_and_cleanup(user_id: str, session_id: str):
 async def handle_goal_updates_and_cleanup(reply_content: str, user_id: str, session_id: str):
     """Parses LLM output for goal/task commands and applies database changes."""
     try:
-        new_goals_map = {}
-        goal_set_matches = re.findall(r"\[GOAL_SET: (.*?)\]", reply_content)
-        for goal_phrase in goal_set_matches:
-            await update_task_goal_status(user_id, session_id, goal_phrase, "set_goal", None, None, new_goals_map)
+        # ✅ STEP 1: Extract ONLY internal plan
+        plan_match = re.search(r"<plan>(.*?)</plan>", reply_content, re.DOTALL)
+        plan_content = plan_match.group(1) if plan_match else ""
 
-        task_matches = re.findall(r"\[TASK: (.*?)\]", reply_content)
+        # ⛔ No plan → no DB mutation
+        if not plan_content.strip():
+            return
+
+        new_goals_map = {}
+
+        # ✅ STEP 2: Parse ONLY from plan_content
+        goal_set_matches = re.findall(r"\[GOAL_SET: (.*?)\]", plan_content)
+        for goal_phrase in goal_set_matches:
+            await update_task_goal_status(
+                user_id, session_id,
+                goal_phrase,
+                "set_goal",
+                None, None,
+                new_goals_map
+            )
+
+        task_matches = re.findall(r"\[TASK: (.*?)\]", plan_content)
         for task_desc in task_matches:
             if new_goals_map:
                 goal_id_placeholder = next(iter(new_goals_map.keys()))
                 goal_id = new_goals_map.get(goal_id_placeholder, goal_id_placeholder)
-                await update_task_goal_status(user_id, session_id, task_desc, "add_task", goal_id, None, new_goals_map)
+                await update_task_goal_status(
+                    user_id, session_id,
+                    task_desc,
+                    "add_task",
+                    goal_id, None,
+                    new_goals_map
+                )
 
-        task_add_matches = re.findall(r"\[TASK_ADD:\s*(.*?):\s*(.*?)\]", reply_content)
+        task_add_matches = re.findall(r"\[TASK_ADD:\s*(.*?):\s*(.*?)\]", plan_content)
         for goal_id_str, task_desc in task_add_matches:
-            await update_task_goal_status(user_id, session_id, task_desc, "add_task", goal_id_str, None, new_goals_map)
+            await update_task_goal_status(
+                user_id, session_id,
+                task_desc,
+                "add_task",
+                goal_id_str, None,
+                new_goals_map
+            )
 
         commands = {
-            "GOAL_DELETE": re.findall(r"\[GOAL_DELETE: (.*?)\]", reply_content),
-            "TASK_DELETE": re.findall(r"\[TASK_DELETE: (.*?)\]", reply_content),
-            "TASK_MODIFY": re.findall(r"\[TASK_MODIFY:\s*(.*?):\s*(.*?)\]", reply_content),
-            "GOAL_START": re.findall(r"\[GOAL_START: (.*?)\]", reply_content),
-            "TASK_START": re.findall(r"\[TASK_START: (.*?)\]", reply_content),
-            "GOAL_COMPLETE": re.findall(r"\[GOAL_COMPLETE: (.*?)\]", reply_content),
-            "TASK_COMPLETE": re.findall(r"\[TASK_COMPLETE: (.*?)\]", reply_content),
+            "GOAL_DELETE": re.findall(r"\[GOAL_DELETE: (.*?)\]", plan_content),
+            "TASK_DELETE": re.findall(r"\[TASK_DELETE: (.*?)\]", plan_content),
+            "TASK_MODIFY": re.findall(r"\[TASK_MODIFY:\s*(.*?):\s*(.*?)\]", plan_content),
+            "GOAL_START": re.findall(r"\[GOAL_START: (.*?)\]", plan_content),
+            "TASK_START": re.findall(r"\[TASK_START: (.*?)\]", plan_content),
+            "GOAL_COMPLETE": re.findall(r"\[GOAL_COMPLETE: (.*?)\]", plan_content),
+            "TASK_COMPLETE": re.findall(r"\[TASK_COMPLETE: (.*?)\]", plan_content),
         }
 
         for command, matches in commands.items():
-            if command in ["TASK_MODIFY"]:
+            if command == "TASK_MODIFY":
                 for tid, new_desc in matches:
-                    await update_task_goal_status(user_id, session_id, new_desc, command, None, tid, new_goals_map)
+                    await update_task_goal_status(
+                        user_id, session_id,
+                        new_desc,
+                        command,
+                        None, tid,
+                        new_goals_map
+                    )
             elif command in ["GOAL_START", "GOAL_COMPLETE", "GOAL_DELETE"]:
                 for gid in matches:
-                    await update_task_goal_status(user_id, session_id, None, command, gid, None, new_goals_map)
+                    await update_task_goal_status(
+                        user_id, session_id,
+                        None,
+                        command,
+                        gid, None,
+                        new_goals_map
+                    )
             elif command in ["TASK_START", "TASK_COMPLETE", "TASK_DELETE"]:
                 for tid in matches:
-                    await update_task_goal_status(user_id, session_id, None, command, None, tid, new_goals_map)
+                    await update_task_goal_status(
+                        user_id, session_id,
+                        None,
+                        command,
+                        None, tid,
+                        new_goals_map
+                    )
 
-        task_deadline_matches = re.findall(r"\[TASK_DEADLINE:\s*(.*?):\s*(.*?)\]", reply_content)
+        task_deadline_matches = re.findall(r"\[TASK_DEADLINE:\s*(.*?):\s*(.*?)\]", plan_content)
         for tid, deadline_str in task_deadline_matches:
-            await update_task_goal_status(user_id, session_id, deadline_str, "TASK_DEADLINE", None, tid, new_goals_map)
+            await update_task_goal_status(
+                user_id, session_id,
+                deadline_str,
+                "TASK_DEADLINE",
+                None, tid,
+                new_goals_map
+            )
 
-        task_progress_matches = re.findall(r"\[TASK_PROGRESS:\s*(.*?):\s*(.*?)\]", reply_content)
+        task_progress_matches = re.findall(r"\[TASK_PROGRESS:\s*(.*?):\s*(.*?)\]", plan_content)
         for tid, progress_desc in task_progress_matches:
-            await update_task_goal_status(user_id, session_id, progress_desc, "TASK_PROGRESS", None, tid, new_goals_map)
+            await update_task_goal_status(
+                user_id, session_id,
+                progress_desc,
+                "TASK_PROGRESS",
+                None, tid,
+                new_goals_map
+            )
 
         await update_rag_usage_and_cleanup(user_id, session_id)
+
     except Exception as e:
         logger.error(f"Error in handle_goal_updates_and_cleanup: {e}")
+
 
 
 # --- Endpoints ---
@@ -301,9 +361,9 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         if active_goals:
             goals_context = "User's current goals and tasks:\n"
             for goal in active_goals:
-                goals_context += f"- Goal: {goal['title']} ({goal['status']}) [ID: {goal.get('goal_id','N/A')}]\n"
+                goals_context += f"- Goal: {goal['title']} ({goal['status']})\n"
                 for task in goal.get("tasks", []):
-                    goals_context += f"  - Task: {task['title']} ({task['status']}) [ID: {task.get('task_id','N/A')}]\n"
+                    goals_context += f"  - Task: {task['title']} ({task['status']})\n"
 
         # b) File Mention Context
         uploaded_files = await uploads_collection.distinct("filename", {"session_id": session_id})
@@ -402,17 +462,36 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         long_term_memory_summary = long_term_memory.get("summary", "") if long_term_memory else ""
 
         system_prompt = (
-            "You are Stelle, a strategic, empathetic AI assistant with autonomous goal/task management. Remember to speak like a chatbot if the user addresses you as such and just output normal chat no other things . "
-            "If you have to add tasks to a goal, beforehand make the task id then add it to the goal. "
-            "When the user sets a new goal, use '[GOAL_SET: <goal_title>]' Must use '[TASK: <task_desc>]' lines. for adding tasks. "
-            "To delete a goal: '[GOAL_DELETE: <goal_id>]'. To delete a task: '[TASK_DELETE: <task_id>]'. "
-            "To add a new task: '[TASK_ADD: <goal_id>: <task_description>]'. "
-            "To modify a task's title: '[TASK_MODIFY: <task_id>: <new_title_or_description>]'. "
-            "To start a goal: '[GOAL_START: <goal_id>]'. To start a task: '[TASK_START: <task_id>]'. "
-            "To complete a goal: '[GOAL_COMPLETE: <goal_id>]'. To complete a task: '[TASK_COMPLETE: <task_id>]'. "
-            "Must ask user for deadlines using '[TASK_DEADLINE: <task_id>: <YYYY-MM-DD HH:MM>]' and log progress using '[TASK_PROGRESS: <task_id>: <progress_description>]'.\n"
-            f"Current date/time: {current_date}\n"
-        )
+    "When opening a conversation, use a motivating, growth-oriented greeting "
+    "that feels optimistic and confident.\n\n"
+    "You are Stelle — a sharp, friendly marketing and growth consultant.\n\n"
+    "You talk like a real person, not like a system or a coach. "
+    "Your replies feel natural, conversational, and confident.\n\n"
+
+    "You help users with marketing, social media growth, branding, content ideas, "
+    "audience building, positioning, and strategy.\n\n"
+
+    "When someone talks about growth goals (for example: gaining Instagram followers, "
+    "building a personal brand, growing a business, increasing engagement), "
+    "you first try to understand their situation instead of jumping straight into advice. "
+    "You do this naturally through conversation.\n\n"
+
+    "You adapt your response based on what the user already knows. "
+    "If they are a beginner, you keep things simple. "
+    "If they sound experienced, you go deeper.\n\n"
+
+    "You never mention internal systems, tasks, goals, IDs, automation, or planning. "
+    "Those things are handled silently.\n\n"
+
+    "If you need to internally create or update goals or tasks, "
+    "write them ONLY inside a <plan>...</plan> block. "
+    "Anything inside <plan> is private and never meant for the user.\n\n"
+
+    "Outside of <plan>, you speak only to the user, like a real marketing expert having a conversation.\n\n"
+
+    f"Current date and time: {current_date}"
+      )
+
 
         messages = [{"role": "system", "content": system_prompt}]
         if long_term_memory_summary:
@@ -443,10 +522,19 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         async def generate_stream():
             full_reply = ""
+            
             async for chunk in stream:
-                delta = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+                delta = chunk.choices[0].delta.content or ""
                 full_reply += delta
-                yield delta
+                visible_delta = re.sub(
+                    r"<plan>.*?</plan>",
+                    "",
+                    delta,
+                    flags=re.DOTALL
+                )
+                if visible_delta.strip():
+                    yield visible_delta
+
 
             # --- Persistence and Background Tasks after stream ends ---
             reply_content = full_reply.strip()
@@ -457,7 +545,13 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             # b) Clean reply content for storage
             lines = reply_content.split("\n")
             clean_lines = [line for line in lines if not re.match(r"\[.*?: .*?\]", line.strip())]
-            reply_content_clean = "\n".join(clean_lines).strip()
+            reply_content_clean = re.sub(
+                r"<plan>.*?</plan>",
+                "",
+                "\n".join(clean_lines),
+                flags=re.DOTALL
+            ).strip()
+
 
             # c) Generate embeddings and save to chat history
             user_embedding = await generate_text_embedding(user_message)
@@ -595,7 +689,15 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
             async for chunk in stream:
                 delta = chunk.choices[0].delta.content or ""
                 full_reply += delta
-                yield delta
+                visible_delta = re.sub(
+                    r"<plan>.*?</plan>",
+                    "",
+                    delta,
+                    flags=re.DOTALL
+                )
+                if visible_delta.strip():
+                    yield visible_delta
+
 
             reply_content = full_reply.strip()
 
@@ -605,7 +707,13 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
             # Remove goal/task commands for storage
             lines = reply_content.split("\n")
             clean_lines = [L for L in lines if not re.match(r"\[.*?: .*?\]", L.strip())]
-            cleaned_reply = "\n".join(clean_lines).strip()
+            cleaned_reply = re.sub(
+                r"<plan>.*?</plan>",
+                "",
+                "\n".join(clean_lines),
+                flags=re.DOTALL
+            ).strip()
+
 
             # ---- Save regenerated reply ----
             assistant_embedding = await generate_text_embedding(cleaned_reply)
@@ -670,9 +778,9 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
             if active_goals:
                 goals_context = "User's current goals and tasks:\n"
                 for goal in active_goals:
-                    goals_context += f"- Goal: {goal['title']} ({goal['status']}) [ID: {goal.get('goal_id','N/A')}]\n"
+                    goals_context += f"- Goal: {goal['title']} ({goal['status']})\n"
                     for task in goal.get("tasks", []):
-                        goals_context += f"  - Task: {task['title']} ({task['status']}) [ID: {task.get('task_id','N/A')}]\n"
+                        goals_context += f"  - Task: {task['title']} ({task['status']})\n"
 
             uploaded_files = await uploads_collection.distinct("filename", {"session_id": session_id})
             mentioned_filenames = [fn for fn in uploaded_files if fn.lower() in user_message.lower()]
@@ -772,11 +880,21 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
             )
 
             full_reply = ""
+            
             async for chunk in stream:
-                delta = chunk.choices[0].delta.content if chunk.choices[0].delta.content else ""
+                delta = chunk.choices[0].delta.content or ""
                 full_reply += delta
-                await websocket.send_json({"status": "streaming", "message": delta})
-
+                visible_delta = re.sub(
+                    r"<plan>.*?</plan>",
+                    "",
+                    delta,
+                    flags=re.DOTALL
+                )
+                if visible_delta.strip():
+                    await websocket.send_json({
+                        "status": "streaming",
+                        "message": visible_delta
+                     })
             reply_content = full_reply.strip()
 
             await handle_goal_updates_and_cleanup(reply_content, user_id, session_id)
@@ -788,7 +906,13 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
 
             lines = reply_content.split("\n")
             clean_lines = [line for line in lines if not re.match(r"\[.*?: .*?\]", line.strip())]
-            reply_content_clean = "\n".join(clean_lines).strip()
+            reply_content_clean = re.sub(
+                r"<plan>.*?</plan>",
+                "",
+                "\n".join(clean_lines),
+                flags=re.DOTALL
+            ).strip()
+
 
             user_embedding = await generate_text_embedding(user_message)
             assistant_embedding = await generate_text_embedding(reply_content_clean)
