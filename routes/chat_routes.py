@@ -49,6 +49,50 @@ deepsearch_queries = {}
 # -------------------------
 POSSIBLE_PLATFORM_FIELDS = ["platform", "default_platform", "selected_platform", "social_platform"]
 
+def build_dynamic_approach_line(prompt: str) -> str:
+    p = prompt.lower()
+
+    # Beginner / learning intent
+    if any(k in p for k in ["what is", "basics", "beginner", "introduction", "learn"]):
+        return (
+            "I’ll start from the fundamentals, explain the core ideas clearly, "
+            "and build things up step by step so it’s easy to follow."
+        )
+
+    # Growth / marketing intent
+    if any(k in p for k in ["grow", "growth", "followers", "marketing", "branding"]):
+        return (
+            "I’ll first clarify what actually drives results here, then break down "
+            "the strategies that work today, and finally show how to apply them to your case."
+        )
+
+    # Execution / how-to intent
+    if any(k in p for k in ["how to", "steps", "implement", "process"]):
+        return (
+            "I’ll walk through this practically — focusing on what to do, why it matters, "
+            "and how to execute it without overcomplicating things."
+        )
+
+    # Comparison / decision intent
+    if any(k in p for k in ["vs", "difference", "compare", "better"]):
+        return (
+            "I’ll compare the options clearly, highlight the trade-offs, "
+            "and help you decide based on real-world use cases."
+        )
+
+    # Strategy / advanced intent
+    if any(k in p for k in ["strategy", "framework", "optimize", "scale"]):
+        return (
+            "I’ll approach this strategically — connecting principles, frameworks, "
+            "and practical decisions so it makes sense at a higher level."
+        )
+
+    # Fallback (safe)
+    return (
+        "I’ll approach this in a clear, structured way — giving you context first, "
+        "then insights, and ending with practical takeaways."
+    )
+
 
 def extract_chosen_platform_from_input(data: Any) -> Union[str, None]:
     """
@@ -463,6 +507,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         system_prompt = (
     "You must follow a strict discovery-first approach.\n\n"
+"If the user states a big goal (for example: '100k followers'), "
+"acknowledge the goal confidently before asking questions.\n\n"
 
 "If a user expresses a growth goal (for example: wanting more followers, reach, "
 "personal brand growth, or business growth) AND you do NOT yet know:\n"
@@ -1053,13 +1099,23 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
         # 🧠 HUMAN-LIKE THINKING (VISIBLE)
         # --------------------------------
         thinking_steps = await generate_thinking_steps(prompt)
-
         for thought in thinking_steps:
             await websocket.send_json({
                 "step": "thinking",
                 "message": thought
             })
             await asyncio.sleep(0.5)
+
+        # --------------------------------
+        # 🧭 USER-AWARE APPROACH (UX ONLY)
+        # --------------------------------
+        approach_line = build_dynamic_approach_line(prompt)
+        await websocket.send_json({
+            "step": "approach",
+            "title": "How I’ll approach this",
+            "message": approach_line
+        })
+        await asyncio.sleep(0.6)
 
         # --------------------------------
         # 🧭 PHASE UPDATES (UX ONLY)
@@ -1112,7 +1168,6 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                     "step": "stream",
                     "delta": delta
                 })
-
         # --------------------------------
         # ✅ FINAL MESSAGE
         # --------------------------------
