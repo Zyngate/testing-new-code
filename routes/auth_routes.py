@@ -19,64 +19,84 @@ router = APIRouter()
 # --- 1. Send OTP Endpoint ---
 @router.post("/send-otp")
 async def send_otp_endpoint(request: OTPRequest, background_tasks: BackgroundTasks):
-    email = request.email
+    email = request.email.strip().lower()
+    purpose = request.purpose
+
+    user_doc = await users_collection.find_one({"email": email})
+
+    if purpose == "register" and user_doc:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    if purpose == "reset_password" and not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+
     otp = generate_otp()
-    
-    # Store OTP asynchronously
-    await store_otp(email, otp)
-    
-    # Send email in a background task (recommended for speed)
+    await store_otp(email, otp, purpose)
+
     background_tasks.add_task(send_email, email, otp)
-    
-    logger.info(f"OTP generated and scheduled for email: {email}")
-    return JSONResponse(content={"message": "OTP sent", "success": True}, status_code=200)
+
+    return {"message": "OTP sent", "success": True}
+
 
 # --- 2. Verify OTP Endpoint ---
 @router.post("/verify-otp")
 async def verify_otp_endpoint(request: VerifyOTPRequest):
-    email = request.email
-    otp = request.otp
-    
-    # Verification logic handles HTTPException if failed
-    await verify_otp_and_delete(email, otp)
-    
-    logger.info(f"OTP verified successfully for email: {email}")
-    return JSONResponse(content={"message": "OTP verified", "success": True}, status_code=200)
+    await verify_otp_and_delete(
+        request.email,
+        request.otp,
+        request.purpose
+    )
+
+    if request.purpose == "reset_password":
+        if not request.new_password:
+            raise HTTPException(status_code=400, detail="New password required")
+
+        hashed = bcrypt.hashpw(
+            request.new_password.encode(),
+            bcrypt.gensalt()
+        ).decode()
+
+        email = request.email.strip().lower()
+        await users_collection.update_one(
+            {"email": email},
+            {"$set": {"password": hashed}}
+        )
+
+
+    return {"message": "OTP verified", "success": True}
+
 
 # --- 3. Register User Endpoint (New Feature) ---
 
 @router.post("/register_user", response_model=Dict[str, Any])
 async def register_user_endpoint(request: RegisterUserRequest):
-    """Handles new user registration and stores credentials (simulated)."""
-    
-    # 1. Check for existing user
-    existing_user = await users_collection.find_one({"email": request.email})
+
+    email = request.email.strip().lower()
+    existing_user = await users_collection.find_one({"email": email})
+
     if existing_user:
         raise HTTPException(status_code=400, detail="User already registered.")
 
-    # 2. Generate secure password hash
-    # Ensure bcrypt is installed (pip install bcrypt)
     hashed_password_bytes = bcrypt.hashpw(
-        request.password.encode('utf-8'), bcrypt.gensalt()
+        request.password.encode('utf-8'),
+        bcrypt.gensalt()
     )
 
-    # 3. Create the user document and save to MongoDB
     new_user_id = str(uuid.uuid4())
     user_doc = {
         "user_id": new_user_id,
-        "email": request.email,
+        "email": email,  # ✅ FIXED
         "username": request.username,
-        "password_hash": hashed_password_bytes.decode('utf-8'),
+        "password": hashed_password_bytes.decode('utf-8'),
         "created_at": datetime.datetime.now(datetime.timezone.utc),
     }
-    
-    # Save user to the collection (users_collection points to the WebPush/Users collection)
+
     await users_collection.insert_one(user_doc)
-    
-    logger.info(f"User registered: {request.email} (ID: {new_user_id})")
-    
+
+    logger.info(f"User registered: {email} (ID: {new_user_id})")
+
     return {
-        "status": "success", 
-        "message": "User registered successfully.", 
+        "status": "success",
+        "message": "User registered successfully.",
         "user_id": new_user_id
     }

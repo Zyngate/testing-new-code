@@ -41,10 +41,14 @@ class Subscription(BaseModel):
 
 class OTPRequest(BaseModel):
     email: EmailStr
+    purpose: str  # "register" or "reset_password"
 
 class VerifyOTPRequest(BaseModel):
     email: EmailStr
     otp: str
+    purpose: str
+    new_password: Optional[str] = None
+
 
 # --- Content/Browse Models ---
 class BrowseRequest(BaseModel):
@@ -80,10 +84,6 @@ class ScrapeRequest(BaseModel):
 # In stelle_backend/models/common_models.py
 
 # ... (Auth/Subscription Models) ...
-
-class VerifyOTPRequest(BaseModel):
-    email: EmailStr
-    otp: str
 
 # --- ADD THIS NEW MODEL ---
 class RegisterUserRequest(BaseModel):

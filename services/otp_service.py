@@ -29,27 +29,24 @@ def send_email(to_email: str, otp: str):
         print(f"❌ Failed to send OTP email: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
-async def store_otp(email: str, otp: str):
-    """Stores the OTP in MongoDB with a TTL index."""
-    await otp_collection.insert_one(
-        {
-            "email": email,
-            "otp": otp,
-            "created_at": datetime.now(timezone.utc),
-        }
-    )
+async def store_otp(email: str, otp: str, purpose: str):
+    await otp_collection.insert_one({
+        "email": email,
+        "otp": otp,
+        "purpose": purpose,
+        "created_at": datetime.now(timezone.utc),
+    })
 
-async def verify_otp_and_delete(email: str, otp: str) -> bool:
-    """Verifies the OTP against the database and deletes it if correct."""
-    stored_otp = await otp_collection.find_one({"email": email})
-    
-    if stored_otp is None:
-        raise HTTPException(
-            status_code=400, detail="No OTP found for this email or it has expired"
-        )
-        
-    if stored_otp["otp"] != otp:
+
+async def verify_otp_and_delete(email: str, otp: str, purpose: str) -> bool:
+    stored_otp = await otp_collection.find_one({
+        "email": email,
+        "otp": otp,
+        "purpose": purpose
+    })
+
+    if not stored_otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
-        
-    await otp_collection.delete_one({"email": email})
+
+    await otp_collection.delete_one({"_id": stored_otp["_id"]})
     return True
