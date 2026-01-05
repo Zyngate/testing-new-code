@@ -20,19 +20,15 @@ router = APIRouter()
 # --- 1. Send OTP Endpoint ---
 @router.post("/send-otp")
 async def send_otp_endpoint(request: OTPRequest, background_tasks: BackgroundTasks):
-    # Normalize email
     email = request.email.strip().lower()
 
-    # Check if user exists
     user_doc = await users_collection.find_one({"email": email})
     if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Generate and store OTP (hardcoded for reset password)
     otp = generate_otp()
-    await store_otp(email, otp, "reset_password")
+    await store_otp(email, otp, "otp")  # purpose is internal only
 
-    # Send OTP email in background
     background_tasks.add_task(send_email, email, otp)
 
     return {
@@ -41,38 +37,23 @@ async def send_otp_endpoint(request: OTPRequest, background_tasks: BackgroundTas
     }
 
 
+
 # --- 2. Verify OTP Endpoint ---
 @router.post("/verify-otp")
 async def verify_otp_endpoint(request: VerifyOTPRequest):
-
-    # Verify OTP (hardcoded for reset password)
-    await verify_otp_and_delete(
-        request.email,
-        request.otp,
-        "reset_password"
-    )
-
-    # New password is mandatory
-    if not request.new_password:
-        raise HTTPException(status_code=400, detail="New password required")
-
-    # Hash the new password
-    hashed = bcrypt.hashpw(
-        request.new_password.encode(),
-        bcrypt.gensalt()
-    ).decode()
-
-    # Normalize email and update password
     email = request.email.strip().lower()
-    await users_collection.update_one(
-        {"email": email},
-        {"$set": {"password": hashed}}
+
+    await verify_otp_and_delete(
+        email,
+        request.otp,
+        "otp"
     )
 
     return {
         "message": "OTP verified",
         "success": True
     }
+
 
 # --- 3. Register User Endpoint (New Feature) ---
 
