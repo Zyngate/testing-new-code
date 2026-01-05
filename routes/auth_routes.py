@@ -17,54 +17,62 @@ from config import logger
 router = APIRouter()
 
 # --- 1. Send OTP Endpoint ---
+# --- 1. Send OTP Endpoint ---
 @router.post("/send-otp")
 async def send_otp_endpoint(request: OTPRequest, background_tasks: BackgroundTasks):
+    # Normalize email
     email = request.email.strip().lower()
-    purpose = request.purpose
 
+    # Check if user exists
     user_doc = await users_collection.find_one({"email": email})
-
-    if purpose == "register" and user_doc:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    if purpose == "reset_password" and not user_doc:
+    if not user_doc:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Generate and store OTP (hardcoded for reset password)
     otp = generate_otp()
-    await store_otp(email, otp, purpose)
+    await store_otp(email, otp, "reset_password")
 
+    # Send OTP email in background
     background_tasks.add_task(send_email, email, otp)
 
-    return {"message": "OTP sent", "success": True}
+    return {
+        "message": "OTP sent",
+        "success": True
+    }
 
 
 # --- 2. Verify OTP Endpoint ---
 @router.post("/verify-otp")
 async def verify_otp_endpoint(request: VerifyOTPRequest):
+
+    # Verify OTP (hardcoded for reset password)
     await verify_otp_and_delete(
         request.email,
         request.otp,
-        request.purpose
+        "reset_password"
     )
 
-    if request.purpose == "reset_password":
-        if not request.new_password:
-            raise HTTPException(status_code=400, detail="New password required")
+    # New password is mandatory
+    if not request.new_password:
+        raise HTTPException(status_code=400, detail="New password required")
 
-        hashed = bcrypt.hashpw(
-            request.new_password.encode(),
-            bcrypt.gensalt()
-        ).decode()
+    # Hash the new password
+    hashed = bcrypt.hashpw(
+        request.new_password.encode(),
+        bcrypt.gensalt()
+    ).decode()
 
-        email = request.email.strip().lower()
-        await users_collection.update_one(
-            {"email": email},
-            {"$set": {"password": hashed}}
-        )
+    # Normalize email and update password
+    email = request.email.strip().lower()
+    await users_collection.update_one(
+        {"email": email},
+        {"$set": {"password": hashed}}
+    )
 
-
-    return {"message": "OTP verified", "success": True}
-
+    return {
+        "message": "OTP verified",
+        "success": True
+    }
 
 # --- 3. Register User Endpoint (New Feature) ---
 
