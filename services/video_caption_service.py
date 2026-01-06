@@ -24,8 +24,10 @@ STT_MODEL = "whisper-large-v3"
 SUMMARIZE_MODEL = "gpt-4o-mini"  # used only for text-compression if desired
 
 # TEMP directory
-TEMP_DIR = Path(os.path.join(os.getcwd(), "tmp_stelle_video"))
+# TEMP directory (outside project to avoid reload loop)
+TEMP_DIR = Path(os.getenv("TEMP", "/tmp")) / "stelle_video"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Utility: run shell command
 def run_cmd(cmd: str) -> Tuple[int, str, str]:
@@ -52,6 +54,33 @@ async def extract_audio_from_video(video_path: str, out_audio: Optional[str] = N
         logger.error(f"ffmpeg failed extracting audio: {err.strip()}")
         raise RuntimeError("Audio extraction failed. Ensure ffmpeg is installed and video file exists.")
     return out_audio
+
+async def identify_person(transcript: str, ocr_text: str, visual_summary: str) -> str:
+    prompt = f"""
+You are an entity recognition system.
+
+From the following data, identify if a WELL-KNOWN PUBLIC FIGURE is present.
+Only return the name if confidence is HIGH.
+Otherwise return "unknown".
+
+Transcript:
+{transcript}
+
+OCR:
+{ocr_text}
+
+Visual summary:
+{visual_summary}
+
+Return only ONE value:
+- Full name (e.g., Elon Musk)
+- OR "unknown"
+"""
+
+    resp = groq_generate_text("gpt-4o-mini", prompt)
+    if hasattr(resp, "__await__"):
+        resp = await resp
+    return resp.strip()
 
 
 # -----------------------------------------------------
@@ -332,14 +361,42 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
     text_scene = summary_obj.get("scene", "")
     marketing_prompt_text = summary_obj.get("marketing_prompt", "") or text_summary or transcript[:300]
 
-    # 6. Merge signals (include detected OCR text)
+    # -----------------------------------------------------
+    # 6. MERGE SIGNALS (TEXT + VISUAL + OCR)
+    # -----------------------------------------------------
+
+# Combine OCR text
     ocr_text_combined = "\n".join([t for t in detected_texts if t]).strip()
     merge_parts = [marketing_prompt_text]
+
     if visual_summary:
         merge_parts.append(f"Visual: {visual_summary}")
+
     if ocr_text_combined:
         merge_parts.append(f"OCR: {ocr_text_combined}")
+
+    # Initial marketing prompt (WITHOUT identity)
     marketing_prompt = "\n".join([p for p in merge_parts if p]).strip()
+
+    # -----------------------------------------------------
+    # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
+    # -----------------------------------------------------
+
+    identified_person = await identify_person(
+        transcript=transcript,
+        ocr_text=ocr_text_combined,
+        visual_summary=visual_summary
+    )
+
+    # -----------------------------------------------------
+    # 6c. INJECT IDENTITY INTO MARKETING PROMPT (IMPORTANT)
+    # -----------------------------------------------------
+
+    if identified_person and identified_person.lower() != "unknown":
+        marketing_prompt = (
+            f"The video prominently features {identified_person}.\n\n"
+            + marketing_prompt
+        )
 
     # 7. Generate keywords
     try:

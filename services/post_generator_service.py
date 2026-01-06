@@ -49,6 +49,11 @@ BANNED_WORDS = [
     "delulu"
 ]
 
+INSTAGRAM_DISCOVERY_CORE = [
+    "#fyp", "#explore", "#viral", "#foryou"
+]
+
+
 TRENDING_POOLS = {
 
     "instagram": [
@@ -187,8 +192,26 @@ async def fetch_platform_hashtags(
     # -------------------------------
     # 1) TRENDING / DISCOVERY → 4 (ROTATING)
     # -------------------------------
-    gen = TRENDING_GENERATORS.get(platform)
-    trending_tags = next(gen) if gen else []
+    
+    if platform == "instagram":
+        discovery_tags = random.sample(
+            INSTAGRAM_DISCOVERY_CORE,
+            k=min(2, len(INSTAGRAM_DISCOVERY_CORE))
+        )
+        remaining_pool = [
+            t for t in TRENDING_POOLS["instagram"]
+            if t not in INSTAGRAM_DISCOVERY_CORE
+        ]
+        secondary_trending = random.sample(
+            remaining_pool,
+            k=min(2, len(remaining_pool))
+        )
+        trending_tags = discovery_tags + secondary_trending
+
+    else:
+        gen = TRENDING_GENERATORS.get(platform)
+        trending_tags = next(gen) if gen else []
+
 
     # -------------------------------
     # 2) RELEVANT (contextual) → 3
@@ -256,7 +279,9 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         p_norm = p.lower().strip()
         tone = PLATFORM_STYLES.get(p_norm, "Write a clean, engaging caption.")
 
-        # Generate hashtags
+        # ---------------------------
+        # Hashtags
+        # ---------------------------
         try:
             tags = await fetch_platform_hashtags(None, seed_keywords, p_norm, query)
         except Exception as e:
@@ -265,84 +290,97 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
 
         platform_hashtags[p_norm] = tags
 
-        # ---------- CAPTION PROMPT ----------
+        # ---------------------------
+        # Caption prompt
+        # ---------------------------
         if p_norm == "instagram":
             caption_prompt = f"""
-You are writing an Instagram caption in a calm, neutral, observational tone.
+You are writing an Instagram caption.
 
-STRICT RULES:
-- Write ONLY in third-person or neutral narration.
-- Do NOT use first-person words (I, we, my, our, me, us).
-- Do NOT make bold, audacious, dramatic, or exaggerated claims.
-- Do NOT hype or overstate the situation.
+STRICT HARD RULES (NON-NEGOTIABLE):
+- The final caption MUST be exactly 1000 characters INCLUDING spaces.
+- EXACTLY 3 paragraphs.
+- Each paragraph separated by ONE blank line.
 - No hashtags.
-- No emojis overload.
-- No explicit CTA words (comment, share, follow).
+- No emojis.
+- No explicit CTAs (comment, share, follow).
+- No first-person words (I, we, my, our, us).
+- Do NOT say "an individual", "a person", or vague identifiers.
+- If a known public figure is present, mention their name naturally.
 
 STRUCTURE (MANDATORY):
-1) HOOK:
-   - A subtle, curiosity-based opening sentence.
-   - Observational, not dramatic.
-   - Introduces the situation without judgment.
+Paragraph 1 — HOOK:
+- Eye-catching and curiosity-driven.
+- Immediately pulls attention.
 
-2) CONTEXT:
-   - Clearly explain what is happening.
-   - Grounded, realistic, emotionally restrained.
+Paragraph 2 — CONTEXT:
+- Explains what is happening.
+- Clear and factual.
 
-3) SOFT CTA (IMPLICIT):
-   - End with a reflective observation.
-   - Invites thought without asking for action.
-   - No direct questions.
+Paragraph 3 — INSIGHT:
+- Reflective takeaway.
+- Calm and confident.
 
-STYLE:
-- Paragraph form (1–2 short paragraphs).
-- Calm, grounded, human.
-- Feels like a moment being noticed, not marketed.
-
-Context:
+CONTENT CONTEXT:
 {query}
 
 Return ONLY the caption text.
 """
-
         else:
             caption_prompt = f"""
-You are a senior marketing strategist and expert social media copywriter.
-Write one high-quality caption tailored for the platform: {p_norm}.
+You are a senior marketing strategist.
+Write one caption for {p_norm}.
 
-ABOUT THE POST:
-- Topic: {query}
-- Keywords: {', '.join([k for k in seed_keywords if k])}
-- Style/Tone: {tone}
+Topic: {query}
+Keywords: {', '.join(seed_keywords)}
+Tone: {tone}
 
-STRICT RULES:
-- Output ONLY the caption text (no quotes, no bullets, no lists).
-- Do NOT use slang (lowkey, highkey, fr, no cap, obsessed, literally).
-- Do NOT add hashtags.
-- Use natural, human-sounding language.
-- Keep it concise, engaging, and platform-appropriate.
-- Avoid repeating the same words.
-- No personal pronouns (I, we, my, our).
-- Never start with generic words like: Introducing, Presenting, Experience.
-- Never wrap the caption in quotes.
+Rules:
+- No hashtags
+- No slang
+- No first-person language
+- Output ONLY caption text
 """
 
-        # ---------- GENERATE RAW CAPTION ----------
+        # ---------------------------
+        # Generate caption
+        # ---------------------------
         try:
             caption_text = await groq_generate_text(MODEL, caption_prompt)
-            caption_text = caption_text.strip() if caption_text else f"A {p_norm} caption about {query}"
+            caption_text = caption_text.strip() if caption_text else ""
         except Exception as e:
             logger.error(f"Caption generation failed for {p_norm}: {e}")
-            caption_text = f"A {p_norm} caption about {query}"
+            caption_text = ""
 
-        # ---------- CLEANING STEPS ----------
+        # ---------------------------
+        # Cleaning (SAFE)
+        # ---------------------------
         caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
 
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
 
-        caption_text = " ".join(caption_text.split())
+        # Preserve paragraphs
+        caption_text = "\n\n".join(
+            [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
+        )
+
+        # ---------------------------
+        # Instagram validation
+        # ---------------------------
+        if p_norm == "instagram":
+            paragraphs = [p for p in caption_text.split("\n\n") if p.strip()]
+
+            if len(paragraphs) != 3 or len(caption_text) > 1000:
+                logger.warning(
+                    f"Instagram caption failed constraints "
+                    f"(paragraphs={len(paragraphs)}, chars={len(caption_text)})"
+                )
+                # Optional: regenerate once (not mandatory now)
 
         captions[p_norm] = caption_text
 
-    return {"captions": captions, "platform_hashtags": platform_hashtags}
+    return {
+        "captions": captions,
+        "platform_hashtags": platform_hashtags
+    }
