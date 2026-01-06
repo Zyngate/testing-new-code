@@ -328,19 +328,89 @@ async def goal_setting_endpoint(websocket: WebSocket):
             if plan and user_input.lower() == "confirm":
                 break  # Exit loop to save the plan
 
+            # Check if user is asking for help/resources for a specific task
+            if plan and any(keyword in user_input.lower() for keyword in ["help", "first task", "how to", "tutorial", "video", "resource", "link", "guide", "start", "do", "complete"]):
+                resource_prompt = f"""
+                The user has a learning plan and is now asking for specific help or resources.
+                
+                User's request: {user_input}
+                Current Plan: {json.dumps(plan, indent=2)}
+                
+                Provide a comprehensive, helpful response that includes:
+                1. A brief encouraging message with overview of what they'll accomplish
+                2. 3-4 highly-rated YouTube video recommendations with DETAILED descriptions (2-3 sentences each explaining what they'll learn, why it's valuable, and what topics are covered)
+                3. 3-4 helpful website/documentation links with DETAILED descriptions (2-3 sentences explaining the content, benefits, and how to use it)
+                4. Specific actionable next steps with timing estimates
+                
+                Return ONLY valid JSON format:
+                {{
+                  "message": "Encouraging message explaining what they'll accomplish and why it matters (2-3 sentences)",
+                  "youtube_videos": [
+                    {{
+                      "title": "Specific video title/topic",
+                      "channel": "Popular channel name (e.g., freeCodeCamp, Programming with Mosh, Corey Schafer, Tech With Tim)",
+                      "duration": "Approximate video length (e.g., 4 hours, 45 minutes)",
+                      "description": "Detailed 2-3 sentence description: What specific topics are covered, what you'll be able to do after watching, and why this video is recommended. Be specific about the content.",
+                      "search_query": "Exact search term to find this video on YouTube"
+                    }}
+                  ],
+                  "websites": [
+                    {{
+                      "name": "Website/resource name",
+                      "url": "Actual URL (like python.org/tutorial, docs.python.org, realpython.com, etc.)",
+                      "description": "Detailed 2-3 sentence description: What content is available, how it's structured (interactive, text-based, etc.), and specific benefits or features that make it valuable. Include what makes it unique."
+                    }}
+                  ],
+                  "next_steps": "Clear actionable steps with time estimates. Be specific about the order and what to focus on first. 3-4 sentences."
+                }}
+                
+                Make recommendations specific and detailed. Focus on quality over quantity. Explain WHY each resource is valuable.
+                Current date/time: {current_date}
+                """
+                
+                response = await rate_limited_groq_call(
+                    async_client,
+                    messages=[{"role": "system", "content": resource_prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                )
+                resource_data = json.loads(response.choices[0].message.content)
+                
+                await websocket.send_json({"resources": resource_data})
+                conversation_history.append({"role": "assistant", "content": json.dumps(resource_data)})
+                continue
+
             if not plan:
                 # 1. Decision: Ask question or Generate plan?
                 decision_prompt = f"""
-                You are an expert goal-setting assistant. Your task is to have a friendly conversation to help a user define their goal.
+                You are an expert goal-setting assistant. Your task is to gather key details efficiently with simple, friendly questions.
                 
                 Conversation History:
                 {json.dumps(conversation_history, indent=2)}
 
-                If the user has clearly stated their goal and you have enough information (what, why, how, when), respond with a JSON object to generate a plan:
-                {{ "action": "generate_plan", "goal_title": "The user's goal title" }}
-
-                Otherwise, ask a friendly, specific question to get more details. The question should guide the user to provide information related to the SMART framework (Specific, Measurable, Achievable, Relevant, Time-bound) without explicitly mentioning it. Respond with a JSON object:
-                {{ "action": "ask_question", "question": "Your friendly, contextual question" }}
+                QUESTIONING STRATEGY:
+                - Ask MAXIMUM 2-3 simple questions total
+                - Each question should feel natural and conversational (not interrogative)
+                - Pack 2-3 related details into ONE question, but keep it simple
+                - Avoid overwhelming technical jargon in questions
+                - Stop asking questions once you have: goal specifics, use case, timeline, and experience level
+                
+                EXAMPLE GOOD QUESTIONS:
+                - "What specific area of Python interests you (like data science, web apps, automation), and how much time do you have to learn it?"
+                - "What's your current experience level, and what will you build with this skill?"
+                
+                EXAMPLE BAD QUESTIONS (too complex/technical):
+                - "What speech recognition library or API, natural language processing techniques, feedback mechanisms, and deployment strategies do you plan to use?" (TOO MUCH!)
+                
+                GENERATE PLAN WHEN:
+                - You have the essentials: what, why, when, experience level
+                - You've asked 2-3 questions
+                
+                Response format - valid JSON only:
+                To generate plan: {{ "action": "generate_plan", "goal_title": "specific goal" }}
+                To ask question: {{ "action": "ask_question", "question": "simple conversational question" }}
+                
                 Current date/time: {current_date}
                 """
                 
@@ -364,25 +434,57 @@ async def goal_setting_endpoint(websocket: WebSocket):
             
             # 2. Generate or Revise the plan
             plan_generation_prompt = f"""
-            Based on the following conversation, generate a detailed and actionable plan for the user's goal.
+            Based on the following conversation, generate a HIGHLY SPECIFIC and ACTIONABLE plan for the user's goal.
             
             Conversation:
             {json.dumps(conversation_history, indent=2)}
             
-            Your task is to:
-            1. Create a list of small, manageable tasks.
-            2. For each task, provide a clear 'title' (the what) and a 'description' (the how). The description should give the user practical steps.
-            3. Suggest a 'deadline' for each task in 'YYYY-MM-DD' format.
-            4. The output must be a JSON object with a single key "plan" which is a list of task objects.
+            YOUR TASK:
+            1. Create 4-7 main tasks that are concrete and measurable
+            2. Each task MUST have 2-5 specific sub-tasks that break it down into actionable steps
+            3. Be SPECIFIC - avoid generic advice like "practice" or "learn basics"
+            4. Include actual resources, tools, platforms, or methods where applicable
+            5. Make descriptions detailed with step-by-step "how-to" guidance
+            6. Calculate realistic deadlines based on the user's timeline
             
-            Example of a task object:
-            {{ "title": "Research local gyms", "description": "Use online maps...", "deadline": "2024-07-30" }}
+            OUTPUT FORMAT - Return ONLY valid JSON:
+            {{
+              "plan": [
+                {{
+                  "title": "Specific, measurable task title",
+                  "description": "Detailed step-by-step guide with specific actions, tools, and resources. Tell them EXACTLY what to do and how.",
+                  "deadline": "YYYY-MM-DD",
+                  "sub_tasks": [
+                    {{
+                      "title": "Specific sub-task action",
+                      "description": "Detailed how-to for this specific step"
+                    }},
+                    {{
+                      "title": "Another specific sub-task",
+                      "description": "More detailed guidance"
+                    }}
+                  ]
+                }}
+              ]
+            }}
 
-            Now, generate the plan based on the conversation.
+            EXAMPLES OF GOOD VS BAD:
+            ❌ BAD: "Learn Python basics" - Too vague
+            ✅ GOOD: "Complete Python fundamentals course covering variables, loops, functions, and OOP using Python.org official tutorial"
+            
+            ❌ BAD: "Practice coding" - Not actionable
+            ✅ GOOD: "Solve 3 LeetCode Easy problems daily focusing on array manipulation and string operations"
+            
+            ❌ BAD Sub-task: "Study variables"
+            ✅ GOOD Sub-task: "Complete tutorial sections on int, float, string, and list data types with hands-on exercises"
+
+            CRITICAL: Every task MUST include the "sub_tasks" array with 2-5 items. Make them hyper-specific and actionable.
+            Response must be valid JSON format only.
+            
             Current date/time: {current_date}
             """
             if plan and user_input.lower() != "confirm":
-                plan_generation_prompt += f"\nThe user has requested the following adjustments: {user_input}. Please revise the plan accordingly."
+                plan_generation_prompt += f"\n\nThe user requested changes: {user_input}. Revise the plan accordingly while maintaining specificity and sub-tasks. Return valid JSON."
                 
             response = await rate_limited_groq_call(
                 async_client,

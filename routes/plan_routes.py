@@ -11,15 +11,6 @@ from database import users_collection, goals_collection, weekly_plans_collection
 from services.plan_service import planner, SUPPORTED_PLATFORMS
 from config import logger
 
-# Import sync collections if they exist for tasks
-try:
-    from database import get_or_init_sync_collections
-    tasks_collection, blogs_collection = get_or_init_sync_collections()
-except:
-    tasks_collection = None
-    blogs_collection = None
-    logger.warning("Sync tasks collection not available")
-
 router = APIRouter()
 
 # ==================== REQUEST MODEL ====================
@@ -52,38 +43,6 @@ def convert_plan_dates(plan: Dict) -> Dict:
     if 'updated_at' in plan and isinstance(plan['updated_at'], datetime):
         plan['updated_at'] = plan['updated_at'].isoformat()
     return plan
-
-
-async def save_plan_tasks(plan_id: str, user_id: str, goal_id: Optional[str], plan_data: Dict) -> int:
-    """Save tasks to tasks collection"""
-    if tasks_collection is None:
-        return 0
-    
-    tasks_saved = 0
-    for week in plan_data.get('weekly_plans', []):
-        for task in week.get('tasks', []):
-            task_doc = {
-                'plan_id': plan_id,
-                'user_id': user_id,
-                'goal_id': goal_id,
-                'week_number': week['week_number'],
-                'task_id': task['task_id'],
-                'title': task['title'],
-                'description': task['description'],
-                'priority': task['priority'],
-                'estimated_hours': task['estimated_hours'],
-                'dependencies': task.get('dependencies', []),
-                'day_of_week': task.get('day_of_week', 'Monday'),
-                'date': task.get('date', ''),
-                'subtasks': task.get('subtasks', []),
-                'status': task.get('status', 'pending'),
-                'created_at': datetime.utcnow(),
-                'updated_at': datetime.utcnow()
-            }
-            tasks_collection.insert_one(task_doc)
-            tasks_saved += 1
-    
-    return tasks_saved
 
 
 def detect_plan_overlaps(plan_start: datetime, plan_end: datetime, existing_plans: list) -> list:
@@ -579,9 +538,8 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             if not goal:
                 raise HTTPException(status_code=404, detail='Goal not found for this user')
             
+            # Store only the goal title (summarized), not the full description
             goal_text = goal.get('title', '')
-            if goal.get('description'):
-                goal_text += f" - {goal['description']}"
             
             # Parse dates
             start_date = parse_date(start_date_str)
@@ -612,9 +570,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             result = await weekly_plans_collection.insert_one(plan_doc)
             plan_id = str(result.inserted_id)
             
-            # Save tasks
-            tasks_saved = await save_plan_tasks(plan_id, user_id, goal_id, plan_data)
-            
             # Check for overlapping plans
             existing_plans = await weekly_plans_collection.find({
                 'user_id': user_id,
@@ -623,13 +578,16 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             
             overlaps = detect_plan_overlaps(start_date, end_date, existing_plans)
             
+            # Calculate tasks count from plan_data
+            tasks_count = sum(len(week.get('tasks', [])) for week in plan_data.get('weekly_plans', []))
+            
             response = {
                 'success': True,
                 'plan_id': plan_id,
                 'goal_id': goal_id,
                 'goal_title': goal.get('title'),
                 'plan': plan_data,
-                'tasks_count': tasks_saved
+                'tasks_count': tasks_count
             }
             
             # Add overlap warning if found
@@ -684,9 +642,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             result = await weekly_plans_collection.insert_one(plan_doc)
             plan_id = str(result.inserted_id)
             
-            # Save tasks
-            tasks_saved = await save_plan_tasks(plan_id, user_id, None, plan_data)
-            
             # Check for overlapping plans
             existing_plans = await weekly_plans_collection.find({
                 'user_id': user_id,
@@ -695,12 +650,15 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             
             overlaps = detect_plan_overlaps(start_date, end_date, existing_plans)
             
+            # Calculate tasks count from plan_data
+            tasks_count = sum(len(week.get('tasks', [])) for week in plan_data.get('weekly_plans', []))
+            
             response = {
                 'success': True,
                 'plan_id': plan_id,
                 'custom_goal': custom_goal,
                 'plan': plan_data,
-                'tasks_count': tasks_saved
+                'tasks_count': tasks_count
             }
             
             # Add overlap warning if found
@@ -757,27 +715,27 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
         # ==================== ACTION 8: GET PLAN TASKS ====================(Not Working Also Not Needed as tasks is displyed by plan_id)
         
         elif action == 'get_plan_tasks':
-            """Get all tasks for a plan"""
+            """Get all tasks for a plan from weekly_plans"""
             plan_id = data.get('plan_id')
             if not plan_id or not ObjectId.is_valid(plan_id):
                 raise HTTPException(status_code=400, detail='Invalid plan_id')
             
-            if tasks_collection is None:
-                raise HTTPException(status_code=503, detail='Tasks collection not available')
+            # Get plan from weekly_plans collection
+            plan = await weekly_plans_collection.find_one({'_id': ObjectId(plan_id)})
+            if not plan:
+                raise HTTPException(status_code=404, detail='Plan not found')
             
-            tasks = list(tasks_collection.find({'plan_id': plan_id}).sort('week_number', 1))
-            
-            for task in tasks:
-                task['_id'] = str(task['_id'])
-                if 'created_at' in task:
-                    task['created_at'] = task['created_at'].isoformat()
-                if 'updated_at' in task:
-                    task['updated_at'] = task['updated_at'].isoformat()
+            # Extract tasks from plan_data
+            all_tasks = []
+            for week in plan.get('plan_data', {}).get('weekly_plans', []):
+                for task in week.get('tasks', []):
+                    task['week_number'] = week['week_number']
+                    all_tasks.append(task)
             
             return {
                 'success': True,
-                'count': len(tasks),
-                'tasks': tasks
+                'count': len(all_tasks),
+                'tasks': all_tasks
             }
         
         # ==================== ACTION 9: UPDATE TASK ====================
@@ -823,16 +781,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
                     'updated_at': datetime.utcnow()
                 }}
             )
-            
-            # Also update in separate tasks collection if it exists
-            if tasks_collection is not None:
-                try:
-                    tasks_collection.update_one(
-                        {'plan_id': plan_id, 'task_id': task_id},
-                        {'$set': updates}
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to update task in tasks_collection: {e}")
             
             return {
                 'success': True,
@@ -961,20 +909,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
                 }}
             )
             
-            # Update tasks collection if it exists
-            if tasks_collection is not None:
-                try:
-                    # Update the task document with new week number
-                    tasks_collection.update_one(
-                        {'plan_id': plan_id, 'task_id': task_id},
-                        {'$set': {
-                            'week_number': target_week_number,
-                            'updated_at': datetime.utcnow()
-                        }}
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not update task in tasks_collection: {str(e)}")
-            
             return response_data
         
         # ==================== ACTION 11: UPDATE TASK DATE ====================
@@ -1049,11 +983,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
                 }}
             )
             
-            # Rewrite tasks
-            if tasks_collection is not None:
-                tasks_collection.delete_many({'plan_id': plan_id})
-                await save_plan_tasks(plan_id, user_id, plan.get('goal_id'), new_plan_data)
-            
             return {
                 'success': True,
                 'message': 'Plan updated successfully',
@@ -1098,11 +1027,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
                 }}
             )
             
-            # Update tasks
-            if tasks_collection is not None:
-                tasks_collection.delete_many({'plan_id': plan_id})
-                await save_plan_tasks(plan_id, plan['user_id'], plan.get('goal_id'), updated_plan)
-            
             return {
                 'success': True,
                 'message': 'Plan regenerated successfully',
@@ -1120,12 +1044,6 @@ async def plan_manager(request: Request, action_request: Optional[PlanActionRequ
             # Delete associated calendar events first
             calendar_result = await calendar_events_collection.delete_many({'plan_id': plan_id})
             calendar_deleted = calendar_result.deleted_count
-            
-            # Delete associated tasks from sync collection
-            tasks_deleted = 0
-            if tasks_collection is not None:
-                tasks_result = tasks_collection.delete_many({'plan_id': plan_id})
-                tasks_deleted = tasks_result.deleted_count
             
             # Delete the plan itself
             result = await weekly_plans_collection.delete_one({'_id': ObjectId(plan_id)})
