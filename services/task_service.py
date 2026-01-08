@@ -26,9 +26,7 @@ SCHEDULER_POLL_INTERVAL = 30  # seconds
 # -------------------------------------------------------------------
 # LLM Execution
 # -------------------------------------------------------------------
-
 def ask_stelle(prompt: str) -> str:
-    """Generate content using Stelle LLM."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY_STELLE_MODEL}",
         "Content-Type": "application/json"
@@ -36,9 +34,18 @@ def ask_stelle(prompt: str) -> str:
 
     payload = {
         "model": "llama-3.1-8b-instant",
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "max_tokens": 1800,
         "messages": [
-            {"role": "system", "content": "You are Stelle, an intelligent assistant that completes scheduled tasks."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system",
+                "content": "You are a task execution engine that completes tasks fully and decisively."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
         ]
     }
 
@@ -46,33 +53,94 @@ def ask_stelle(prompt: str) -> str:
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
+
+def ask_stelle_normalizer(prompt: str) -> str:
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY_STELLE_MODEL}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "max_tokens": 400,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You rewrite user requests into clear, dense execution briefs."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    }
+
+    response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
+EXECUTION_CONTRACT = """
+You are a TASK EXECUTION ENGINE.
+
+Your job is to COMPLETE the user’s task fully and immediately.
+
+NON-NEGOTIABLE RULES:
+- You MUST NOT ask questions
+- You MUST NOT request clarification
+- You MUST NOT defer decisions to the user
+- If information is missing, make reasonable assumptions
+- Respect all constraints explicitly mentioned (numbers, people, format)
+- NEVER give an overview when the user asked for output
+- NEVER explain what you are about to do
+- NEVER say "it depends"
+- Produce a COMPLETE, USABLE result in one response
+"""
+
+DEPTH_AND_SIZE_RULES = """
+CONTENT DEPTH REQUIREMENTS:
+- Output must be DETAILED and SUBSTANTIAL
+- Target length: 700–1000 words unless the task is inherently short
+- Use multiple sections with clear headings
+- Each section must add new information
+- No filler, no repetition, no padding
+"""
+
+
 def normalize_prompt(user_prompt: str) -> str:
     improver_prompt = f"""
-You are a prompt normalizer for a content generation system.
+You are converting a user's request into a DENSE EXECUTION BRIEF
+for a high-quality content generation system.
 
-Your task:
-Rewrite the user's input into ONE clear, specific, executable content goal.
+Your job is NOT to shorten.
+Your job is to CLARIFY, ENRICH, and MAKE EXECUTION-READY.
 
-STRICT RULES:
-- Preserve the original intent, scope, and topic
-- Preserve important qualifiers such as:
-  trending, exclusive, practical, examples, in-depth, beginner, advanced
-- Do NOT generalize the topic
-- Do NOT turn it into motivational or philosophical writing
-- The output MUST result in concrete, informative, or practical content
-- Describe WHAT content should be generated, not HOW to write it
-- Do NOT mention time, frequency, or repetition
-- Output ONE concise but SPECIFIC sentence
-- Output ONLY the rewritten goal
+Rules:
+- Preserve original intent and topic
+- Do NOT ask questions
+- Do NOT add new topics
+- Make reasonable assumptions when missing details
+- Expand implicit requirements into explicit ones
+- Include:
+  • expected format
+  • depth level
+  • practical vs theoretical balance
+  • target audience (assume intelligent general audience if unspecified)
+- Do NOT mention time, frequency, or recurrence
+- Do NOT explain the brief
+- Output ONLY the execution brief
 
-User input:
+User request:
 {user_prompt}
+
+Now write the execution brief:
 """
-    return ask_stelle(improver_prompt).strip()
+    return ask_stelle_normalizer(improver_prompt).strip()
 
 
 def generate_task_name(description: str) -> str:
-    """Generate a short, human-readable task name from user description."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY_STELLE_MODEL}",
         "Content-Type": "application/json"
@@ -104,10 +172,12 @@ def generate_task_name(description: str) -> str:
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"].strip()
 
+
 def ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
 
 # -------------------------------------------------------------------
 # Scheduling Logic
@@ -146,11 +216,7 @@ def calculate_next_run(
         for i in range(1, 8):
             candidate_date = now.date() + timedelta(days=i)
             if candidate_date.weekday() in valid_days:
-                return datetime.combine(
-                    candidate_date,
-                    base_time,
-                    tzinfo=timezone.utc
-                )
+                return datetime.combine(candidate_date, base_time, tzinfo=timezone.utc)
 
         return None
 
@@ -171,34 +237,22 @@ def calculate_next_run(
             tzinfo=timezone.utc
         )
 
-    # once
     return None
+
 
 # -------------------------------------------------------------------
 # Core Task Execution
 # -------------------------------------------------------------------
 
 def execute_task(task: Dict):
-    """Execute a single scheduled task safely."""
-
     tasks_col, output_col = get_or_init_sync_collections()
     if tasks_col is None or output_col is None:
         logger.error("DB unavailable. Task skipped.")
         return
 
-    # 🔒 Lock the task to prevent duplicate execution
     locked = tasks_col.find_one_and_update(
-        {
-            "_id": task["_id"],
-            "retrieved": False,
-            "status": {"$ne": "running"}
-        },
-        {
-            "$set": {
-                "status": "running",
-                "last_run_at": datetime.now(timezone.utc)
-            }
-        }
+        {"_id": task["_id"], "retrieved": False, "status": {"$ne": "running"}},
+        {"$set": {"status": "running", "last_run_at": datetime.now(timezone.utc)}}
     )
 
     if not locked:
@@ -210,71 +264,49 @@ def execute_task(task: Dict):
     if not user_id or not user_description:
         logger.error(f"Invalid task payload: {task.get('_id')}")
         return
-    normalized_prompt = task.get("normalized_prompt")
-    if not normalized_prompt:
-        logger.warning(
-            f"Normalizing legacy task on-the-fly: {task['_id']}"
-        )
 
+    normalized_prompt = task.get("normalized_prompt")
+    if not normalized_prompt or len(normalized_prompt.split()) < 30:
+        logger.warning(f"Weak normalized prompt detected for task {task['_id']}")
         normalized_prompt = normalize_prompt(user_description)
         tasks_col.update_one(
             {"_id": task["_id"]},
             {"$set": {"normalized_prompt": normalized_prompt}}
         )
 
-
-
-    logger.info(f"Executing task {task['_id']} for user_id={user_id}")
-
     try:
-        # 🔒 Small delay to avoid Groq rate-limit bursts
         time.sleep(2)
 
-        # 🔢 Increment execution count (state)
         run_count = task.get("run_count", 0) + 1
         tasks_col.update_one(
             {"_id": task["_id"]},
             {"$set": {"run_count": run_count}}
         )
 
-        # ✅ NORMALIZED EXECUTOR PROMPT
         executor_prompt = f"""
-You are executing ONE step of a recurring task.
+{EXECUTION_CONTRACT}
 
-User goal:
+{DEPTH_AND_SIZE_RULES}
+
+USER TASK GOAL:
 {normalized_prompt}
 
-Execution number:
+EXECUTION NUMBER:
 {run_count}
 
-Depth guidance:
-- If execution number is 1 → give a clear, structured overview with key concepts
-- If execution number is 2 → go deeper into components, mechanisms, or subtopics
-- If execution number is 3 or higher → provide practical insights, examples, use cases, or applied knowledge
-- NEVER repeat previous explanations
-- NEVER stay at surface level after the first execution
-
-Context:
-This task runs repeatedly over time.
-Each execution should progress the user toward the goal.
-
-Rules:
-- Produce content for THIS execution only
-- Do NOT include multiple days or future steps
-- Do NOT use lists or numbering unless absolutely necessary
-- Do NOT mention recurrence, frequency, or time
-- Assume this is the next logical step in a sequence
-- Keep the output concise, focused, and actionable
-- Do NOT explain how to write content or give instructions
-- Always generate the final user-facing content directly
-
-Output:
-Return only the content for this execution.
+FINAL INSTRUCTION:
+Return ONLY the final content.
 """
 
         result = ask_stelle(executor_prompt)
 
-        # ✅ STORE NEW RESULT
+        if len(result.split()) < 500:
+            logger.warning("Short output detected. Retrying once.")
+            result = ask_stelle(
+                executor_prompt
+                + "\n\nIMPORTANT: Expand the content significantly with more depth and examples."
+            )
+
         output_col.insert_one({
             "task_id": task["_id"],
             "user_id": user_id,
@@ -282,7 +314,6 @@ Return only the content for this execution.
             "created_at": datetime.now(timezone.utc)
         })
 
-        # 🔁 RESCHEDULE OR COMPLETE
         next_run = calculate_next_run(
             task.get("scheduled_datetime"),
             task.get("frequency"),
@@ -293,41 +324,27 @@ Return only the content for this execution.
         if next_run:
             tasks_col.update_one(
                 {"_id": task["_id"]},
-                {"$set": {
-                    "scheduled_datetime": next_run,
-                    "retrieved": False,
-                    "status": "scheduled"
-                }}
+                {"$set": {"scheduled_datetime": next_run, "retrieved": False, "status": "scheduled"}}
             )
-            logger.info(f"Task rescheduled for {next_run}")
         else:
             tasks_col.update_one(
                 {"_id": task["_id"]},
-                {"$set": {
-                    "status": "completed",
-                    "retrieved": True
-                }}
+                {"$set": {"status": "completed", "retrieved": True}}
             )
-            logger.info(f"One-time task completed: {task['_id']}")
 
     except Exception as e:
         logger.exception(f"Task execution failed: {task['_id']}")
         tasks_col.update_one(
             {"_id": task["_id"]},
-            {"$set": {
-                "status": "scheduled",
-                "retrieved": False,
-                "last_error": str(e)
-            }}
+            {"$set": {"status": "scheduled", "retrieved": False, "last_error": str(e)}}
         )
-        return
+
 
 # -------------------------------------------------------------------
 # Scheduler Loop
 # -------------------------------------------------------------------
 
 def scheduler_loop():
-    """Background scheduler loop."""
     logger.info("Task scheduler started.")
 
     while True:
@@ -338,19 +355,15 @@ def scheduler_loop():
                 continue
 
             now = datetime.now(timezone.utc)
+            grace_period = now - timedelta(seconds=10)
 
             due_tasks = list(tasks_col.find({
-                "scheduled_datetime": {"$lte": now},
+                "scheduled_datetime": {"$lte": grace_period},
                 "status": "scheduled"
             }))
 
-
             for task in due_tasks:
-                threading.Thread(
-                    target=execute_task,
-                    args=(task,),
-                    daemon=True
-                ).start()
+                threading.Thread(target=execute_task, args=(task,), daemon=True).start()
 
         except Exception:
             logger.exception("Scheduler loop error")
@@ -358,11 +371,4 @@ def scheduler_loop():
         time.sleep(SCHEDULER_POLL_INTERVAL)
 
 
-# -------------------------------------------------------------------
-# Thread Bootstrap
-# -------------------------------------------------------------------
-
-task_thread = threading.Thread(
-    target=scheduler_loop,
-    daemon=True
-)
+task_thread = threading.Thread(target=scheduler_loop, daemon=True)

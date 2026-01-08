@@ -1,17 +1,17 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 from dateutil import parser
-from datetime import timezone
+
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
 from services.task_utils import generate_task_name
+from services.task_service import normalize_prompt, ask_stelle
 from database import get_or_init_sync_collections
-from services.task_service import normalize_prompt
 from config import logger
 from bson import ObjectId
-router = APIRouter(tags=["Tasks"])
 
+router = APIRouter(tags=["Tasks"])
 
 # -------------------------------------------------------------------
 # Request Models
@@ -21,35 +21,67 @@ class TaskCreateRequest(BaseModel):
     user_id: str
     task_name: Optional[str] = None
     description: str
-    scheduled_datetime: str  # ISO 8601 with timezone
-    frequency: Optional[str] = "once"   # once | daily | weekly | monthly
+    scheduled_datetime: str
+    frequency: Optional[str] = "once"
     days: Optional[List[str]] = []
-    date_of_month: Optional[int] = None   # for monthly
+    date_of_month: Optional[int] = None
     category: Optional[str] = None
+
+
+class ContentChatRequest(BaseModel):
+    task_id: str
+    user_message: str
+
+
+class TaskUpdateRequest(BaseModel):
+    scheduled_datetime: Optional[str] = None
+    frequency: Optional[str] = None
+    days: Optional[List[str]] = None
+    date_of_month: Optional[int] = None
+    category: Optional[str] = None
+
+
+class ManualContentUpdateRequest(BaseModel):
+    task_id: str
+    content: str
+
+
+def build_editor_prompt(content: str, user_message: str) -> str:
+    return f"""
+You are a senior content editor.
+
+Original content:
+{content}
+
+User request:
+{user_message}
+
+Editing rules:
+- Improve clarity, depth, and usefulness
+- Expand sections if needed
+- Add concrete examples where appropriate
+- Preserve the original topic and intent
+- Do NOT introduce unrelated ideas
+- Do NOT explain what you changed
+- Do NOT mention this is an edit
+- Output ONLY the revised content
+"""
 
 
 # -------------------------------------------------------------------
 # Endpoints
 # -------------------------------------------------------------------
 
-
-
-from fastapi.encoders import jsonable_encoder
-from datetime import datetime
-
 @router.get("/")
 def get_tasks(user_id: str):
     tasks_col, _ = get_or_init_sync_collections()
-
     tasks = list(tasks_col.find({"user_id": user_id}))
 
-    scheduled = []
-    completed = []
+    scheduled, completed = [], []
 
     for task in tasks:
         task["_id"] = str(task["_id"])
 
-        # ✅ FIX: force ISO with milliseconds + timezone
         if isinstance(task.get("scheduled_datetime"), datetime):
             task["scheduled_datetime"] = (
                 task["scheduled_datetime"]
@@ -57,16 +89,13 @@ def get_tasks(user_id: str):
                 .isoformat(timespec="milliseconds")
             )
 
-        # 🔴 THIS FIELD MUST EXIST
         if "status" not in task:
             task["status"] = "completed" if task.get("retrieved") else "scheduled"
 
-        if task["status"] == "completed":
-            completed.append(task)
-        else:
-            scheduled.append(task)
+        (completed if task["status"] == "completed" else scheduled).append(task)
 
     return scheduled + completed
+
 
 @router.post("/")
 def create_task(request: TaskCreateRequest):
@@ -83,20 +112,20 @@ def create_task(request: TaskCreateRequest):
             status_code=400,
             detail="Invalid scheduled_datetime. Must be ISO 8601 with timezone."
         )
-    # ✅ ALWAYS generate task_name here (ONCE)
+
     task_name = request.task_name or generate_task_name(request.description)
+
     normalized_prompt = (
         normalize_prompt(request.description)
         if request.frequency != "once"
         else request.description
     )
 
-
     task_doc = {
         "user_id": request.user_id,
         "task_name": task_name,
         "description": request.description,
-        "normalized_prompt": normalized_prompt, 
+        "normalized_prompt": normalized_prompt,
         "scheduled_datetime": scheduled_datetime,
         "frequency": request.frequency,
         "days": request.days or [],
@@ -133,3 +162,116 @@ def get_generated_content(task_id: str):
 
     return [blog]
 
+
+@router.post("/content/chat")
+def refine_task_content(request: ContentChatRequest):
+    tasks_col, output_col = get_or_init_sync_collections()
+
+    try:
+        task_id = ObjectId(request.task_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    task = tasks_col.find_one({"_id": task_id})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    blog = output_col.find_one(
+        {"task_id": task_id},
+        sort=[("created_at", -1)]
+    )
+
+    if not blog:
+        raise HTTPException(
+            status_code=400,
+            detail="No generated content available for this task"
+        )
+
+    prompt = build_editor_prompt(blog["content"], request.user_message)
+
+    try:
+        updated_content = ask_stelle(prompt)
+
+        if len(updated_content.split()) < 500:
+            logger.warning("Short edited content detected. Retrying once.")
+            updated_content = ask_stelle(
+                prompt + "\n\nIMPORTANT: Expand the content significantly with depth and examples."
+            )
+
+    except Exception:
+        logger.exception("Content edit failed")
+        raise HTTPException(status_code=500, detail="AI edit failed")
+
+    output_col.update_one(
+        {"_id": blog["_id"]},
+        {"$set": {"content": updated_content, "updated_at": datetime.now(timezone.utc)}}
+    )
+
+    return {"content": updated_content}
+
+
+@router.put("/content")
+def update_content_manually(request: ManualContentUpdateRequest):
+    _, output_col = get_or_init_sync_collections()
+
+    try:
+        task_id = ObjectId(request.task_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Content cannot be empty")
+
+    blog = output_col.find_one(
+        {"task_id": task_id},
+        sort=[("created_at", -1)]
+    )
+
+    if not blog:
+        raise HTTPException(status_code=404, detail="No generated content found")
+
+    output_col.update_one(
+        {"_id": blog["_id"]},
+        {"$set": {"content": request.content, "updated_at": datetime.now(timezone.utc)}}
+    )
+
+    return {"status": "Content updated successfully", "content": request.content}
+
+
+@router.put("/{task_id}")
+def update_task(task_id: str, request: TaskUpdateRequest):
+    tasks_col, _ = get_or_init_sync_collections()
+
+    try:
+        task_oid = ObjectId(task_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    task = tasks_col.find_one({"_id": task_oid})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    update_fields = {}
+
+    if request.scheduled_datetime:
+        update_fields["scheduled_datetime"] = parser.isoparse(
+            request.scheduled_datetime
+        ).astimezone(timezone.utc)
+
+    if request.frequency:
+        update_fields["frequency"] = request.frequency
+        update_fields["days"] = request.days or []
+        update_fields["date"] = request.date_of_month
+
+    if request.category is not None:
+        update_fields["category"] = request.category
+
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    update_fields["status"] = "scheduled"
+    update_fields["retrieved"] = False
+
+    tasks_col.update_one({"_id": task_oid}, {"$set": update_fields})
+
+    return {"status": "Task updated successfully", "task_id": task_id}
