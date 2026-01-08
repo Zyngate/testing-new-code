@@ -8,6 +8,7 @@ import json
 import glob
 import asyncio
 import base64
+import re
 
 from config import logger
 from groq import Groq
@@ -60,6 +61,13 @@ async def identify_person(transcript: str, ocr_text: str, visual_summary: str) -
 You are an entity recognition system.
 
 From the following data, identify if a WELL-KNOWN PUBLIC FIGURE is present.
+Only return the name if confidence is HIGH.
+Otherwise return "unknown".
+Priority order for confidence:
+1. Spoken transcript (highest confidence)
+2. OCR text (may contain spelling errors)
+3. Visual summary (lowest confidence)
+
 Only return the name if confidence is HIGH.
 Otherwise return "unknown".
 
@@ -148,6 +156,41 @@ def image_to_data_url(path: str) -> str:
         b = f.read()
     b64 = base64.b64encode(b).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+def clean_ocr_text(text: str) -> str:
+    if not text:
+        return ""
+
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9 .,!?\n]", "", text)
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
+async def normalize_ocr_spelling(text: str) -> str:
+    if not text or len(text.split()) < 2:
+        return text
+
+    prompt = f"""
+You are correcting OCR text extracted from a video frame.
+
+Rules:
+- Fix spelling mistakes
+- Preserve proper nouns and names
+- Do NOT add new words
+- Do NOT change meaning
+- Output ONLY the corrected text
+
+OCR text:
+{text}
+"""
+
+    resp = groq_generate_text("gpt-4o-mini", prompt)
+
+    # groq_generate_text may be sync or async
+    if hasattr(resp, "__await__"):
+        resp = await resp
+
+    return (resp or "").strip()
 
 
 # -----------------------------------------------------
@@ -364,9 +407,10 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
     # -----------------------------------------------------
     # 6. MERGE SIGNALS (TEXT + VISUAL + OCR)
     # -----------------------------------------------------
+    raw_ocr_text = "\n".join([t for t in detected_texts if t]).strip()
+    ocr_text_combined = clean_ocr_text(raw_ocr_text)
+    ocr_text_combined = await normalize_ocr_spelling(ocr_text_combined)
 
-# Combine OCR text
-    ocr_text_combined = "\n".join([t for t in detected_texts if t]).strip()
     merge_parts = [marketing_prompt_text]
 
     if visual_summary:
@@ -387,16 +431,35 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         ocr_text=ocr_text_combined,
         visual_summary=visual_summary
     )
+    detected_person = (
+        identified_person
+        if identified_person and identified_person.lower() != "unknown"
+        else None
+    )
+
+
+    if detected_person:
+        marketing_prompt = (
+            f"This video features {detected_person}. "
+            "Use the name naturally if relevant.\n\n"
+            + marketing_prompt
+        )
+
 
     # -----------------------------------------------------
     # 6c. INJECT IDENTITY INTO MARKETING PROMPT (IMPORTANT)
     # -----------------------------------------------------
 
-    if identified_person and identified_person.lower() != "unknown":
+    if (
+        identified_person
+        and identified_person.lower() != "unknown"
+        and len(identified_person.split()) >= 2
+    ):
         marketing_prompt = (
             f"The video prominently features {identified_person}.\n\n"
             + marketing_prompt
         )
+
 
     # 7. Generate keywords
     try:
@@ -448,6 +511,7 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         pass
 
     return {
+        "detected_person": detected_person,
         "transcript": transcript,
         "text_summary": text_summary,
         "text_scene": text_scene,

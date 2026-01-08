@@ -275,3 +275,58 @@ def update_task(task_id: str, request: TaskUpdateRequest):
     tasks_col.update_one({"_id": task_oid}, {"$set": update_fields})
 
     return {"status": "Task updated successfully", "task_id": task_id}
+
+@router.post("/{task_id}/state")
+def toggle_task_state(task_id: str):
+    tasks_col, _ = get_or_init_sync_collections()
+
+    try:
+        task_oid = ObjectId(task_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    task = tasks_col.find_one({"_id": task_oid})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    current_status = task.get("status")
+
+    # 🚫 Protect execution integrity
+    if current_status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Task is currently running and cannot be paused or resumed"
+        )
+
+    if current_status == "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Completed tasks cannot be modified"
+        )
+
+    # 🔁 Toggle logic
+    if current_status == "paused":
+        update = {
+            "status": "scheduled",
+            "retrieved": False
+        }
+        message = "Task resumed successfully"
+
+    elif current_status == "scheduled":
+        update = {
+            "status": "paused"
+        }
+        message = "Task paused successfully"
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported task state: {current_status}"
+        )
+
+    tasks_col.update_one({"_id": task_oid}, {"$set": update})
+
+    return {
+        "status": message,
+        "new_state": update["status"]
+    }

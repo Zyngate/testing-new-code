@@ -54,6 +54,7 @@ async def generate_video_caption(
     # -----------------------------
     return {
         "message": "Video processed successfully",
+        "detected_person": result.get("detected_person"),
         "transcript": result.get("transcript"),
         "visual_summary": result.get("visual_summary"),
         "text_summary": result.get("text_summary"),

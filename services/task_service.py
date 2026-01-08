@@ -243,8 +243,14 @@ def calculate_next_run(
 # -------------------------------------------------------------------
 # Core Task Execution
 # -------------------------------------------------------------------
-
 def execute_task(task: Dict):
+    # 🔐 State safety check (PAUSE / RESUME SUPPORT)
+    if task.get("status") != "scheduled":
+        logger.info(
+            f"Task {task.get('_id')} skipped due to state: {task.get('status')}"
+        )
+        return
+
     tasks_col, output_col = get_or_init_sync_collections()
     if tasks_col is None or output_col is None:
         logger.error("DB unavailable. Task skipped.")
