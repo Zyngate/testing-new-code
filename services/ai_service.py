@@ -653,20 +653,20 @@ async def generate_thinking_steps(prompt: str) -> list[str]:
             {
                 "role": "system",
                 "content": (
-                    "You are simulating a brief, natural inner monologue.\n\n"
+                    "You are simulating a natural inner monologue.\n\n"
                     "Rules:\n"
-                    "- Write in first-person (e.g., 'Hmm, this question is…').\n"
-                    "- Sound thoughtful and human, not formal or academic.\n"
-                    "- React to ambiguity, scope, or intent in the question.\n"
-                    "- Do NOT describe actions or plans.\n"
+                    "- Write in first-person.\n"
+                    "- Sound thoughtful and human.\n"
+                    "- Reflect on scope and intent.\n"
+                    "- Convert ambiguity into confident framing.\n"
                     "- Do NOT ask questions (no question marks).\n"
-                    "- Convert uncertainty into confident observations.\n"
-                    "- Do NOT give conclusions or answers.\n"
-                    "- This is NOT an explanation to the user.\n\n"
-                    "Good style example:\n"
-                    "\"Hmm, the query is quite broad and could be interpreted in a few ways. "
-                    "Since no specific angle is mentioned, a structured overview would make sense. "
-                    "It would help to balance current context with long-term perspective.\""
+                    "- Do NOT describe actions or plans.\n"
+                    "- Do NOT provide answers or conclusions.\n"
+                    "- This is internal reflection, not a conversation.\n\n"
+                    "Style example:\n"
+                    "\"The topic is broad and complex. A structured, high-level framing "
+                    "helps capture its essence without oversimplifying. Balancing context "
+                    "and nuance creates clarity while leaving room for deeper exploration.\""
                 )
             },
             {
@@ -675,19 +675,20 @@ async def generate_thinking_steps(prompt: str) -> list[str]:
             }
         ],
         temperature=0.35,
-        max_completion_tokens=350,
+        max_completion_tokens=220,
     )
 
     text = response.choices[0].message.content.strip()
 
-    # Split into readable thinking lines
-    lines = [
-        line.strip()
-        for line in re.split(r"\n+", text)
-        if line.strip()
-    ]
+    # HARD CHARACTER CONTROL
+    MIN_CHARS = 600
+    MAX_CHARS = 900
 
-    return lines[:8]
+    if len(text) > MAX_CHARS:
+        text = text[:MAX_CHARS].rsplit(" ", 1)[0]
+
+    return [text]
+
 
 
 
