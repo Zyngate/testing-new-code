@@ -659,6 +659,8 @@ async def generate_thinking_steps(prompt: str) -> list[str]:
                     "- Sound thoughtful and human, not formal or academic.\n"
                     "- React to ambiguity, scope, or intent in the question.\n"
                     "- Do NOT describe actions or plans.\n"
+                    "- Do NOT ask questions (no question marks).\n"
+                    "- Convert uncertainty into confident observations.\n"
                     "- Do NOT give conclusions or answers.\n"
                     "- This is NOT an explanation to the user.\n\n"
                     "Good style example:\n"
