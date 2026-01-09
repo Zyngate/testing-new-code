@@ -641,50 +641,52 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
 
 async def generate_thinking_steps(prompt: str) -> list[str]:
     """
-    Generates SAFE, user-visible thinking narration.
-    NOT real chain-of-thought.
+    Generates user-visible reflective thinking.
+    Not a plan. Not instructions. Just interpretation.
     """
 
     client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
-    response = await client.chat.completions.create(
-    model="llama-3.3-70b-versatile",
-    messages=[
-        {
-            "role": "system",
-            "content": (
-                "You generate brief, user-visible thinking notes.\n\n"
-                "Rules:\n"
-                "- Do NOT describe actions or plans (no 'I will explain', 'I will provide').\n"
-                "- Describe how the question is interpreted.\n"
-                "- Focus on scope, ambiguity, or angle of the question.\n"
-                "- Write as neutral observations, not intentions.\n"
-                "- Keep each line short and natural.\n\n"
-                "Examples:\n"
-                "• The question is broad and likely expects a high-level overview.\n"
-                "• This asks for an explanation of how something works.\n"
-                "• The topic involves multiple dimensions that may need structuring."
-            )
-        },
-        {
-            "role": "user",
-            "content": prompt
-        }
-    ],
-    temperature=0.3,
-    max_completion_tokens=120,
-)
 
+    response = await client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are simulating a brief, natural inner monologue.\n\n"
+                    "Rules:\n"
+                    "- Write in first-person (e.g., 'Hmm, this question is…').\n"
+                    "- Sound thoughtful and human, not formal or academic.\n"
+                    "- React to ambiguity, scope, or intent in the question.\n"
+                    "- Do NOT describe actions or plans.\n"
+                    "- Do NOT give conclusions or answers.\n"
+                    "- This is NOT an explanation to the user.\n\n"
+                    "Good style example:\n"
+                    "\"Hmm, the query is quite broad and could be interpreted in a few ways. "
+                    "Since no specific angle is mentioned, a structured overview would make sense. "
+                    "It would help to balance current context with long-term perspective.\""
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.35,
+        max_completion_tokens=350,
+    )
 
     text = response.choices[0].message.content.strip()
 
-    # Split into steps safely
-    steps = [
-        line.strip("•- ")
-        for line in text.split("\n")
+    # Split into readable thinking lines
+    lines = [
+        line.strip()
+        for line in re.split(r"\n+", text)
         if line.strip()
     ]
 
-    return steps[:5]
+    return lines[:8]
+
 
 
 async def visualize_content(context_text: str) -> Dict[str, Any]:
