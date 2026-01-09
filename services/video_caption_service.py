@@ -316,6 +316,42 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
         "actions": actions_unique,
     }
 
+async def identify_person_from_frames(
+    visual_captions: List[tuple],
+    ocr_texts: List[str],
+    transcript: str
+) -> str:
+    prompt = f"""
+You are identifying whether a well-known public figure appears in a video.
+
+Signals:
+- Visual frame descriptions
+- OCR text from frames
+- Spoken transcript
+
+Rules:
+- Only return a name if confidence is HIGH
+- Otherwise return "unknown"
+- Do NOT guess
+
+Visual captions:
+{visual_captions}
+
+OCR text:
+{ocr_texts}
+
+Transcript:
+{transcript}
+
+Return ONE value:
+- Full name
+- OR "unknown"
+"""
+    resp = groq_generate_text("gpt-4o-mini", prompt)
+    if hasattr(resp, "__await__"):
+        resp = await resp
+    return resp.strip()
+
 
 # -----------------------------------------------------
 # 4. SUMMARIZE TRANSCRIPT & SCENE
@@ -426,40 +462,60 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
     # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
     # -----------------------------------------------------
 
-    identified_person = await identify_person(
-        transcript=transcript,
-        ocr_text=ocr_text_combined,
-        visual_summary=visual_summary
+    identified_person = await identify_person_from_frames(
+        visual_captions=visual_captions,
+        ocr_texts=detected_texts,
+        transcript=transcript
     )
+
     detected_person = (
         identified_person
         if identified_person and identified_person.lower() != "unknown"
-        else None
+       else None
     )
+
 
 
     if detected_person:
         marketing_prompt = (
-            f"This video features {detected_person}. "
-            "Use the name naturally if relevant.\n\n"
-            + marketing_prompt
-        )
+        f"Context: The video includes {detected_person}.\n\n"
+        + marketing_prompt
+    )
+
+    # -----------------------------------------------------
+    # BUILD STRONG VIDEO EVIDENCE FOR CAPTION GENERATION
+    # (THIS IS THE MAIN FIX)
+    # -----------------------------------------------------
+
+    visual_lines = [
+        f"- {cap}" for _, cap in visual_captions if cap
+    ]
+    visual_block = "\n".join(visual_lines[:5]) or "None"
+    evidence_prompt = f"""
+    VIDEO EVIDENCE (MUST BE USED):
+
+    TRANSCRIPT (EXCERPTS):
+    {transcript[:800]}
+
+    VISUAL FRAME DESCRIPTIONS:
+    {visual_block}
+
+ON-SCREEN TEXT (OCR):
+{ocr_text_combined or "None"}
+
+RULES:
+- Base the caption ONLY on this evidence
+- Do NOT generalize beyond the video
+- If a public figure is mentioned, it must be supported by the transcript or visuals
+"""
+
 
 
     # -----------------------------------------------------
     # 6c. INJECT IDENTITY INTO MARKETING PROMPT (IMPORTANT)
     # -----------------------------------------------------
 
-    if (
-        identified_person
-        and identified_person.lower() != "unknown"
-        and len(identified_person.split()) >= 2
-    ):
-        marketing_prompt = (
-            f"The video prominently features {identified_person}.\n\n"
-            + marketing_prompt
-        )
-
+    
 
     # 7. Generate keywords
     try:
@@ -483,7 +539,17 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
 
     # 9. Captions
     try:
-        captions_result = await generate_caption_post(marketing_prompt, keywords, platforms)
+        caption_input = (
+            f"{evidence_prompt}\n\n"
+            f"MARKETING CONTEXT:\n{marketing_prompt}"
+        )
+
+        captions_result = await generate_caption_post(
+            caption_input,
+            keywords,
+            platforms
+        )
+
         captions = captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
     except Exception as e:
         logger.error(f"generate_caption_post failed: {e}", exc_info=True)

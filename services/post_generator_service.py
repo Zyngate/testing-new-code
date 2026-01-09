@@ -266,6 +266,44 @@ Rules:
 
     return final_tags
 
+def enforce_instagram_constraints(text: str, max_chars: int = 1000) -> str:
+    """
+    Ensures:
+    - Max 1000 characters (including spaces)
+    - No sentence cut-off
+    - Exactly 3 paragraphs
+    """
+
+    # Normalize paragraphs
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+
+    # Force exactly 3 paragraphs
+    if len(paragraphs) > 3:
+        paragraphs = paragraphs[:3]
+    elif len(paragraphs) < 3:
+        while len(paragraphs) < 3:
+            paragraphs.append("")
+
+    text = "\n\n".join(paragraphs)
+
+    # If within limit, return
+    if len(text) <= max_chars:
+        return text
+
+    # Trim safely at sentence boundary
+    trimmed = text[:max_chars]
+
+    last_punct = max(
+        trimmed.rfind("."),
+        trimmed.rfind("?"),
+        trimmed.rfind("!")
+    )
+
+    if last_punct != -1:
+        trimmed = trimmed[:last_punct + 1]
+
+    return trimmed.strip()
+
 
 # ---------------------------
 # 3) caption generator
@@ -298,8 +336,12 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
 You are writing an Instagram caption.
 
 STRICT HARD RULES (NON-NEGOTIABLE):
-- The final caption MUST be exactly 1000 characters INCLUDING spaces.
-- EXACTLY 3 paragraphs.
+- Write EXACTLY 3 paragraphs.
+- The total length should be close to 1000 characters but MUST NOT cut sentences.
+- End sentences properly.
+- Write EXACTLY 3 paragraphs.
+- Keep the total length within 1000 characters including spaces.
+- Do NOT cut sentences. End all sentences properly.
 - Each paragraph separated by ONE blank line.
 - No hashtags.
 - No emojis.
@@ -369,13 +411,15 @@ Rules:
         # Instagram validation
         # ---------------------------
         if p_norm == "instagram":
-            paragraphs = [p for p in caption_text.split("\n\n") if p.strip()]
+            caption_text = enforce_instagram_constraints(caption_text, 1000)
 
+            paragraphs = [p for p in caption_text.split("\n\n") if p.strip()]
             if len(paragraphs) != 3 or len(caption_text) > 1000:
                 logger.warning(
-                    f"Instagram caption failed constraints "
+                    f"Instagram caption still failed constraints "
                     f"(paragraphs={len(paragraphs)}, chars={len(caption_text)})"
-                )
+            )
+
                 # Optional: regenerate once (not mandatory now)
 
         captions[p_norm] = caption_text
