@@ -592,54 +592,52 @@ async def synthesize_result(main_query: str, contents: list[str], max_context: i
 # ============================================================
 async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
     """
-    REAL DeepSearch-like implementation.
-    Uses Groq compound-beta (browsing model) with your DEEPSEARCH key.
-    Returns: summary, sources[]
+    Clean, depth-first DeepSearch.
+    Uses reasoning for concepts and browsing only when needed.
     """
 
     try:
-        if not deepsearch_client:
-            return "DeepSearch client missing API key.", []
+        client = AsyncGroq(api_key=resolved_deepsearch_key)
 
-        # 1️⃣ Clarify the query
-        clarify = deepsearch_client.chat.completions.create(
-            model="compound-beta",
+        # ---- DEPTH ROUTER ----
+        philosophy_keywords = [
+            "ikigai", "purpose", "meaning", "life",
+            "happiness", "mindset", "philosophy", "psychology"
+        ]
+
+        q = query.lower()
+        needs_browsing = not any(k in q for k in philosophy_keywords)
+
+        model = "compound-beta" if needs_browsing else "llama-3.3-70b-versatile"
+
+        # ---- STRUCTURE-FIRST SYSTEM PROMPT ----
+        system_prompt = (
+            "You must answer in a deep, structured, human way.\n\n"
+            "Follow this structure strictly:\n"
+            "1. Start with a clear, elegant core definition.\n"
+            "2. Expand with cultural, historical, or psychological context.\n"
+            "3. Explicitly address common misconceptions or shallow interpretations.\n"
+            "4. Provide practical, real-world applications or steps.\n"
+            "5. End with a simple, relatable example or insight.\n\n"
+            "Avoid Wikipedia tone. Write for an intelligent human."
+        )
+
+        response = await client.chat.completions.create(
+            model=model,
             messages=[
-                {"role": "system", "content": "You are an elite research analyst. Your job is to investigate any topic deeply, provide evidence-backed insights, and explain the reasoning in a structured, academically rigorous style. Cite sources when possible."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query}
-            ]
-        )
-        clarified_query = clarify.choices[0].message.content.strip()
-
-        # 2️⃣ Ask compound-beta to research deeply
-        research = deepsearch_client.chat.completions.create(
-            model="compound-beta",
-            messages=[
-                {"role": "system", "content": "Research deeply. Summarize findings and cite sources."},
-                {"role": "user", "content": clarified_query}
-            ]
+            ],
+            temperature=0.4,
+            max_completion_tokens=1500,
         )
 
-        summary = research.choices[0].message.content or ""
-
-        # 3️⃣ Extract sources from executed browsing tools
-        sources = []
-        executed = getattr(research.choices[0].message, "executed_tools", [])
-
-        for tool in executed:
-            if tool.type == "search" and hasattr(tool, "search_results"):
-                for hit in tool.search_results.results:
-                    sources.append({
-                        "title": getattr(hit, "title", None),
-                        "url": getattr(hit, "url", None),
-                    })
-
-        return summary, sources
+        content = response.choices[0].message.content.strip()
+        return content, []
 
     except Exception as e:
         logger.error(f"DeepSearch failed: {e}")
         return "DeepSearch unavailable.", []
-
 
 async def generate_thinking_steps(prompt: str) -> list[str]:
     """
@@ -648,26 +646,34 @@ async def generate_thinking_steps(prompt: str) -> list[str]:
     """
 
     client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
-
     response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an AI assistant that explains WHAT you will do, "
-                    "not HOW you reason internally. "
-                    "Return 3–5 short sentences describing your approach."
-                )
-            },
-            {
-                "role": "user",
-                "content": f"User question: {prompt}"
-            }
-        ],
-        temperature=0.3,
-        max_completion_tokens=150,
-    )
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {
+            "role": "system",
+            "content": (
+                "You generate brief, user-visible thinking notes.\n\n"
+                "Rules:\n"
+                "- Do NOT describe actions or plans (no 'I will explain', 'I will provide').\n"
+                "- Describe how the question is interpreted.\n"
+                "- Focus on scope, ambiguity, or angle of the question.\n"
+                "- Write as neutral observations, not intentions.\n"
+                "- Keep each line short and natural.\n\n"
+                "Examples:\n"
+                "• The question is broad and likely expects a high-level overview.\n"
+                "• This asks for an explanation of how something works.\n"
+                "• The topic involves multiple dimensions that may need structuring."
+            )
+        },
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ],
+    temperature=0.3,
+    max_completion_tokens=120,
+)
+
 
     text = response.choices[0].message.content.strip()
 
