@@ -446,6 +446,7 @@ async def goal_setting_endpoint(websocket: WebSocket):
             4. Include actual resources, tools, platforms, or methods where applicable
             5. Make descriptions detailed with step-by-step "how-to" guidance
             6. Calculate realistic deadlines based on the user's timeline
+            7. For sub-tasks that involve learning or using new tools, include helpful resources (YouTube videos and/or reference websites)
             
             OUTPUT FORMAT - Return ONLY valid JSON:
             {{
@@ -457,15 +458,68 @@ async def goal_setting_endpoint(websocket: WebSocket):
                   "sub_tasks": [
                     {{
                       "title": "Specific sub-task action",
-                      "description": "Detailed how-to for this specific step"
+                      "description": "Detailed explanation of what to do in this step. Describe the actual actions, NOT the resources. Example: 'Write simple Python scripts to practice using variables, data types, control structures, functions, and object-oriented programming concepts.'",
+                      "resources": {{
+                        "youtube_videos": [
+                          {{
+                            "title": "Video title that explains this concept",
+                            "search_query": "Exact YouTube search query",
+                            "description": "Brief note on what this video covers and why it's helpful (1 sentence)"
+                          }}
+                        ],
+                        "websites": [
+                          {{
+                            "name": "Documentation or tutorial name",
+                            "url": "https://actual-url.com",
+                            "description": "Brief note on what this website provides and how to use it (1 sentence)"
+                          }}
+                        ]
+                      }}
                     }},
                     {{
                       "title": "Another specific sub-task",
-                      "description": "More detailed guidance"
+                      "description": "Detailed explanation of the actual steps to take"
                     }}
                   ]
                 }}
               ]
+            }}
+            
+            RESOURCES GUIDELINES:
+            - Add resources to sub-tasks that involve learning new concepts, tools, or techniques
+            - YouTube videos should have specific titles and accurate search queries
+            - Websites should be real, official documentation or trusted tutorial sites
+            - Not every sub-task needs resources - only add them when they provide clear value
+            - For Python: use python.org, realpython.com, official library docs
+            - For ML/DL: use tensorflow.org, keras.io, scikit-learn.org, pytorch.org
+            - For tutorials: mention specific popular channels or course names
+            
+            ⚠️ CRITICAL SEPARATION RULE:
+            - SUB-TASK DESCRIPTION = What the user physically does (write code, practice exercises, build projects, solve problems)
+            - RESOURCES = Where they can learn HOW to do it (videos, documentation, tutorials)
+            - NEVER mention the resources in the description field
+            - NEVER say "use this website" or "watch this video" in the description
+            - Description should stand alone as actionable steps even without resources
+            
+            WRONG EXAMPLE (DON'T DO THIS):
+            {{
+              "title": "Learn Python basics",
+              "description": "Complete the Python tutorial on python.org covering variables and functions"  ❌ BAD - mentions the resource
+            }}
+            
+            RIGHT EXAMPLE (DO THIS):
+            {{
+              "title": "Learn Python basics", 
+              "description": "Study and practice Python fundamentals including variables, data types, control flow, functions, and basic OOP. Complete hands-on exercises for each topic.",  ✓ GOOD - describes actions
+              "resources": {{
+                "websites": [
+                  {{
+                    "name": "Python.org Official Tutorial",
+                    "url": "https://docs.python.org/3/tutorial/",
+                    "description": "Comprehensive tutorial covering all Python basics with examples and exercises."
+                  }}
+                ]
+              }}
             }}
 
             EXAMPLES OF GOOD VS BAD:
@@ -477,8 +531,53 @@ async def goal_setting_endpoint(websocket: WebSocket):
             
             ❌ BAD Sub-task: "Study variables"
             ✅ GOOD Sub-task: "Complete tutorial sections on int, float, string, and list data types with hands-on exercises"
+            
+            EXAMPLE SUB-TASK WITH RESOURCES:
+            {{
+              "title": "Master neural network fundamentals",
+              "description": "Study neural network architecture, activation functions, backpropagation, and gradient descent. Build 3 simple neural networks from scratch using NumPy, then implement the same networks using Keras. Complete all coding exercises and debug your implementations.",
+              "resources": {{
+                "youtube_videos": [
+                  {{
+                    "title": "Neural Networks Explained - 3Blue1Brown",
+                    "search_query": "3blue1brown neural networks",
+                    "description": "Visual explanation of how neural networks work with mathematical intuition."
+                  }}
+                ],
+                "websites": [
+                  {{
+                    "name": "Keras Official Getting Started Guide",
+                    "url": "https://keras.io/getting_started/",
+                    "description": "Official documentation with step-by-step tutorials and API reference for building neural networks."
+                  }}
+                ]
+              }}
+            }}
+            
+            ANOTHER EXAMPLE - PRACTICE FOCUSED:
+            {{
+              "title": "Practice Python scripting",
+              "description": "Write 10-15 Python scripts covering variables, loops, functions, file I/O, and error handling. Start with simple scripts like calculators and text processors, then move to more complex ones like data parsers. Test each script thoroughly.",
+              "resources": {{
+                "websites": [
+                  {{
+                    "name": "Python Practice Problems",
+                    "url": "https://www.practicepython.org/",
+                    "description": "Collection of Python exercises ranging from beginner to advanced with solutions."
+                  }}
+                ]
+              }}
+            }}
+            
+            CRITICAL RULES FOR SUB-TASKS:
+            1. The "description" field MUST explain the ACTUAL ACTIONS and STEPS to take
+            2. NEVER mention specific websites, courses, or videos in the description
+            3. Description should tell WHAT to do: "Write code", "Solve problems", "Build projects", "Practice exercises"
+            4. Resources section provides WHERE to learn and HOW to do it
+            5. User should understand the task from description alone, resources are helpers
 
             CRITICAL: Every task MUST include the "sub_tasks" array with 2-5 items. Make them hyper-specific and actionable.
+            Add resources (YouTube videos and/or websites) to sub-tasks that involve learning new concepts.
             Response must be valid JSON format only.
             
             Current date/time: {current_date}
