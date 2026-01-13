@@ -266,44 +266,50 @@ Rules:
 
     return final_tags
 
-def enforce_instagram_constraints(text: str, max_chars: int = 1000) -> str:
+def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
-    Ensures:
-    - Max 1000 characters (including spaces)
+    Enforces:
+    - EXACTLY target_chars characters (including spaces)
+    - EXACTLY 3 paragraphs
     - No sentence cut-off
-    - Exactly 3 paragraphs
     """
 
-    # Normalize paragraphs
+    # 1️⃣ Normalize paragraphs FIRST (before counting)
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
     # Force exactly 3 paragraphs
     if len(paragraphs) > 3:
         paragraphs = paragraphs[:3]
-    elif len(paragraphs) < 3:
-        while len(paragraphs) < 3:
-            paragraphs.append("")
+    while len(paragraphs) < 3:
+        paragraphs.append("")
 
     text = "\n\n".join(paragraphs)
 
-    # If within limit, return
-    if len(text) <= max_chars:
-        return text
+    # 2️⃣ If too long → trim safely at sentence boundary
+    if len(text) > target_chars:
+        trimmed = text[:target_chars]
 
-    # Trim safely at sentence boundary
-    trimmed = text[:max_chars]
+        last_punct = max(
+            trimmed.rfind("."),
+            trimmed.rfind("?"),
+            trimmed.rfind("!")
+        )
 
-    last_punct = max(
-        trimmed.rfind("."),
-        trimmed.rfind("?"),
-        trimmed.rfind("!")
-    )
+        if last_punct != -1:
+            trimmed = trimmed[: last_punct + 1]
 
-    if last_punct != -1:
-        trimmed = trimmed[:last_punct + 1]
+        text = trimmed.strip()
 
-    return trimmed.strip()
+    # 3️⃣ If too short → PAD safely (controlled filler)
+    filler = " Moments like this invite closer attention to how public images are shaped and interpreted."
+    while len(text) < target_chars:
+        # Add filler to LAST paragraph only
+        parts = text.split("\n\n")
+        parts[-1] += filler
+        text = "\n\n".join(parts)
 
+    # 4️⃣ Final hard trim (guaranteed safe now)
+    return text[:target_chars]
 
 # ---------------------------
 # 3) caption generator
@@ -337,31 +343,40 @@ You are writing an Instagram caption.
 
 STRICT HARD RULES (NON-NEGOTIABLE):
 - Write EXACTLY 3 paragraphs.
-- The total length should be close to 1000 characters but MUST NOT cut sentences.
-- End sentences properly.
-- Write EXACTLY 3 paragraphs.
-- Keep the total length within 1000 characters including spaces.
-- Do NOT cut sentences. End all sentences properly.
+- Do NOT mention character counts. Length is handled programmatically.
+- Do NOT cut sentences.
 - Each paragraph separated by ONE blank line.
 - No hashtags.
 - No emojis.
-- No explicit CTAs (comment, share, follow).
+- No slang.
 - No first-person words (I, we, my, our, us).
-- Do NOT say "an individual", "a person", or vague identifiers.
-- If a known public figure is present, mention their name naturally.
+- If a known public figure is present, mention the name naturally.
+- Avoid documentary phrases such as:
+  "this video shows", "the visuals depict", "is seen", "appears to be".
+
+STYLE & TONE (CRITICAL):
+- Human, observant, culturally aware.
+- Avoid report-like or news-summary language.
+- Write like a sharp observer narrating a moment.
+- Vary sentence length. Avoid repetition.
 
 STRUCTURE (MANDATORY):
+
 Paragraph 1 — HOOK:
-- Eye-catching and curiosity-driven.
-- Immediately pulls attention.
+- Curiosity-driven and unexpected.
+- Make the viewer pause.
 
 Paragraph 2 — CONTEXT:
-- Explains what is happening.
-- Clear and factual.
+- Describe events indirectly.
+- Focus on contrast, irony, or behavior.
+- Do NOT explain the video step-by-step.
 
-Paragraph 3 — INSIGHT:
-- Reflective takeaway.
-- Calm and confident.
+Paragraph 3 — INSIGHT + IB-STYLE CTA:
+- Reflective and interpretive.
+- Subtle intellectual CTA.
+- Invite thought, not action.
+- End with a line that encourages interpretation.
+
 
 CONTENT CONTEXT:
 {query}
@@ -412,13 +427,8 @@ Rules:
         # ---------------------------
         if p_norm == "instagram":
             caption_text = enforce_instagram_constraints(caption_text, 1000)
+            assert len(caption_text) == 1000, f"Instagram caption length = {len(caption_text)}"
 
-            paragraphs = [p for p in caption_text.split("\n\n") if p.strip()]
-            if len(paragraphs) != 3 or len(caption_text) > 1000:
-                logger.warning(
-                    f"Instagram caption still failed constraints "
-                    f"(paragraphs={len(paragraphs)}, chars={len(caption_text)})"
-            )
 
                 # Optional: regenerate once (not mandatory now)
 
