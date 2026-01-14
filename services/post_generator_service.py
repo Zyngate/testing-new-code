@@ -127,16 +127,16 @@ def rotating_hashtag_picker(pool: list, k: int = 4):
 # ---------------------------
 # 1) keyword generation
 # ---------------------------
-async def generate_keywords_post(client: AsyncGroq, query: str) -> List[str]:
+async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> List[str]:
     if not client:
         try:
-            fallback = await groq_generate_text(MODEL, f"Generate 3 short marketing keywords for: {query}. Return comma-separated.")
+            fallback = await groq_generate_text(MODEL, f"Generate 3 short marketing keywords for: {effective_query}. Return comma-separated.")
             kws = [k.strip() for k in fallback.replace("\n", ",").split(",") if k.strip()]
             return kws[:3] if kws else ["brand", "marketing", "content"]
         except:
             return ["brand", "marketing", "content"]
 
-    prompt = f"Generate exactly 3 short marketing keywords for: {query}. Only return 3 comma-separated keywords."
+    prompt = f"Generate exactly 3 short marketing keywords for: {effective_query}. Only return 3 comma-separated keywords."
 
     try:
         resp = await rate_limited_groq_call(
@@ -184,7 +184,7 @@ async def fetch_platform_hashtags(
     client: AsyncGroq,
     seed_keywords: List[str],
     platform: str,
-    query: str
+    effective_query: str
 ) -> List[str]:
 
     platform = platform.lower()
@@ -218,16 +218,21 @@ async def fetch_platform_hashtags(
     # -------------------------------
     try:
         relevant_prompt = f"""
-Generate 3 highly relevant hashtags directly describing this content.
+Generate 3 RELEVANT hashtags for social media DISCOVERY.
 
-Content:
-{query}
+CRITICAL RULES:
+- Hashtags MUST already be commonly used on the platform
+- Avoid niche, invented, or ultra-specific hashtags
+- Each hashtag should typically have THOUSANDS of existing posts
+- Prefer creator-style hashtags over literal descriptions
+- Think: what people already search or follow
 
-Rules:
-- Very specific to this content
-- No generic discovery tags
-- Output ONLY hashtags
+Content context:
+{effective_query}
+
+Output ONLY hashtags.
 """
+
         text = await groq_generate_text(MODEL, relevant_prompt)
         relevant_tags = [t for t in text.split() if t.startswith("#")][:3]
     except Exception:
@@ -244,7 +249,7 @@ They should describe the general domain of the content,
 not specific details.
 
 Content:
-{query}
+{effective_query}
 
 Rules:
 - High-level categories
@@ -314,7 +319,11 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
 # ---------------------------
 # 3) caption generator
 # ---------------------------
-async def generate_caption_post(query: str, seed_keywords: List[str], platforms: List[str]) -> Dict[str, Any]:
+async def generate_caption_post(
+    effective_query: str,
+    seed_keywords: List[str],
+    platforms: List[str],
+) -> Dict[str, Any]:
 
     captions: Dict[str, str] = {}
     platform_hashtags: Dict[str, List[str]] = {}
@@ -326,77 +335,73 @@ async def generate_caption_post(query: str, seed_keywords: List[str], platforms:
         # ---------------------------
         # Hashtags
         # ---------------------------
-        try:
-            tags = await fetch_platform_hashtags(None, seed_keywords, p_norm, query)
-        except Exception as e:
-            logger.error(f"Hashtag generation failed for {p_norm}: {e}")
-            tags = []
+        if p_norm == "instagram":
+            tags = []  # explicitly empty for Instagram
+        else:
+            try:
+                tags = await fetch_platform_hashtags(
+                    None,
+                    seed_keywords,
+                    p_norm,
+                    effective_query
+                )
+            except Exception as e:
+                logger.error(f"Hashtag generation failed for {p_norm}: {e}")
+                tags = []
 
         platform_hashtags[p_norm] = tags
+
+        
 
         # ---------------------------
         # Caption prompt
         # ---------------------------
         if p_norm == "instagram":
             caption_prompt = f"""
-You are writing an Instagram caption.
-
-STRICT HARD RULES (NON-NEGOTIABLE):
-- Write EXACTLY 3 paragraphs.
-- Do NOT mention character counts. Length is handled programmatically.
-- Do NOT cut sentences.
-- Each paragraph separated by ONE blank line.
-- No hashtags.
-- No emojis.
-- No slang.
-- No first-person words (I, we, my, our, us).
-- If a known public figure is present, mention the name naturally.
-- Avoid documentary phrases such as:
-  "this video shows", "the visuals depict", "is seen", "appears to be".
-
-STYLE & TONE (CRITICAL):
-- Human, observant, culturally aware.
-- Avoid report-like or news-summary language.
-- Write like a sharp observer narrating a moment.
-- Vary sentence length. Avoid repetition.
+Write a caption for a SHORT-FORM VIDEO.
 
 STRUCTURE (MANDATORY):
+1) HOOK (first 1–2 lines)
+   - A sharp observation and eye-catching
+   - A contradiction, shift, or insight
+   - Must immediately frame why this matters
 
-Paragraph 1 — HOOK:
-- Curiosity-driven and unexpected.
-- Make the viewer pause.
+2) BODY (middle)
+   - Clear, confident explanation
+   - Abstract but grounded
+   - Similar to LinkedIn reasoning
+   - Focus on implications, not events
 
-Paragraph 2 — CONTEXT:
-- Describe events indirectly.
-- Focus on contrast, irony, or behavior.
-- Do NOT explain the video step-by-step.
+3) CTA (final 1–2 lines)
+   - Invite reflection or discussion
+   - No hype, no clickbait
+   - Examples:
+     - “Worth paying attention to.”
+     - “This shift matters more than it seems.”
+     - “Something to think about.”
 
-Paragraph 3 — INSIGHT + IB-STYLE CTA:
-- Reflective and interpretive.
-- Subtle intellectual CTA.
-- Invite thought, not action.
-- End with a line that encourages interpretation.
+STYLE:
+- Informational
+- Confident
+- Intelligent
+- Grounded
 
+RULES:
+- Do NOT be poetic or atmospheric
+- Do NOT describe visuals
+- Do NOT narrate events
+- No emojis
+- No hashtags
+- No first-person language
 
-CONTENT CONTEXT:
-{query}
+LENGTH:
+- Long-form (around 900–1100 characters)
+- Clear paragraph separation
+
+TOPIC CONTEXT:
+{effective_query}
 
 Return ONLY the caption text.
-"""
-        else:
-            caption_prompt = f"""
-You are a senior marketing strategist.
-Write one caption for {p_norm}.
-
-Topic: {query}
-Keywords: {', '.join(seed_keywords)}
-Tone: {tone}
-
-Rules:
-- No hashtags
-- No slang
-- No first-person language
-- Output ONLY caption text
 """
 
         # ---------------------------
@@ -421,16 +426,6 @@ Rules:
         caption_text = "\n\n".join(
             [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
         )
-
-        # ---------------------------
-        # Instagram validation
-        # ---------------------------
-        if p_norm == "instagram":
-            caption_text = enforce_instagram_constraints(caption_text, 1000)
-            assert len(caption_text) == 1000, f"Instagram caption length = {len(caption_text)}"
-
-
-                # Optional: regenerate once (not mandatory now)
 
         captions[p_norm] = caption_text
 

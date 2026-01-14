@@ -394,6 +394,26 @@ Output JSON with keys: summary, scene, marketing_prompt.
             "marketing_prompt": transcript[:200],
         }
 
+def clean_transcript_for_caption(transcript: str) -> str:
+    if not transcript:
+        return ""
+
+    lines = re.split(r"[.!?]", transcript)
+    cleaned = []
+    seen = set()
+
+    for line in lines:
+        l = line.strip()
+        if len(l.split()) < 4:
+            continue
+        key = l.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(l)
+
+    return ". ".join(cleaned)[:900]
+
 
 # -----------------------------------------------------
 # 5. MAIN PIPELINE (Groq STT + Vision)
@@ -433,30 +453,45 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
     visual_summary = visual_result.get("visual_summary", "")
     visual_captions = visual_result.get("visual_captions", [])
     detected_texts = visual_result.get("detected_text", [])
-
-    # 5. Summarize transcript
-    summary_obj = await summarize_transcript_for_caption(transcript)
-    text_summary = summary_obj.get("summary", "")
-    text_scene = summary_obj.get("scene", "")
-    marketing_prompt_text = summary_obj.get("marketing_prompt", "") or text_summary or transcript[:300]
-
-    # -----------------------------------------------------
-    # 6. MERGE SIGNALS (TEXT + VISUAL + OCR)
-    # -----------------------------------------------------
+    # ---- OCR COMBINATION (DEFINE ONCE) ----
     raw_ocr_text = "\n".join([t for t in detected_texts if t]).strip()
     ocr_text_combined = clean_ocr_text(raw_ocr_text)
     ocr_text_combined = await normalize_ocr_spelling(ocr_text_combined)
 
-    merge_parts = [marketing_prompt_text]
+    # -----------------------------------------------------
+    # 6. MERGE SIGNALS (TRANSCRIPT-FIRST, VISUAL-SAFE)
+    # -----------------------------------------------------
 
-    if visual_summary:
-        merge_parts.append(f"Visual: {visual_summary}")
+    cleaned_transcript = clean_transcript_for_caption(transcript)
+    merge_parts = []
+    # 🧠 CASE 1: PEOPLE ARE TALKING → TRANSCRIPT DOMINATES
+    if cleaned_transcript and len(cleaned_transcript.split()) > 20:
+        merge_parts.append(
+        "This video contains a real spoken conversation. "
+        "Base understanding primarily on what is being said."
+        )
+        merge_parts.append(f"Conversation:\n{cleaned_transcript}")
 
-    if ocr_text_combined:
-        merge_parts.append(f"OCR: {ocr_text_combined}")
+        if ocr_text_combined:
+            merge_parts.append(f"On-screen text:\n{ocr_text_combined}")
 
-    # Initial marketing prompt (WITHOUT identity)
-    marketing_prompt = "\n".join([p for p in merge_parts if p]).strip()
+        if visual_summary:
+            merge_parts.append(f"Visual context (secondary): {visual_summary}")
+
+# 🎵 CASE 2: NO REAL SPEECH → VISUAL MODE
+    else:
+        if visual_summary:
+            merge_parts.append(f"Scene: {visual_summary}")
+        
+        if visual_captions:
+            frame_caps = "; ".join([cap for _, cap in visual_captions if cap][:5])
+            merge_parts.append(f"Visual details: {frame_caps}")
+
+        if ocr_text_combined:
+            merge_parts.append(f"On-screen text: {ocr_text_combined}")
+
+    marketing_prompt = "\n".join(merge_parts)
+
 
     # -----------------------------------------------------
     # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
@@ -539,16 +574,31 @@ RULES:
 
     # 9. Captions
     try:
-        caption_input = (
-            f"{evidence_prompt}\n\n"
-            f"MARKETING CONTEXT:\n{marketing_prompt}"
-        )
+        creator_context = f"""
+You are writing a caption for a SHORT-FORM VIDEO (Reels / TikTok / Shorts).
+
+IMPORTANT:
+- This is NOT a summary task.
+- Do NOT describe scenes or list events.
+- Do NOT sound like a report or documentary.
+
+WHAT MATTERS:
+- Viewer curiosity
+- Emotional tension
+- Why this moment matters
+
+VIDEO SIGNALS (for understanding only):
+{marketing_prompt}
+
+Focus on ONE strong idea or reaction.
+"""
 
         captions_result = await generate_caption_post(
-            caption_input,
+            creator_context,
             keywords,
             platforms
         )
+
 
         captions = captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
     except Exception as e:
@@ -579,8 +629,6 @@ RULES:
     return {
         "detected_person": detected_person,
         "transcript": transcript,
-        "text_summary": text_summary,
-        "text_scene": text_scene,
         "visual_summary": visual_summary,
         "visual_captions": visual_captions,
         "detected_texts": detected_texts,
