@@ -347,7 +347,13 @@ async def generate_caption_post(
         # Hashtags
         # ---------------------------
         if p_norm == "instagram":
-            tags = []  # explicitly empty for Instagram
+            tags = await fetch_platform_hashtags(
+        client=None,
+        seed_keywords=seed_keywords,
+        platform="instagram",
+        effective_query=effective_query
+    )
+
         else:
             try:
                 tags = await fetch_platform_hashtags(
