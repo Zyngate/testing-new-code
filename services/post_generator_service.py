@@ -190,9 +190,8 @@ async def fetch_platform_hashtags(
     platform = platform.lower()
 
     # -------------------------------
-    # 1) TRENDING / DISCOVERY → 4 (ROTATING)
+    # 1) TRENDING / DISCOVERY → 4
     # -------------------------------
-    
     if platform == "instagram":
         discovery_tags = random.sample(
             INSTAGRAM_DISCOVERY_CORE,
@@ -207,27 +206,40 @@ async def fetch_platform_hashtags(
             k=min(2, len(remaining_pool))
         )
         trending_tags = discovery_tags + secondary_trending
-
     else:
         gen = TRENDING_GENERATORS.get(platform)
         trending_tags = next(gen) if gen else []
-
 
     # -------------------------------
     # 2) RELEVANT (contextual) → 3
     # -------------------------------
     try:
-        relevant_prompt = f"""
-Generate 3 RELEVANT hashtags for social media DISCOVERY.
+        if platform == "instagram":
+            relevant_prompt = f"""
+Generate EXACTLY 3 Instagram hashtags that are:
 
-CRITICAL RULES:
-- Hashtags MUST already be commonly used on the platform
-- Avoid niche, invented, or ultra-specific hashtags
-- Each hashtag should typically have THOUSANDS of existing posts
-- Prefer creator-style hashtags over literal descriptions
-- Think: what people already search or follow
+CRITICAL REQUIREMENTS:
+- DIRECTLY relevant to the video topic
+- COMMONLY FOLLOWED by users (not just used)
+- Estimated usage between ~300K and ~5M posts
+- High-discovery but NOT ultra-broad
+- Creator-native hashtags
 
-Content context:
+AVOID:
+- Ultra-broad hashtags (>50M posts)
+- Tiny niche hashtags (<50K posts)
+- Keyword-stuffed or invented hashtags
+
+VIDEO CONTEXT:
+{effective_query}
+
+Output ONLY hashtags.
+"""
+        else:
+            relevant_prompt = f"""
+Generate 3 relevant hashtags commonly used on {platform}.
+
+Context:
 {effective_query}
 
 Output ONLY hashtags.
@@ -235,6 +247,7 @@ Output ONLY hashtags.
 
         text = await groq_generate_text(MODEL, relevant_prompt)
         relevant_tags = [t for t in text.split() if t.startswith("#")][:3]
+
     except Exception:
         relevant_tags = [f"#{k.replace(' ', '')}" for k in seed_keywords][:3]
 
@@ -262,14 +275,12 @@ Rules:
         broad_tags = []
 
     # -------------------------------
-    # FINAL MERGE (4 + 3 + 3)
+    # FINAL MERGE
     # -------------------------------
     final_tags = trending_tags + relevant_tags + broad_tags
 
     # Remove duplicates, preserve order
-    final_tags = list(dict.fromkeys(final_tags))
-
-    return final_tags
+    return list(dict.fromkeys(final_tags))
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
@@ -358,47 +369,45 @@ async def generate_caption_post(
         # ---------------------------
         if p_norm == "instagram":
             caption_prompt = f"""
-Write a caption for a SHORT-FORM VIDEO.
+Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
 
 STRUCTURE (MANDATORY):
-1) HOOK (first 1–2 lines)
-   - A sharp observation and eye-catching
-   - A contradiction, shift, or insight
-   - Must immediately frame why this matters
 
-2) BODY (middle)
-   - Clear, confident explanation
-   - Abstract but grounded
-   - Similar to LinkedIn reasoning
-   - Focus on implications, not events
+PARAGRAPH 1 — HOOK  
+- 2–3 short lines  
+- Strong curiosity, tension, or emotional pull  
+- Must clearly connect to the video  
+- Designed to stop scrolling and trigger “more”
 
-3) CTA (final 1–2 lines)
-   - Invite reflection or discussion
-   - No hype, no clickbait
-   - Examples:
-     - “Worth paying attention to.”
-     - “This shift matters more than it seems.”
-     - “Something to think about.”
+PARAGRAPH 2 — CONTEXT & INSIGHT  
+- Explain what’s happening in the video  
+- Add reasoning, meaning, or perspective  
+- Human, conversational tone  
+- Grounded in the actual video content  
+- This should be the longest paragraph
+
+PARAGRAPH 3 — REFLECTION / CTA  
+- Invite the viewer to think, react, or comment  
+- Natural and thoughtful, not salesy  
+- End with a question or reflective line
 
 STYLE:
-- Informational
-- Confident
-- Intelligent
-- Grounded
+- Human and engaging  
+- Confident, not corporate  
+- Clear, not abstract  
 
 RULES:
-- Do NOT be poetic or atmospheric
-- Do NOT describe visuals
-- Do NOT narrate events
-- No emojis
-- No hashtags
-- No first-person language
+- You MAY reference visuals or moments in the video  
+- First-person language is allowed (use sparingly)  
+- No emojis  
+- No hashtags inside the caption text  
+- Avoid generic motivational filler  
 
 LENGTH:
-- Long-form (around 900–1100 characters)
-- Clear paragraph separation
+- Long-form: 800–1,100 characters total  
+- EXACTLY 3 paragraphs separated by a blank line  
 
-TOPIC CONTEXT:
+VIDEO CONTEXT:
 {effective_query}
 
 Return ONLY the caption text.

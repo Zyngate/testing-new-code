@@ -47,6 +47,74 @@ def format_hour_12h(hour: int) -> str:
     if hour12 == 0: hour12 = 12
     return f"{hour12}:00 {suffix}"
 
+def format_time_range(hour: int) -> str:
+    """Convert hour to a time range like '3:00 PM - 5:00 PM' (1 hour before and after)."""
+    start_hour = max(0, hour - 1)
+    end_hour = min(23, hour + 1)
+    
+    def to_12h(h):
+        suffix = "AM" if h < 12 else "PM"
+        h12 = h % 12
+        if h12 == 0: h12 = 12
+        return f"{h12}:00 {suffix}"
+    
+    return f"{to_12h(start_hour)} - {to_12h(end_hour)}"
+
+# Platform-specific research data for best posting times and frequencies
+PLATFORM_PEAK_HOURS = {
+    'instagram': {
+        'peak_hours': [7, 8, 9, 11, 12, 17, 18, 19, 21, 22],  # Morning, lunch, evening, late night
+        'best_hours': [8, 12, 18, 21],
+        'posts_per_week': 7,  # 1 post daily or 7-14 per week
+        'description': 'mornings (7-9 AM), lunch (11 AM-12 PM), evenings (5-7 PM), and late night (9-10 PM)'
+    },
+    'twitter': {
+        'peak_hours': [8, 9, 10, 12, 13, 17, 18],  # Business hours
+        'best_hours': [9, 12, 17],
+        'posts_per_week': 21,  # 3 posts daily
+        'description': 'morning (8-10 AM), lunch (12-1 PM), and end of workday (5-6 PM)'
+    },
+    'x': {
+        'peak_hours': [8, 9, 10, 12, 13, 17, 18],  # Same as Twitter
+        'best_hours': [9, 12, 17],
+        'posts_per_week': 21,
+        'description': 'morning (8-10 AM), lunch (12-1 PM), and end of workday (5-6 PM)'
+    },
+    'facebook': {
+        'peak_hours': [9, 10, 11, 13, 14, 18, 19],  # Mid-morning and early evening
+        'best_hours': [10, 13, 19],
+        'posts_per_week': 4,  # 3-4 times per week
+        'description': 'mid-morning (9-11 AM), early afternoon (1-2 PM), and evening (6-7 PM)'
+    },
+    'youtube': {
+        'peak_hours': [12, 13, 14, 15, 16, 17, 18, 19, 20],  # Afternoon to evening
+        'best_hours': [14, 15, 17],
+        'posts_per_week': 3,  # 2-3 videos per week
+        'description': 'early afternoon (2-3 PM) and evening (5-8 PM) when viewers have leisure time'
+    },
+    'linkedin': {
+        'peak_hours': [7, 8, 9, 10, 12, 17, 18],  # Business hours
+        'best_hours': [8, 10, 12],
+        'posts_per_week': 5,  # 1 per weekday
+        'description': 'early morning (7-8 AM), mid-morning (9-10 AM), and lunch break (12 PM)'
+    },
+    'tiktok': {
+        'peak_hours': [7, 8, 9, 12, 15, 19, 20, 21, 22],  # Morning, afternoon, and evening
+        'best_hours': [9, 12, 19, 21],
+        'posts_per_week': 14,  # 1-3 posts daily
+        'description': 'morning (7-9 AM), lunch (12 PM), and especially evenings (7-10 PM)'
+    },
+    'threads': {
+        'peak_hours': [8, 9, 12, 13, 18, 19, 20, 21],  # Similar to Twitter
+        'best_hours': [9, 12, 19],
+        'posts_per_week': 14,  # 2 posts daily
+        'description': 'morning (8-9 AM), lunch (12-1 PM), and evenings (6-9 PM)'
+    }
+}
+
+# Minimum posts threshold for using user data vs research data
+MIN_POSTS_FOR_USER_DATA = 15
+
 def get_timezone_display_name(tz_code: str) -> tuple:
     """Convert timezone code to display name and pytz timezone string"""
     tz_code_upper = tz_code.upper().strip()
@@ -181,6 +249,7 @@ class PlatformPerformance(BaseModel):
     best_platform: str
     best_platform_by_rate: str
     best_platform_by_score: str
+    average_engagement_rate: float = 0.0
 
 class OptimalTimeSlot(BaseModel):
     day: str
@@ -201,6 +270,41 @@ class ContentCategoryInsight(BaseModel):
     overall_score: float
     percentage: float
 
+class PlatformTimeSlot(BaseModel):
+    day: str
+    time_range: str
+    peak_hour: int
+    engagement_score: float
+    data_source: str
+
+class PlatformSchedule(BaseModel):
+    platform: str
+    platform_display: str
+    posts_per_week: int
+    time_slots: List[PlatformTimeSlot]
+    peak_hours_description: str
+    data_source: str
+    user_post_count: int
+
+class PlatformSpecificSchedule(BaseModel):
+    platform_schedules: Dict[str, PlatformSchedule]
+    data_source: str
+    use_user_data: bool
+    total_posts_analyzed: int
+    min_posts_threshold: int
+
+class InsightsSection(BaseModel):
+    timing: List[str]
+    engagement: List[str]
+    content: List[str]
+    growth: List[str]
+
+class RecommendationsSection(BaseModel):
+    timing: List[Dict[str, Any]]
+    engagement: List[Dict[str, Any]]
+    content: List[Dict[str, Any]]
+    growth: List[Dict[str, Any]]
+
 class RecommendationResponse(BaseModel):
     total_posts_analyzed: int
     user_timezone: str
@@ -209,16 +313,18 @@ class RecommendationResponse(BaseModel):
     content_performance: Dict[str, float]
     content_performance_by_rate: Dict[str, float]
     time_performance: Dict[str, Any]
+    time_performance_by_platform: Dict[str, Dict[str, Any]]  # NEW: Platform-specific time analysis
     platform_performance: PlatformPerformance
     top_performing_posts: List[Dict[str, Any]]
-    key_insights: List[str]
-    actionable_recommendations: List[Dict[str, Any]]
+    insights: Dict[str, List[str]]  # Categorized insights only
+    recommendations: Dict[str, List[Dict[str, Any]]]  # Categorized recommendations only
     confidence_levels: Dict[str, str]
     content_analysis: List[ContentAnalysis]
     content_category_breakdown: Dict[str, Any]
     content_category_insights: List[ContentCategoryInsight]
     optimal_posting_schedule: List[OptimalTimeSlot]
     platform_analysis: Dict[str, Any]
+    platform_specific_schedule: Dict[str, Any]
 
 class ContentAnalyzer:
     def __init__(self, api_key: str = None):
@@ -444,7 +550,21 @@ class RecommendationEngine:
                 shares = post_dict.get('reposts', 0)
 
             try:
-                posting_time_utc = datetime.fromisoformat(post_dict['posting_time'].replace('Z', '+00:00'))
+                # Try ISO format first
+                posting_time_str = post_dict['posting_time']
+                try:
+                    posting_time_utc = datetime.fromisoformat(posting_time_str.replace('Z', '+00:00'))
+                except:
+                    # Try alternative formats like "13 Jan 2026, 01:01 pm IST"
+                    try:
+                        # Remove timezone from end and parse
+                        time_part = posting_time_str.rsplit(' ', 1)[0]  # Remove "IST" or "UTC"
+                        posting_time_utc = datetime.strptime(time_part, "%d %b %Y, %I:%M %p")
+                        posting_time_utc = utc_tz.localize(posting_time_utc)
+                    except:
+                        # If still fails, use current time
+                        posting_time_utc = datetime.now(utc_tz)
+                
                 if posting_time_utc.tzinfo is None:
                     posting_time_utc = utc_tz.localize(posting_time_utc)
                 posting_time_user = posting_time_utc.astimezone(user_tz)
@@ -546,6 +666,125 @@ class RecommendationEngine:
             'optimal_posting_schedule': self.get_optimal_posting_schedule()
         }
 
+    def analyze_time_performance_by_platform(self) -> Dict[str, Dict[str, Any]]:
+        """Analyze posting time performance for each platform separately"""
+        platforms = self.processed_data['platform'].unique().tolist()
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        platform_time_analysis = {}
+        
+        for platform in platforms:
+            platform_df = self.processed_data[self.processed_data['platform'] == platform]
+            
+            if len(platform_df) == 0:
+                continue
+            
+            # Hourly and daily performance for this platform
+            hourly_perf = platform_df.groupby('hour')['engagement_score'].mean().to_dict()
+            daily_perf = platform_df.groupby('day_of_week')['engagement_score'].mean().to_dict()
+            hourly_rate_perf = platform_df.groupby('hour')['engagement_rate'].mean().to_dict()
+            daily_rate_perf = platform_df.groupby('day_of_week')['engagement_rate'].mean().to_dict()
+            
+            hourly_count = platform_df.groupby('hour').size().to_dict()
+            daily_count = platform_df.groupby('day_of_week').size().to_dict()
+            
+            # Confidence scores
+            hourly_confidence_scores = {}
+            for hour, count in hourly_count.items():
+                if count >= 5:
+                    hourly_confidence_scores[hour] = min(1.0, count / 10)
+                else:
+                    hourly_confidence_scores[hour] = count / 5
+            
+            daily_confidence_scores = {}
+            for day, count in daily_count.items():
+                if count >= 3:
+                    daily_confidence_scores[day] = min(1.0, count / 7)
+                else:
+                    daily_confidence_scores[day] = count / 3
+            
+            # Best hour and day for this platform
+            best_hour = max(hourly_perf, key=hourly_perf.get) if hourly_perf else 12
+            best_day = max(daily_perf, key=daily_perf.get) if daily_perf else 0
+            best_day_name = day_names[best_day] if 0 <= best_day < 7 else 'Monday'
+            
+            # Best by engagement rate (sometimes more useful)
+            best_hour_by_rate = max(hourly_rate_perf, key=hourly_rate_perf.get) if hourly_rate_perf else 12
+            best_day_by_rate = max(daily_rate_perf, key=daily_rate_perf.get) if daily_rate_perf else 0
+            best_day_name_by_rate = day_names[best_day_by_rate] if 0 <= best_day_by_rate < 7 else 'Monday'
+            
+            # Confidence levels
+            hour_confidence = "High" if hourly_confidence_scores.get(best_hour, 0) >= 0.7 else \
+                             "Medium" if hourly_confidence_scores.get(best_hour, 0) >= 0.4 else "Low"
+            day_confidence = "High" if daily_confidence_scores.get(best_day, 0) >= 0.7 else \
+                            "Medium" if daily_confidence_scores.get(best_day, 0) >= 0.4 else "Low"
+            
+            # Get optimal posting schedule for this platform
+            time_groups = platform_df.groupby(['day_of_week', 'hour']).agg({
+                'engagement_score': 'mean',
+                'engagement_rate': 'mean'
+            }).reset_index()
+            
+            if len(time_groups) > 0:
+                time_groups['count'] = platform_df.groupby(['day_of_week', 'hour']).size().values
+                time_groups['confidence_score'] = time_groups['count'].apply(
+                    lambda x: min(1.0, x / 3) if x >= 2 else x / 3
+                )
+                time_groups['confidence'] = time_groups['confidence_score'].apply(
+                    lambda x: "High" if x >= 0.7 else "Medium" if x >= 0.4 else "Low"
+                )
+                time_groups = time_groups.sort_values('engagement_score', ascending=False)
+                
+                optimal_slots = []
+                for _, row in time_groups.head(3).iterrows():  # Top 3 slots per platform
+                    optimal_slots.append({
+                        'day': day_names[int(row['day_of_week'])],
+                        'hour': int(row['hour']),
+                        'time_display': self._format_hour(int(row['hour'])),
+                        'engagement_score': float(row['engagement_score']),
+                        'engagement_rate': float(row['engagement_rate']),
+                        'confidence': row['confidence'],
+                        'confidence_score': float(row['confidence_score'])
+                    })
+            else:
+                optimal_slots = []
+            
+            platform_time_analysis[platform] = {
+                'platform': platform,
+                'platform_display': platform.capitalize(),
+                'post_count': len(platform_df),
+                'hourly_performance': hourly_perf,
+                'daily_performance': daily_perf,
+                'hourly_rate_performance': hourly_rate_perf,
+                'daily_rate_performance': daily_rate_perf,
+                'best_hour': best_hour,
+                'best_hour_display': self._format_hour(best_hour),
+                'best_day': best_day,
+                'best_day_name': best_day_name,
+                'best_hour_by_rate': best_hour_by_rate,
+                'best_day_by_rate': best_day_by_rate,
+                'best_day_name_by_rate': best_day_name_by_rate,
+                'hour_confidence': hour_confidence,
+                'day_confidence': day_confidence,
+                'hourly_count': hourly_count,
+                'daily_count': daily_count,
+                'hourly_confidence_scores': hourly_confidence_scores,
+                'daily_confidence_scores': daily_confidence_scores,
+                'optimal_posting_schedule': optimal_slots
+            }
+        
+        return platform_time_analysis
+    
+    def _format_hour(self, hour: int) -> str:
+        """Format hour to readable time string"""
+        if hour == 0:
+            return "12:00 AM"
+        elif hour < 12:
+            return f"{hour}:00 AM"
+        elif hour == 12:
+            return "12:00 PM"
+        else:
+            return f"{hour - 12}:00 PM"
+
     def get_optimal_posting_schedule(self) -> List[OptimalTimeSlot]:
         """Get optimal posting schedule with confidence scores"""
         time_groups = self.processed_data.groupby(['day_of_week', 'hour']).agg({
@@ -577,6 +816,178 @@ class RecommendationEngine:
             ))
         return optimal_slots
 
+    def get_platform_specific_schedule(self) -> Dict[str, Any]:
+        """
+        Generate platform-specific posting schedule.
+        Uses user data if >= 15 posts in last 30 days, otherwise uses research-based data.
+        Returns recommended time slots per platform with posting frequency.
+        """
+        df = self.processed_data
+        day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        
+        # Get platforms the user is active on
+        user_platforms = df['platform'].unique().tolist()
+        
+        # Count posts in last 30 days to determine data source
+        try:
+            # Get timezone-aware current time
+            current_time = datetime.now(pytz.UTC)
+            thirty_days_ago = current_time - timedelta(days=30)
+            
+            # Make sure posting_time is timezone-aware for comparison
+            if 'posting_time' in df.columns and len(df) > 0:
+                # Filter posts from last 30 days
+                recent_mask = df['posting_time'].apply(
+                    lambda x: x.replace(tzinfo=pytz.UTC) if x.tzinfo is None else x
+                ) >= thirty_days_ago
+                recent_posts = df[recent_mask]
+                total_recent_posts = len(recent_posts)
+            else:
+                total_recent_posts = len(df)
+        except Exception:
+            # Fallback: use all posts
+            total_recent_posts = len(df)
+        
+        # Determine if we should use user data or research data
+        use_user_data = total_recent_posts >= MIN_POSTS_FOR_USER_DATA
+        data_source = "your posting history" if use_user_data else "industry research and best practices"
+        
+        platform_schedules = {}
+        
+        for platform in user_platforms:
+            platform_lower = platform.lower()
+            platform_df = df[df['platform'] == platform_lower]
+            platform_post_count = len(platform_df)
+            
+            # Get platform config (default to instagram if not found)
+            platform_config = PLATFORM_PEAK_HOURS.get(platform_lower, PLATFORM_PEAK_HOURS.get('instagram'))
+            
+            # Determine recommended posts per week for this platform
+            posts_per_week = platform_config['posts_per_week']
+            
+            # Calculate number of time slots to recommend (match the posting frequency)
+            num_slots = min(posts_per_week, 14)  # Cap at 14 slots (2 per day max in output)
+            
+            time_slots = []
+            
+            if use_user_data and platform_post_count >= 5:
+                # Use user's own data for this platform
+                platform_time_groups = platform_df.groupby(['day_of_week', 'hour']).agg({
+                    'engagement_score': 'mean',
+                    'engagement_rate': 'mean'
+                }).reset_index()
+                
+                if len(platform_time_groups) > 0:
+                    platform_time_groups['count'] = platform_df.groupby(['day_of_week', 'hour']).size().values
+                    platform_time_groups = platform_time_groups.sort_values('engagement_score', ascending=False)
+                    
+                    # Get top performing time slots
+                    for _, row in platform_time_groups.head(num_slots).iterrows():
+                        hour = int(row['hour'])
+                        day_idx = int(row['day_of_week'])
+                        time_slots.append({
+                            'day': day_names[day_idx],
+                            'time_range': format_time_range(hour),
+                            'peak_hour': hour,
+                            'engagement_score': float(row['engagement_score']),
+                            'data_source': 'user_data'
+                        })
+            
+            # If not enough user data, use research-based recommendations
+            if len(time_slots) < num_slots:
+                best_hours = platform_config['best_hours']
+                peak_hours = platform_config['peak_hours']
+                
+                # Combine best and peak hours, removing duplicates
+                all_hours = best_hours + [h for h in peak_hours if h not in best_hours]
+                
+                # Distribute across days of the week
+                slots_needed = num_slots - len(time_slots)
+                used_combinations = set((s['day'], s['peak_hour']) for s in time_slots)
+                
+                # Calculate optimal day spacing for better distribution
+                # Instead of sequential days, spread evenly across the week
+                if slots_needed <= 7:
+                    # For 1-7 posts, spread evenly across the week
+                    # Calculate step size to distribute days evenly
+                    step = 7 / slots_needed if slots_needed > 0 else 1
+                    distributed_days = []
+                    for i in range(slots_needed):
+                        day_idx = int(i * step) % 7
+                        distributed_days.append(day_idx)
+                    
+                    # Adjust for better distribution patterns
+                    if slots_needed == 2:
+                        distributed_days = [0, 4]  # Monday, Friday
+                    elif slots_needed == 3:
+                        distributed_days = [0, 3, 5]  # Monday, Thursday, Saturday
+                    elif slots_needed == 4:
+                        distributed_days = [0, 2, 4, 6]  # Monday, Wednesday, Friday, Sunday
+                    elif slots_needed == 5:
+                        distributed_days = [0, 1, 3, 4, 6]  # Mon, Tue, Thu, Fri, Sun
+                    elif slots_needed == 6:
+                        distributed_days = [0, 1, 2, 4, 5, 6]  # All except Wednesday
+                    elif slots_needed == 7:
+                        distributed_days = list(range(7))  # All days
+                else:
+                    # For more than 7 posts, use multiple slots per day but still spread
+                    posts_per_day = max(1, (slots_needed + 6) // 7)
+                    distributed_days = []
+                    day_spacing_order = [0, 3, 6, 1, 4, 2, 5]  # Spread pattern: Mon, Thu, Sun, Tue, Fri, Wed, Sat
+                    for day_idx in day_spacing_order:
+                        for _ in range(posts_per_day):
+                            if len(distributed_days) < slots_needed:
+                                distributed_days.append(day_idx)
+                
+                # Rotate through hours for variety
+                hour_index = 0
+                for day_idx in distributed_days:
+                    if slots_needed <= 0:
+                        break
+                    
+                    # Try to find an unused hour for this day
+                    attempts = 0
+                    while attempts < len(all_hours):
+                        hour = all_hours[hour_index % len(all_hours)]
+                        
+                        if (day_names[day_idx], hour) not in used_combinations:
+                            time_slots.append({
+                                'day': day_names[day_idx],
+                                'time_range': format_time_range(hour),
+                                'peak_hour': hour,
+                                'engagement_score': 0,
+                                'data_source': 'research_data'
+                            })
+                            used_combinations.add((day_names[day_idx], hour))
+                            slots_needed -= 1
+                            hour_index += 1
+                            break
+                        
+                        hour_index += 1
+                        attempts += 1
+            
+            # Sort by day and time
+            day_order = {name: i for i, name in enumerate(day_names)}
+            time_slots.sort(key=lambda x: (day_order.get(x['day'], 0), x['peak_hour']))
+            
+            platform_schedules[platform_lower] = {
+                'platform': platform_lower,
+                'platform_display': platform.capitalize(),
+                'posts_per_week': posts_per_week,
+                'time_slots': time_slots[:num_slots],
+                'peak_hours_description': platform_config['description'],
+                'data_source': 'user_data' if (use_user_data and platform_post_count >= 5) else 'research_data',
+                'user_post_count': platform_post_count
+            }
+        
+        return {
+            'platform_schedules': platform_schedules,
+            'data_source': data_source,
+            'use_user_data': use_user_data,
+            'total_posts_analyzed': total_recent_posts,
+            'min_posts_threshold': MIN_POSTS_FOR_USER_DATA
+        }
+
     def analyze_platform_performance(self) -> PlatformPerformance:
         """Analyze performance across different platforms"""
         platform_data = self.processed_data.groupby('platform').agg({
@@ -604,6 +1015,11 @@ class RecommendationEngine:
         best_platform_by_rate = max(platform_metrics.keys(), key=lambda p: platform_metrics[p]['engagement_rate'])
         best_platform_by_score = max(platform_metrics.keys(), key=lambda p: platform_metrics[p]['engagement_score'])
 
+        # Calculate average engagement rate across all posts
+        avg_engagement_rate = self.processed_data['engagement_rate'].mean()
+        if pd.isna(avg_engagement_rate):
+            avg_engagement_rate = 0.0
+
         return PlatformPerformance(
             instagram_engagement_score=float(platform_metrics.get('instagram', {}).get('engagement_score', 0)),
             instagram_engagement_rate=float(platform_metrics.get('instagram', {}).get('engagement_rate', 0)),
@@ -619,7 +1035,8 @@ class RecommendationEngine:
             facebook_engagement_rate=float(platform_metrics.get('facebook', {}).get('engagement_rate', 0)),
             best_platform=best_platform_by_rate,
             best_platform_by_rate=best_platform_by_rate,
-            best_platform_by_score=best_platform_by_score
+            best_platform_by_score=best_platform_by_score,
+            average_engagement_rate=float(avg_engagement_rate)
         )
 
     def analyze_platform_distribution(self) -> Dict[str, Any]:
@@ -661,11 +1078,16 @@ class RecommendationEngine:
 
         breakdown = {}
         for category in category_counts:
+            # Handle NaN values from std() when category has only 1 post
+            std_value = category_std.get(category, 0)
+            if pd.isna(std_value):
+                std_value = 0.0
+            
             breakdown[category] = {
                 'post_count': int(category_counts[category]),
                 'avg_engagement': float(category_engagement.get(category, 0)),
                 'avg_engagement_rate': float(category_rate.get(category, 0)),
-                'std_deviation': float(category_std.get(category, 0)),
+                'std_deviation': float(std_value),
                 'percentage': float((category_counts[category] / len(self.processed_data)) * 100)
             }
         return breakdown
@@ -695,230 +1117,916 @@ class RecommendationEngine:
             ))
         return insights
 
-    def generate_key_insights(self) -> List[str]:
-        """Generate key insights from the data"""
+    def generate_key_insights(self) -> Dict[str, Any]:
+        """Generate dynamic, categorized key insights from the data"""
         df = self.processed_data
+        
+        timing_insights = self._generate_timing_insights(df)
+        engagement_insights = self._generate_engagement_insights(df)
+        content_insights = self._generate_content_insights(df)
+        growth_insights = self._generate_growth_insights(df)
+        
+        # Combine all insights for backward compatibility (key_insights field)
+        all_insights = timing_insights + engagement_insights + content_insights + growth_insights
+        
+        return {
+            'all_insights': all_insights,
+            'insights_by_category': {
+                'timing': timing_insights,
+                'engagement': engagement_insights,
+                'content': content_insights,
+                'growth': growth_insights
+            }
+        }
+    
+    def _generate_timing_insights(self, df: pd.DataFrame) -> List[str]:
+        """Generate timing-specific insights"""
         insights = []
-
-        # Total engagement explanation
+        time_perf = self.analyze_time_performance()
+        
+        # Best posting hour insight
+        best_hour = time_perf.get('best_hour', 12)
+        hourly_perf = time_perf.get('hourly_performance', {})
+        best_hour_engagement = hourly_perf.get(best_hour, 0)
+        hour_formatted = datetime.strptime(str(best_hour), '%H').strftime('%I %p').lstrip('0')
+        
+        # Calculate how much better the best hour is
+        avg_hourly = sum(hourly_perf.values()) / len(hourly_perf) if hourly_perf else 0
+        hour_boost = ((best_hour_engagement - avg_hourly) / avg_hourly * 100) if avg_hourly > 0 else 0
+        
+        if hour_boost > 20:
+            insights.append(
+                f"⏰ Your sweet spot is around {hour_formatted}! Posts at this time get {hour_boost:.0f}% more engagement than your average. "
+                f"That's a huge difference — try to schedule your most important content around this time."
+            )
+        elif best_hour_engagement > 0:
+            insights.append(
+                f"⏰ Posts around {hour_formatted} tend to perform well for you, averaging {best_hour_engagement:,.0f} interactions. "
+                f"This could be when your audience is most active!"
+            )
+        
+        # Best day insight with comparison
+        best_day = time_perf.get('best_day_name', 'Monday')
+        daily_perf = time_perf.get('daily_performance', {})
+        best_day_num = time_perf.get('best_day', 0)
+        best_day_engagement = daily_perf.get(best_day_num, 0)
+        
+        # Find worst day for comparison
+        if len(daily_perf) > 1:
+            worst_day_num = min(daily_perf, key=daily_perf.get)
+            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            worst_day = day_names[worst_day_num] if worst_day_num < 7 else 'Monday'
+            worst_engagement = daily_perf.get(worst_day_num, 0)
+            day_diff = ((best_day_engagement - worst_engagement) / worst_engagement * 100) if worst_engagement > 0 else 0
+            
+            if day_diff > 30:
+                insights.append(
+                    f"📅 {best_day} is your magic day — posts get {day_diff:.0f}% more engagement than {worst_day}s! "
+                    f"Consider saving your best content for {best_day}s."
+                )
+            else:
+                insights.append(
+                    f"📅 Your content performs fairly consistently throughout the week, with {best_day} having a slight edge "
+                    f"({best_day_engagement:,.0f} avg interactions)."
+                )
+        
+        # Weekend vs weekday insight
+        weekday_engagement = sum([daily_perf.get(i, 0) for i in range(5)]) / 5 if len(daily_perf) > 0 else 0
+        weekend_engagement = sum([daily_perf.get(i, 0) for i in [5, 6]]) / 2 if len(daily_perf) > 0 else 0
+        
+        if weekend_engagement > weekday_engagement * 1.2:
+            insights.append(
+                f"🎉 Your audience is more active on weekends! Weekend posts get about {((weekend_engagement - weekday_engagement) / weekday_engagement * 100):.0f}% more engagement. "
+                f"Don't let those days go to waste."
+            )
+        elif weekday_engagement > weekend_engagement * 1.2:
+            insights.append(
+                f"💼 Your audience is more engaged during the workweek. Weekday posts outperform weekends by about "
+                f"{((weekday_engagement - weekend_engagement) / weekend_engagement * 100):.0f}%. Focus your energy Monday through Friday!"
+            )
+        
+        # Posting consistency insight
+        hourly_counts = time_perf.get('hourly_count', {})
+        if len(hourly_counts) > 0:
+            most_posted_hour = max(hourly_counts, key=hourly_counts.get)
+            most_posted_count = hourly_counts[most_posted_hour]
+            hour_str = datetime.strptime(str(most_posted_hour), '%H').strftime('%I %p').lstrip('0')
+            
+            if most_posted_hour != best_hour and most_posted_count > 3:
+                best_hour_str = datetime.strptime(str(best_hour), '%H').strftime('%I %p').lstrip('0')
+                insights.append(
+                    f"💡 Interesting pattern: You usually post around {hour_str}, but your content actually performs better around {best_hour_str}. "
+                    f"Try shifting your posting schedule to catch that engagement boost!"
+                )
+        
+        return insights
+    
+    def _generate_engagement_insights(self, df: pd.DataFrame) -> List[str]:
+        """Generate engagement-specific insights"""
+        insights = []
+        
+        # Overall engagement stats
         total_engagement = df['engagement_score'].sum()
         total_likes = df['likes'].sum() if 'likes' in df.columns else 0
         total_comments = df['comments'].sum() if 'comments' in df.columns else 0
         total_shares = df['shares'].sum() if 'shares' in df.columns else 0
+        avg_rate = df['engagement_rate'].mean()
+        
+        # Engagement rate quality assessment
+        if avg_rate >= 10:
+            insights.append(
+                f"🔥 Wow! Your average engagement rate is {avg_rate:.1f}% — that's exceptional! "
+                f"Your content is really resonating with your audience. Keep doing what you're doing!"
+            )
+        elif avg_rate >= 5:
+            insights.append(
+                f"💪 Your {avg_rate:.1f}% engagement rate is above average! Your followers are actively connecting with your content. "
+                f"You're building a loyal community."
+            )
+        elif avg_rate >= 2:
+            insights.append(
+                f"📊 Your engagement rate of {avg_rate:.1f}% is solid. There's room to grow, but you're on the right track. "
+                f"Focus on content that sparks conversations!"
+            )
+        else:
+            insights.append(
+                f"📈 Your current engagement rate is {avg_rate:.1f}%. Let's work on boosting that! "
+                f"The key is creating content that makes people want to like, comment, and share."
+            )
+        
+        # Comment-to-like ratio insight
+        if total_likes > 0 and total_comments > 0:
+            comment_ratio = (total_comments / total_likes) * 100
+            if comment_ratio > 10:
+                insights.append(
+                    f"💬 Your audience loves to chat! You're getting {comment_ratio:.1f} comments for every 100 likes — "
+                    f"that's a sign of a highly engaged community. Comments are gold for the algorithm!"
+                )
+            elif comment_ratio < 3:
+                insights.append(
+                    f"💬 You're getting lots of likes, but fewer comments ({comment_ratio:.1f} per 100 likes). "
+                    f"Try ending your captions with a question to encourage more conversation!"
+                )
+        
+        # Share performance insight
+        if total_shares > 0:
+            share_ratio = (total_shares / len(df))
+            if share_ratio > 100:
+                insights.append(
+                    f"🚀 People are actively sharing your content! Averaging {share_ratio:.0f} shares per post means your content is "
+                    f"worth passing along — that's the best kind of organic growth."
+                )
+            elif share_ratio > 30:
+                insights.append(
+                    f"📤 Your posts average {share_ratio:.0f} shares each. That's solid! Shareable content extends your reach beyond your followers."
+                )
+        
+        # High engagement posts analysis
+        if len(df) >= 5:
+            top_20_pct = df.nlargest(max(1, len(df) // 5), 'engagement_score')
+            bottom_20_pct = df.nsmallest(max(1, len(df) // 5), 'engagement_score')
+            
+            top_avg = top_20_pct['engagement_score'].mean()
+            bottom_avg = bottom_20_pct['engagement_score'].mean()
+            
+            if top_avg > bottom_avg * 5:
+                insights.append(
+                    f"⭐ Your top-performing posts get {(top_avg / bottom_avg):.1f}x more engagement than your lowest performers. "
+                    f"Study what made those posts work — the topic, the format, the caption style — and do more of that!"
+                )
+        
+        # Platform-specific engagement insight
+        platform_rates = df.groupby('platform')['engagement_rate'].mean()
+        if len(platform_rates) > 1:
+            best_platform = platform_rates.idxmax()
+            worst_platform = platform_rates.idxmin()
+            best_rate = platform_rates[best_platform]
+            worst_rate = platform_rates[worst_platform]
+            
+            if best_rate > worst_rate * 1.5:
+                insights.append(
+                    f"📱 Your {best_platform.capitalize()} content gets {best_rate:.1f}% engagement vs {worst_rate:.1f}% on {worst_platform.capitalize()}. "
+                    f"Your {best_platform.capitalize()} audience is really connecting with you — consider doubling down there!"
+                )
+        
+        return insights
+    
+    def _generate_content_insights(self, df: pd.DataFrame) -> List[str]:
+        """Generate content-specific insights"""
+        insights = []
+        category_perf = self.analyze_content_performance()
+        
+        if len(category_perf) > 0:
+            # Best category insight
+            best_category = max(category_perf, key=category_perf.get)
+            best_engagement = category_perf[best_category]
+            avg_engagement = sum(category_perf.values()) / len(category_perf)
+            
+            boost_pct = ((best_engagement - avg_engagement) / avg_engagement * 100) if avg_engagement > 0 else 0
+            
+            if boost_pct > 50:
+                insights.append(
+                    f"🏆 Your {best_category} content is crushing it! It performs {boost_pct:.0f}% better than your average. "
+                    f"This is clearly your strongest content type — your audience wants more!"
+                )
+            elif boost_pct > 20:
+                insights.append(
+                    f"🏆 {best_category} content is your top performer, getting {boost_pct:.0f}% more engagement than average. "
+                    f"Keep this as a core part of your content mix."
+                )
+            
+            # Underperforming category insight
+            if len(category_perf) > 2:
+                worst_category = min(category_perf, key=category_perf.get)
+                worst_engagement = category_perf[worst_category]
+                worst_pct = ((avg_engagement - worst_engagement) / avg_engagement * 100) if avg_engagement > 0 else 0
+                
+                worst_count = len(df[df['category'] == worst_category])
+                if worst_count > 1 and worst_pct > 30:
+                    insights.append(
+                        f"📉 Your {worst_category} content isn't hitting the same marks — it's {worst_pct:.0f}% below average. "
+                        f"Consider either refreshing your approach or focusing on content types that perform better."
+                    )
+            
+            # Content diversity insight
+            unique_categories = len(category_perf)
+            if unique_categories >= 5:
+                insights.append(
+                    f"🎨 You're creating diverse content across {unique_categories} categories! This helps you reach different audiences. "
+                    f"Just make sure to prioritize your top performers."
+                )
+            elif unique_categories <= 2:
+                insights.append(
+                    f"🎯 You're focused on {unique_categories} content categories. That's okay for building expertise, "
+                    f"but experimenting with new content types could help you discover untapped potential!"
+                )
+        
+        # Caption length insight (if we have caption data)
+        if 'caption' in df.columns:
+            df['caption_length'] = df['caption'].apply(lambda x: len(str(x)) if pd.notna(x) else 0)
+            
+            # Compare engagement for long vs short captions
+            median_length = df['caption_length'].median()
+            short_captions = df[df['caption_length'] <= median_length]
+            long_captions = df[df['caption_length'] > median_length]
+            
+            if len(short_captions) > 2 and len(long_captions) > 2:
+                short_engagement = short_captions['engagement_score'].mean()
+                long_engagement = long_captions['engagement_score'].mean()
+                
+                if long_engagement > short_engagement * 1.3:
+                    insights.append(
+                        f"📝 Longer captions are working for you! Posts with detailed captions get about "
+                        f"{((long_engagement - short_engagement) / short_engagement * 100):.0f}% more engagement. Your audience appreciates the depth!"
+                    )
+                elif short_engagement > long_engagement * 1.3:
+                    insights.append(
+                        f"📝 Short and punchy works! Your concise captions outperform longer ones by "
+                        f"{((short_engagement - long_engagement) / long_engagement * 100):.0f}%. Keep it snappy!"
+                    )
+        
+        return insights
+    
+    def _generate_growth_insights(self, df: pd.DataFrame) -> List[str]:
+        """Generate growth-related insights"""
+        insights = []
+        
+        # Summary stats
+        total_posts = len(df)
+        total_engagement = df['engagement_score'].sum()
         
         insights.append(
-            f"📊 We analyzed {len(df)} of your posts and found they received a total of {total_engagement:,.0f} interactions. "
-            f"This includes {total_likes:,.0f} likes, {total_comments:,.0f} comments, and {total_shares:,.0f} shares combined."
+            f"📊 Across your {total_posts} posts, you've generated {total_engagement:,.0f} total interactions. "
+            f"That's an average of {(total_engagement / total_posts):,.0f} per post — let's work on pushing that higher!"
         )
-
-        # Engagement rate explanation
-        avg_rate = df['engagement_rate'].mean()
-        if avg_rate >= 5.0:
-            rate_feedback = "which is excellent! Your audience is highly engaged."
-        elif avg_rate >= 3.0:
-            rate_feedback = "which is pretty good! Your content is connecting with your audience."
-        elif avg_rate >= 1.0:
-            rate_feedback = "which is decent, but there's room to grow your audience engagement."
-        else:
-            rate_feedback = "which means we have opportunities to improve how your audience interacts with your content."
-        insights.append(f"📈 On average, {avg_rate:.1f}% of your audience engages with each post, {rate_feedback}")
-
-        # Platform distribution
-        platform_counts = df['platform'].value_counts()
-        if len(platform_counts) > 0:
-            top_platform = platform_counts.index[0]
-            top_platform_count = platform_counts.iloc[0]
-            platform_pct = (top_platform_count / len(df)) * 100
-            insights.append(
-                f"📱 You're posting {platform_pct:.0f}% of your content on {top_platform.capitalize()}, "
-                f"that's {top_platform_count} out of {len(df)} posts."
-            )
-
-        # Engagement trend
-        if len(df) >= 3:
-            split_point = int(len(df) * 0.7)
+        
+        # Trend analysis
+        if len(df) >= 5:
+            split_point = int(len(df) * 0.6)
             early_df = df.iloc[:split_point]
             recent_df = df.iloc[split_point:]
+            
             early_engagement = early_df['engagement_score'].mean()
             recent_engagement = recent_df['engagement_score'].mean()
             change_pct = ((recent_engagement - early_engagement) / early_engagement * 100) if early_engagement > 0 else 0
             
-            if recent_engagement > early_engagement * 1.1:
+            if change_pct > 30:
                 insights.append(
-                    f"📈 Great news! Your engagement is growing. Your recent posts are performing {abs(change_pct):.0f}% "
-                    f"better than your earlier ones."
+                    f"🚀 Amazing momentum! Your recent posts are performing {change_pct:.0f}% better than your earlier ones. "
+                    f"Whatever you changed is working — keep that energy going!"
                 )
-            elif recent_engagement < early_engagement * 0.9:
+            elif change_pct > 10:
                 insights.append(
-                    f"📉 Your engagement has dropped by {abs(change_pct):.0f}% in recent posts. "
-                    f"Let's work on getting those numbers back up!"
+                    f"📈 You're trending upward! Recent content is getting {change_pct:.0f}% more engagement. "
+                    f"You're finding your groove."
+                )
+            elif change_pct < -20:
+                insights.append(
+                    f"📉 Heads up: your recent posts are down {abs(change_pct):.0f}% from earlier performance. "
+                    f"This happens to everyone — let's look at what was working before and get back on track!"
                 )
             else:
                 insights.append(
-                    "➡️ Your engagement is staying consistent, which is good. "
-                    "Now let's find ways to take it to the next level!"
+                    f"➡️ Your engagement is holding steady. Consistency is great, but let's experiment with new approaches "
+                    f"to break through to the next level!"
                 )
-
-        # Best performing category
-        category_perf = self.analyze_content_performance()
-        if len(category_perf) > 0:
-            best_category = max(category_perf, key=category_perf.get)
-            best_engagement = category_perf[best_category]
-            post_count = len(df[df['category'] == best_category])
-            category_pct = (post_count / len(df)) * 100
+        
+        # Posting frequency insight
+        if 'posting_time' in df.columns and len(df) > 1:
+            try:
+                df_with_dates = df.copy()
+                df_with_dates['posting_time'] = pd.to_datetime(df_with_dates['posting_time'])
+                date_range = (df_with_dates['posting_time'].max() - df_with_dates['posting_time'].min()).days
+                
+                if date_range > 0:
+                    posts_per_week = (total_posts / date_range) * 7
+                    
+                    if posts_per_week >= 7:
+                        insights.append(
+                            f"📅 You're posting about {posts_per_week:.1f}x per week — that's excellent consistency! "
+                            f"Regular posting keeps you in the algorithm's good graces."
+                        )
+                    elif posts_per_week >= 3:
+                        insights.append(
+                            f"📅 At {posts_per_week:.1f} posts per week, you've got a decent rhythm. "
+                            f"Bumping up to 5-7 posts weekly could give your reach a significant boost."
+                        )
+                    elif posts_per_week < 2:
+                        insights.append(
+                            f"📅 You're averaging about {posts_per_week:.1f} posts per week. "
+                            f"Increasing to 3-4 posts weekly could help you stay top of mind with your audience."
+                        )
+            except Exception:
+                pass
+        
+        # Platform presence insight
+        platform_counts = df['platform'].value_counts()
+        if len(platform_counts) >= 3:
+            platforms_list = ", ".join([p.capitalize() for p in platform_counts.index[:3]])
             insights.append(
-                f"🏆 Your {best_category} content is your superstar! It gets an average of {best_engagement:,.0f} interactions per post. "
-                f"You've posted {post_count} pieces of {best_category} content, which is {category_pct:.0f}% of all your posts."
+                f"🌐 You're active on {len(platform_counts)} platforms ({platforms_list}). "
+                f"Multi-platform presence helps you reach different audiences and reduces algorithm dependency!"
             )
-
-        # Best posting day
-        time_perf = self.analyze_time_performance()
-        best_day = time_perf.get('best_day_name', 'Monday')
-        best_day_engagement = time_perf.get('daily_performance', {}).get(time_perf.get('best_day', 0), 0)
-        insights.append(
-            f"📅 {best_day} is your best day to post! Your content gets an average of {best_day_engagement:,.0f} interactions "
-            f"when you share it on {best_day}s."
-        )
-
+        elif len(platform_counts) == 1:
+            single_platform = platform_counts.index[0].capitalize()
+            insights.append(
+                f"🎯 You're focused on {single_platform}. That's great for mastering one platform, "
+                f"but expanding to 2-3 platforms could significantly grow your overall reach."
+            )
+        
         return insights
 
-    def generate_recommendations(self) -> List[Dict[str, Any]]:
-        """Generate actionable recommendations"""
-        recommendations = []
+    def generate_recommendations(self) -> Dict[str, Any]:
+        """Generate categorized, dynamic actionable recommendations"""
         df = self.processed_data
         category_perf = self.analyze_content_performance()
         time_perf = self.analyze_time_performance()
-
-        # Content strategy recommendation
+        
+        timing_recommendations = self._generate_timing_recommendations(df, time_perf)
+        engagement_recommendations = self._generate_engagement_recommendations(df)
+        content_recommendations = self._generate_content_recommendations(df, category_perf)
+        growth_recommendations = self._generate_growth_recommendations(df)
+        
+        # Combine all recommendations for backward compatibility
+        all_recommendations = timing_recommendations + engagement_recommendations + content_recommendations + growth_recommendations
+        
+        return {
+            'all_recommendations': all_recommendations,
+            'recommendations_by_category': {
+                'timing': timing_recommendations,
+                'engagement': engagement_recommendations,
+                'content': content_recommendations,
+                'growth': growth_recommendations
+            }
+        }
+    
+    def _generate_timing_recommendations(self, df: pd.DataFrame, time_perf: Dict) -> List[Dict[str, Any]]:
+        """Generate timing-specific recommendations"""
+        recommendations = []
+        
+        # Platform-specific timing recommendation
+        platform_schedule = self.get_platform_specific_schedule()
+        platform_schedules = platform_schedule.get('platform_schedules', {})
+        data_source = platform_schedule.get('data_source', 'research data')
+        use_user_data = platform_schedule.get('use_user_data', False)
+        
+        if len(platform_schedules) > 0:
+            schedule_parts = []
+            total_weekly_posts = 0
+            
+            for platform, schedule in platform_schedules.items():
+                platform_name = schedule['platform_display']
+                posts_per_week = schedule['posts_per_week']
+                time_slots = schedule['time_slots']
+                total_weekly_posts += posts_per_week
+                
+                if len(time_slots) > 0:
+                    days_with_times = {}
+                    for slot in time_slots:
+                        day = slot['day']
+                        time_range = slot['time_range']
+                        if day not in days_with_times:
+                            days_with_times[day] = []
+                        days_with_times[day].append(time_range)
+                    
+                    day_schedules = []
+                    for day, times in days_with_times.items():
+                        if len(times) == 1:
+                            day_schedules.append(f"{day} between {times[0]}")
+                        else:
+                            times_text = " and ".join(times[:2])
+                            day_schedules.append(f"{day} between {times_text}")
+                    
+                    if len(day_schedules) > 4:
+                        day_text = ", ".join(day_schedules[:3]) + f", and {len(day_schedules) - 3} more days"
+                    elif len(day_schedules) > 1:
+                        day_text = ", ".join(day_schedules[:-1]) + f", and {day_schedules[-1]}"
+                    else:
+                        day_text = day_schedules[0] if day_schedules else ""
+                    
+                    schedule_parts.append({
+                        'platform': platform_name,
+                        'posts_per_week': posts_per_week,
+                        'schedule_text': day_text,
+                        'peak_description': schedule['peak_hours_description']
+                    })
+            
+            if use_user_data:
+                intro_text = (
+                    "Based on how your audience has responded to your posts, I've put together a personalized "
+                    "posting schedule for each platform you use. These times are when your followers are most active."
+                )
+            else:
+                intro_text = (
+                    "Since you're still building up your posting history, I've pulled together the best times to post "
+                    "based on what works for most creators on each platform. As you post more, I'll fine-tune these "
+                    "recommendations using your actual results."
+                )
+            
+            action_lines = [f"Here's your weekly posting schedule:"]
+            for part in schedule_parts:
+                action_lines.append(f"• {part['platform']}: Post {part['posts_per_week']}x per week — try {part['schedule_text']}")
+            
+            action_text = "\n".join(action_lines)
+            
+            recommendations.append({
+                'priority': 'high',
+                'category': 'Posting Schedule',
+                'action': action_text,
+                'reason': intro_text,
+                'expected_outcome': (
+                    f"Following this schedule can boost your reach by 30-50%. Each platform has its own rhythm — "
+                    f"by posting when your audience is most active, you're giving your content the best chance to be seen and shared."
+                ),
+                'platform_schedules': platform_schedules,
+                'data_source': data_source,
+                'total_weekly_posts': total_weekly_posts
+            })
+        
+        # Best hour optimization recommendation
+        best_hour = time_perf.get('best_hour', 12)
+        hourly_perf = time_perf.get('hourly_performance', {})
+        hourly_counts = time_perf.get('hourly_count', {})
+        
+        if len(hourly_counts) > 0:
+            most_posted_hour = max(hourly_counts, key=hourly_counts.get)
+            if most_posted_hour != best_hour:
+                best_hour_str = datetime.strptime(str(best_hour), '%H').strftime('%I %p').lstrip('0')
+                current_hour_str = datetime.strptime(str(most_posted_hour), '%H').strftime('%I %p').lstrip('0')
+                
+                best_engagement = hourly_perf.get(best_hour, 0)
+                current_engagement = hourly_perf.get(most_posted_hour, 0)
+                improvement = ((best_engagement - current_engagement) / current_engagement * 100) if current_engagement > 0 else 0
+                
+                if improvement > 15:
+                    recommendations.append({
+                        'priority': 'medium',
+                        'category': 'Timing Optimization',
+                        'action': f"Shift your posting time from {current_hour_str} to around {best_hour_str}",
+                        'reason': (
+                            f"You typically post around {current_hour_str}, but your content performs {improvement:.0f}% better "
+                            f"when posted around {best_hour_str}. Your audience is more active at that time!"
+                        ),
+                        'expected_outcome': (
+                            f"This simple timing shift could boost your engagement by {improvement:.0f}% without changing anything about your content. "
+                            f"It's one of the easiest wins in social media!"
+                        )
+                    })
+        
+        # Weekend strategy recommendation
+        daily_perf = time_perf.get('daily_performance', {})
+        daily_counts = time_perf.get('daily_count', {})
+        
+        if len(daily_perf) >= 5:
+            weekend_engagement = (daily_perf.get(5, 0) + daily_perf.get(6, 0)) / 2
+            weekday_engagement = sum([daily_perf.get(i, 0) for i in range(5)]) / 5
+            
+            weekend_posts = daily_counts.get(5, 0) + daily_counts.get(6, 0)
+            weekday_posts = sum([daily_counts.get(i, 0) for i in range(5)])
+            
+            if weekend_engagement > weekday_engagement * 1.3 and weekend_posts < weekday_posts * 0.3:
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Weekend Strategy',
+                    'action': "Add more weekend posts — your audience is 30%+ more active on Saturday and Sunday!",
+                    'reason': (
+                        f"Right now only {weekend_posts} of your {len(df)} posts are on weekends, but weekend posts "
+                        f"get significantly higher engagement. You're missing out on your audience's leisure time!"
+                    ),
+                    'expected_outcome': (
+                        "Posting 2-3 times on weekends could capture this untapped engagement. "
+                        "People have more time to scroll and engage when they're relaxing!"
+                    )
+                })
+            elif weekday_engagement > weekend_engagement * 1.3 and weekday_posts < weekend_posts * 0.5:
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Weekday Strategy',
+                    'action': "Focus more on weekday posts — that's when your audience is most engaged!",
+                    'reason': (
+                        f"Your weekday posts significantly outperform weekends. "
+                        f"Your audience might be more active during work breaks or commutes."
+                    ),
+                    'expected_outcome': (
+                        "Shifting more content to Monday-Friday could boost your overall engagement by 25-40%."
+                    )
+                })
+        
+        return recommendations
+    
+    def _generate_engagement_recommendations(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Generate dynamic engagement recommendations based on actual user data"""
+        recommendations = []
+        
+        total_comments = df['comments'].sum() if 'comments' in df.columns else 0
+        total_likes = df['likes'].sum() if 'likes' in df.columns else 0
+        total_shares = df['shares'].sum() if 'shares' in df.columns else 0
+        total_posts = len(df)
+        avg_comments = total_comments / total_posts if total_posts > 0 else 0
+        avg_engagement_rate = df['engagement_rate'].mean()
+        
+        # Dynamic engagement strategy based on comment-to-like ratio
+        if total_likes > 0:
+            comment_ratio = (total_comments / total_likes) * 100
+            
+            if comment_ratio < 3:
+                # Low comments - focus on conversation starters
+                recommendations.append({
+                    'priority': 'high',
+                    'category': 'Engagement Strategy',
+                    'action': (
+                        "Turn lurkers into commenters with these caption hooks:\n"
+                        "• Ask specific questions: \"What's YOUR go-to [topic]?\" instead of generic \"What do you think?\"\n"
+                        "• Create light debates: \"Hot take: [opinion]. Agree or disagree?\"\n"
+                        "• Use fill-in-the-blanks: \"My morning can't start without ___\"\n"
+                        "• Ask for recommendations: \"Drop your favorite [related item] in the comments!\""
+                    ),
+                    'reason': (
+                        f"You're getting {total_likes:,} likes but only {total_comments:,} comments — that's about "
+                        f"{comment_ratio:.1f} comments per 100 likes. Comments are worth 5x more than likes for algorithm reach! "
+                        f"Your audience likes your content but isn't talking about it yet."
+                    ),
+                    'expected_outcome': (
+                        "Posts with good comment sections get 2-3x more reach. By asking better questions, you can "
+                        f"turn those {total_likes:,} passive likes into active conversations!"
+                    )
+                })
+            elif comment_ratio >= 10:
+                # High comments - focus on building community
+                recommendations.append({
+                    'priority': 'high',
+                    'category': 'Community Building',
+                    'action': (
+                        "Your comment game is strong! Level up with these tactics:\n"
+                        "• Reply to comments with follow-up questions to keep threads going\n"
+                        "• Highlight great comments in your Stories with credit\n"
+                        "• Create content based on common questions from your comments\n"
+                        "• Pin your best comment responses to encourage more discussion"
+                    ),
+                    'reason': (
+                        f"You're averaging {avg_comments:.0f} comments per post — that's excellent! "
+                        f"You've built an engaged community. Now let's turn those commenters into superfans."
+                    ),
+                    'expected_outcome': (
+                        "Active community management can increase comment frequency by 40% and boost your "
+                        "overall reach. Your most engaged followers become your best ambassadors!"
+                    )
+                })
+            else:
+                # Medium comments - focus on response speed
+                recommendations.append({
+                    'priority': 'high',
+                    'category': 'Engagement Strategy',
+                    'action': (
+                        "Boost your engagement momentum with the 60-minute rule:\n"
+                        "• Reply to every comment within the first hour of posting\n"
+                        "• Set 15-minute check-ins for the first hour after posting\n"
+                        "• Use voice notes or video replies for standout responses\n"
+                        "• React to comments even if you can't type a full reply"
+                    ),
+                    'reason': (
+                        f"With {avg_comments:.0f} comments per post, you've got a foundation to build on. "
+                        f"The first hour after posting is critical — early engagement signals tell the algorithm your post is worth showing more."
+                    ),
+                    'expected_outcome': (
+                        "Creators who engage in the first hour typically see 2x the reach. "
+                        "Fast responses create a snowball effect as more people see the active conversation."
+                    )
+                })
+        
+        # Share optimization (if share data exists and is low)
+        if total_shares > 0 and total_likes > 0:
+            share_ratio = (total_shares / total_likes) * 100
+            
+            if share_ratio < 5:
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Shareability',
+                    'action': (
+                        "Make your content more shareable:\n"
+                        "• Create \"tag a friend who...\" moments in your content\n"
+                        "• Share useful tips or hacks people will want to save and send\n"
+                        "• Add relatable content that makes people say \"this is so me!\"\n"
+                        "• Create carousel posts with valuable takeaways worth saving"
+                    ),
+                    'reason': (
+                        f"You're getting {total_shares:,} shares across {total_posts} posts — about {(total_shares/total_posts):.0f} per post. "
+                        f"Shares are the ultimate compliment: people are putting your content in front of their own followers!"
+                    ),
+                    'expected_outcome': (
+                        "Each share exposes your content to a whole new audience. Increasing shareability can "
+                        "dramatically expand your organic reach beyond your existing followers."
+                    )
+                })
+        
+        # Story/cross-promotion based on engagement patterns
+        if 'platform' in df.columns:
+            platforms = df['platform'].unique()
+            if 'instagram' in platforms or 'facebook' in platforms:
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Cross-Promotion',
+                    'action': (
+                        "Amplify your posts with Stories:\n"
+                        "• Tease new posts in your Stories with \"New post alert!\" stickers\n"
+                        "• Share behind-the-scenes of your content creation\n"
+                        "• Use countdown stickers for upcoming content\n"
+                        "• Reshare posts to Stories after 24 hours for a second wave of engagement"
+                    ),
+                    'reason': (
+                        "Stories get 3-5x more visibility than feed posts for many accounts. "
+                        "Using Stories to drive people to your posts creates a powerful engagement loop."
+                    ),
+                    'expected_outcome': (
+                        "Creators who promote feed posts in Stories see 20-40% higher engagement. "
+                        "It's like giving your content a second chance to be discovered!"
+                    )
+                })
+        
+        # Engagement rate specific recommendations
+        if avg_engagement_rate < 2:
+            recommendations.append({
+                'priority': 'high',
+                'category': 'Audience Connection',
+                'action': (
+                    "Reconnect with your audience:\n"
+                    "• Post more personal/behind-the-scenes content to build connection\n"
+                    "• Go live to interact in real-time and boost visibility\n"
+                    "• Use polls and quizzes in Stories to increase interaction\n"
+                    "• Reply to DMs and story mentions promptly"
+                ),
+                'reason': (
+                    f"Your engagement rate is {avg_engagement_rate:.1f}%, which suggests your content might not be "
+                    f"reaching your full audience or they're scrolling past. Let's work on making deeper connections!"
+                ),
+                'expected_outcome': (
+                    "Showing more authenticity typically boosts engagement rates by 30-50%. "
+                    "People follow people, not just content — let them see the real you!"
+                )
+            })
+        elif avg_engagement_rate >= 8:
+            recommendations.append({
+                'priority': 'medium',
+                'category': 'Engagement Leverage',
+                'action': (
+                    "Your engagement is amazing — now leverage it:\n"
+                    "• Partner with creators who have similar engagement rates\n"
+                    "• Consider launching a community (Discord, newsletter, etc.)\n"
+                    "• Test monetization opportunities with your engaged audience\n"
+                    "• Create exclusive content for your most engaged followers"
+                ),
+                'reason': (
+                    f"With a {avg_engagement_rate:.1f}% engagement rate, you're in the top tier of creators! "
+                    f"Your audience is highly invested in what you share. This opens doors to partnerships and monetization."
+                ),
+                'expected_outcome': (
+                    "Highly engaged audiences are worth 10x more than large passive followings. "
+                    "Brands specifically look for engagement rates like yours!"
+                )
+            })
+        
+        return recommendations
+    
+    def _generate_content_recommendations(self, df: pd.DataFrame, category_perf: Dict) -> List[Dict[str, Any]]:
+        """Generate content-specific recommendations"""
+        recommendations = []
+        
         if len(category_perf) > 0:
+            # Top performing content recommendation
             best_category = max(category_perf, key=category_perf.get)
             best_engagement = category_perf[best_category]
             category_posts = len(df[df['category'] == best_category])
             category_pct = (category_posts / len(df)) * 100
             
-            # Calculate how many more posts to recommend
             total_posts = len(df)
-            current_posts = category_posts
-            target_percentage = 45  # Target 40-50%
-            needed_posts = max(3, int((target_percentage / 100) * total_posts) - current_posts)
+            target_percentage = 45
+            needed_posts = max(3, int((target_percentage / 100) * total_posts) - category_posts)
             
             recommendations.append({
                 'priority': 'high',
                 'category': 'Content Strategy',
-                'action': f'Create {needed_posts} more {best_category} posts over the next week',
+                'action': f"Double down on {best_category} content — share {needed_posts} more this week!",
                 'reason': (
-                    f"Your {best_category} content performs amazingly well, getting an average of {best_engagement:,.0f} likes, "
-                    f"comments, and shares combined per post. Right now, only {category_pct:.0f}% of your content falls into this category."
+                    f"Your {best_category} content is a hit! It averages {best_engagement:,.0f} interactions per post. "
+                    f"Currently only {category_pct:.0f}% of your content is {best_category} — there's room to grow!"
                 ),
                 'expected_outcome': (
-                    f"By increasing your {best_category} content to 40-50% of your total posts, you could significantly "
-                    f"boost your overall engagement and grow your audience faster."
+                    f"Increasing {best_category} content to 40-50% of your posts could significantly boost overall engagement. "
+                    f"Your audience is clearly telling you what they want!"
                 )
             })
-
-        # Optimal timing recommendation
-        hourly_perf = time_perf.get('hourly_performance', {})
-        if len(hourly_perf) > 0:
-            best_hours = sorted(hourly_perf.items(), key=lambda x: x[1], reverse=True)[:3]
-            best_hour_value = best_hours[0][1]
             
-            # Get best days
-            daily_perf = time_perf.get('daily_performance', {})
-            best_days_sorted = sorted(daily_perf.items(), key=lambda x: x[1], reverse=True)[:3]
-            day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            top_day_names = [day_names[int(day)] for day, _ in best_days_sorted]
+            # Second best category recommendation (if exists)
+            if len(category_perf) >= 2:
+                sorted_categories = sorted(category_perf.items(), key=lambda x: x[1], reverse=True)
+                second_best = sorted_categories[1][0]
+                second_engagement = sorted_categories[1][1]
+                second_posts = len(df[df['category'] == second_best])
+                
+                if second_posts < 3:
+                    recommendations.append({
+                        'priority': 'medium',
+                        'category': 'Content Diversification',
+                        'action': f"Experiment more with {second_best} content — it's showing promise!",
+                        'reason': (
+                            f"Your {second_best} posts average {second_engagement:,.0f} engagement, but you've only posted {second_posts}. "
+                            f"There might be untapped potential here!"
+                        ),
+                        'expected_outcome': (
+                            f"Testing more {second_best} content will help you understand if it can become "
+                            f"a consistent performer in your content mix."
+                        )
+                    })
             
-            # Create time slots
-            times_list = []
-            for i, (hour, engagement) in enumerate(best_hours):
-                hour_fmt = format_hour_12h(int(hour))
-                day_name = top_day_names[i % len(top_day_names)]
-                times_list.append(f"{day_name} at {hour_fmt} {self.timezone_display_name}")
-            
-            time_text = ", ".join(times_list[:-1]) + f", and {times_list[-1]}" if len(times_list) > 1 else times_list[0]
-            
-            recommendations.append({
-                'priority': 'high',
-                'category': 'Posting Schedule',
-                'action': f'Schedule your posts for these times: {time_text}',
-                'reason': (
-                    f"Based on your past posts, these time slots get the highest engagement, averaging {best_hour_value:,.0f} "
-                    f"interactions. Your audience is most active and ready to engage during these windows."
-                ),
-                'expected_outcome': (
-                    f"Posting during these peak times can increase your reach and engagement by 30-50% compared to off-peak hours. "
-                    f"Aim to publish 2-3 posts during these optimal time slots each week."
-                )
-            })
-
-        # Engagement strategy recommendation
-        total_comments = df['comments'].sum()
-        total_posts_with_comments = len(df[df['comments'] > 0])
-        avg_comments_per_post = total_comments / len(df) if len(df) > 0 else 0
+            # Underperforming content adjustment
+            if len(category_perf) >= 3:
+                worst_category = min(category_perf, key=category_perf.get)
+                worst_engagement = category_perf[worst_category]
+                avg_engagement = sum(category_perf.values()) / len(category_perf)
+                
+                worst_posts = len(df[df['category'] == worst_category])
+                if worst_posts >= 2 and worst_engagement < avg_engagement * 0.6:
+                    recommendations.append({
+                        'priority': 'low',
+                        'category': 'Content Optimization',
+                        'action': f"Rethink your {worst_category} approach or reduce it",
+                        'reason': (
+                            f"Your {worst_category} content is performing {((avg_engagement - worst_engagement) / avg_engagement * 100):.0f}% "
+                            f"below average. It might not resonate with your current audience."
+                        ),
+                        'expected_outcome': (
+                            f"Either refresh how you do {worst_category} content (different format, angle, or style) "
+                            f"or reallocate that effort to your top performers."
+                        )
+                    })
         
-        recommendations.append({
-            'priority': 'high',
-            'category': 'Engagement Strategy',
-            'action': (
-                'Boost your engagement with this proven strategy: '
-                '1) Share your post with a question like "What do you think?" or "Have you tried this?" '
-                '2) Respond to every single comment within the first 24 hours of posting '
-                '3) Ask follow-up questions to keep the conversation going'
-            ),
-            'reason': (
-                f"You've received {total_comments:,} comments across {total_posts_with_comments} of your posts "
-                f"(that's about {avg_comments_per_post:.1f} comments per post). When you actively reply to comments, "
-                f"social media algorithms see your content as valuable and show it to 2-3 times more people."
-            ),
-            'expected_outcome': (
-                "By replying to 100% of your comments within 24 hours, you can potentially double your post reach. "
-                "The algorithm rewards creators who foster genuine conversations, which means more visibility and more followers for you!"
-            )
-        })
-
-        # Platform diversification (if heavily focused on one platform)
+        # Content format recommendations based on platform
+        if 'content_type' in df.columns:
+            content_types = df['content_type'].value_counts()
+            if 'video' in content_types.index:
+                video_engagement = df[df['content_type'] == 'video']['engagement_score'].mean()
+                other_engagement = df[df['content_type'] != 'video']['engagement_score'].mean()
+                
+                if video_engagement > other_engagement * 1.3:
+                    recommendations.append({
+                        'priority': 'medium',
+                        'category': 'Content Format',
+                        'action': "Lean into video — it's your engagement superpower!",
+                        'reason': (
+                            f"Your video content gets {((video_engagement - other_engagement) / other_engagement * 100):.0f}% more engagement "
+                            f"than other formats. Platforms are also pushing video content more in 2024."
+                        ),
+                        'expected_outcome': (
+                            "Increasing video content from current levels could boost overall engagement significantly. "
+                            "Even simple talking-head videos can outperform static posts!"
+                        )
+                    })
+        
+        return recommendations
+    
+    def _generate_growth_recommendations(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """Generate growth-focused recommendations"""
+        recommendations = []
+        total_posts = len(df)
+        
+        # Posting frequency recommendation
+        if total_posts < 15:
+            posts_needed = 20 - total_posts
+            recommendations.append({
+                'priority': 'medium',
+                'category': 'Posting Consistency',
+                'action': f"Build momentum with {posts_needed} more posts over the next 2 weeks",
+                'reason': (
+                    f"With {total_posts} posts, you're still building your presence. "
+                    f"Consistency is key for algorithm favor — platforms reward creators who show up regularly."
+                ),
+                'expected_outcome': (
+                    "Posting 3-5 times per week for 2 weeks straight can increase your reach by 40-60%. "
+                    "The algorithm starts recognizing you as an active creator!"
+                )
+            })
+        
+        # Platform diversification
         platform_counts = df['platform'].value_counts()
         if len(platform_counts) > 0:
             top_platform = platform_counts.index[0]
-            top_platform_pct = (platform_counts.iloc[0] / len(df)) * 100
+            top_platform_pct = (platform_counts.iloc[0] / total_posts) * 100
             
-            if top_platform_pct > 70:
-                other_platforms = [p for p in ['instagram', 'youtube', 'linkedin', 'threads', 'tiktok', 'facebook'] 
-                                 if p != top_platform and p not in platform_counts.index[:2]]
-                suggested_platform = other_platforms[0] if other_platforms else 'Instagram'
+            if top_platform_pct > 70 and len(platform_counts) < 3:
+                suggestions = {
+                    'instagram': ['TikTok', 'YouTube Shorts'],
+                    'tiktok': ['Instagram Reels', 'YouTube Shorts'],
+                    'youtube': ['Instagram', 'TikTok'],
+                    'facebook': ['Instagram', 'LinkedIn'],
+                    'linkedin': ['Twitter/X', 'YouTube'],
+                    'threads': ['Instagram', 'Twitter/X']
+                }
+                suggested = suggestions.get(top_platform, ['Instagram', 'TikTok'])
                 
                 recommendations.append({
                     'priority': 'medium',
-                    'category': 'Platform Diversification',
-                    'action': f'Start posting on {suggested_platform.capitalize()} to expand your reach',
+                    'category': 'Platform Expansion',
+                    'action': f"Expand to {suggested[0]} — your content would do well there!",
                     'reason': (
-                        f"Currently, {top_platform_pct:.0f}% of your content is on {top_platform.capitalize()}. "
-                        f"While it's great to focus on one platform, diversifying can help you reach new audiences "
-                        f"and protect your brand if algorithms change."
+                        f"You're {top_platform_pct:.0f}% focused on {top_platform.capitalize()}. "
+                        f"Diversifying protects you from algorithm changes and reaches new audiences."
                     ),
                     'expected_outcome': (
-                        f"By repurposing your best {top_platform.capitalize()} content for {suggested_platform.capitalize()}, "
-                        f"you can tap into a fresh audience without creating entirely new content. Start with 1-2 posts per week."
+                        f"Repurposing your best {top_platform.capitalize()} content for {suggested[0]} "
+                        f"can grow your total audience by 30-50% with minimal extra effort."
                     )
                 })
-
-        # Content consistency recommendation
-        if len(df) < 10:
-            posts_needed = 12 - len(df)
-            recommendations.append({
-                'priority': 'medium',
-                'category': 'Content Consistency',
-                'action': f'Increase your posting frequency by adding {posts_needed} more posts in the next two weeks',
-                'reason': (
-                    f"You've posted {len(df)} times recently. To build momentum and train the algorithm to favor your content, "
-                    f"you need to post more consistently. The algorithm rewards accounts that post regularly."
-                ),
-                'expected_outcome': (
-                    "Posting at least 3-4 times per week helps you stay top-of-mind with your audience and signals to the "
-                    "algorithm that you're an active creator worth promoting. This can lead to 40-60% more reach over time."
-                )
-            })
-
+        
+        # Trend/engagement analysis for growth
+        if total_posts >= 5:
+            split_point = int(total_posts * 0.6)
+            recent_df = df.iloc[split_point:]
+            early_df = df.iloc[:split_point]
+            
+            recent_engagement = recent_df['engagement_score'].mean()
+            early_engagement = early_df['engagement_score'].mean()
+            
+            if recent_engagement < early_engagement * 0.8:
+                recommendations.append({
+                    'priority': 'high',
+                    'category': 'Trend Reversal',
+                    'action': (
+                        "Your recent posts are down — here's how to bounce back:\n"
+                        "• Revisit what made your top-performing posts work\n"
+                        "• Try posting at different times to test new audiences\n"
+                        "• Engage heavily with your audience this week (comments, DMs, Stories)\n"
+                        "• Consider a bold, attention-grabbing post to reset momentum"
+                    ),
+                    'reason': (
+                        f"Your recent posts are averaging {((early_engagement - recent_engagement) / early_engagement * 100):.0f}% "
+                        f"less engagement than earlier. This happens to everyone — the key is to adapt quickly!"
+                    ),
+                    'expected_outcome': (
+                        "Most engagement dips are temporary. Taking action within 1-2 weeks typically "
+                        "helps creators recover and sometimes even surpass previous levels."
+                    )
+                })
+            elif recent_engagement > early_engagement * 1.3:
+                recommendations.append({
+                    'priority': 'medium',
+                    'category': 'Momentum Capture',
+                    'action': (
+                        "You're on a hot streak — capitalize on it:\n"
+                        "• Post more frequently this week to ride the wave\n"
+                        "• Double down on the content style that's working\n"
+                        "• Engage extra heavily with new followers\n"
+                        "• Consider going live to connect with your growing audience"
+                    ),
+                    'reason': (
+                        f"Your recent content is performing {((recent_engagement - early_engagement) / early_engagement * 100):.0f}% "
+                        f"better than before! The algorithm is favoring you right now."
+                    ),
+                    'expected_outcome': (
+                        "Creators who capitalize on momentum often see sustained growth. "
+                        "This is the time to push — you have algorithmic wind at your back!"
+                    )
+                })
+        
         return recommendations
 
 
@@ -933,13 +2041,20 @@ class RecommendationService:
         content_perf = self.engine.analyze_content_performance()
         content_perf_rate = self.engine.analyze_content_performance_by_rate()
         time_perf = self.engine.analyze_time_performance()
+        time_perf_by_platform = self.engine.analyze_time_performance_by_platform()  # NEW
         platform_perf = self.engine.analyze_platform_performance()
         platform_dist = self.engine.analyze_platform_distribution()
         top_posts = self.engine.get_top_performing_posts(5)
         category_breakdown = self.engine.get_content_category_breakdown()
         category_insights = self.engine.get_content_category_insights()
-        key_insights = self.engine.generate_key_insights()
-        actionable_recos = self.engine.generate_recommendations()
+        
+        # Get categorized insights and recommendations (no duplicates)
+        insights_data = self.engine.generate_key_insights()
+        recommendations_data = self.engine.generate_recommendations()
+        
+        # Only use categorized versions (no duplicates)
+        insights = insights_data.get('insights_by_category', {})
+        recommendations = recommendations_data.get('recommendations_by_category', {})
 
         posts_by_platform = df["platform"].value_counts().to_dict()
         content_analysis = []
@@ -955,6 +2070,9 @@ class RecommendationService:
             "day_analysis": time_perf.get("day_confidence", "Medium"),
         }
         optimal_slots = time_perf.get("optimal_posting_schedule", [])
+        
+        # Get platform-specific posting schedule
+        platform_specific_schedule = self.engine.get_platform_specific_schedule()
 
         # ✅ FIX: Clean all data for JSON serialization
         def clean_for_json(data):
@@ -979,16 +2097,18 @@ class RecommendationService:
             content_performance=clean_for_json(content_perf),
             content_performance_by_rate=clean_for_json(content_perf_rate),
             time_performance=clean_for_json(time_perf),
+            time_performance_by_platform=clean_for_json(time_perf_by_platform),  # NEW
             platform_performance=platform_perf,
             top_performing_posts=clean_for_json(top_posts),
-            key_insights=key_insights,
-            actionable_recommendations=clean_for_json(actionable_recos),
+            insights=clean_for_json(insights),
+            recommendations=clean_for_json(recommendations),
             confidence_levels=confidence_levels,
             content_analysis=content_analysis,
             content_category_breakdown=clean_for_json(category_breakdown),
             content_category_insights=category_insights,
             optimal_posting_schedule=optimal_slots,
             platform_analysis=clean_for_json(platform_dist),
+            platform_specific_schedule=clean_for_json(platform_specific_schedule),
         )
         
         data_dict = response_data.model_dump()
@@ -998,4 +2118,3 @@ class RecommendationService:
             "status": "success",
             "data": cleaned_data
         }
-
