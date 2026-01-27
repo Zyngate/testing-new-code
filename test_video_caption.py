@@ -2,7 +2,7 @@ import asyncio
 from services.video_caption_service import caption_from_video_file
 
 async def run_test():
-    video_path = r"C:\Users\DELL\Downloads\MicrosoftTeams-video.mp4"
+    video_path = r"C:\Users\DELL\Downloads\jerome vs. trump.mp4"
 
     platforms = ["instagram", "linkedin", "youtube","Tiktok","Threads"]
 
@@ -10,9 +10,6 @@ async def run_test():
 
     print("\n===== TRANSCRIPT =====")
     print(result["transcript"])
-
-    print("\n===== SUMMARY =====")
-    print(result["text_summary"])
 
     print("\n===== VISUAL SUMMARY =====")
     print(result["visual_summary"])

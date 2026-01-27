@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stelle Task Automation Demo</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+    }
+    input, select, button {
+      padding: 8px;
+      margin: 6px 0;
+      width: 100%;
+    }
+    .box {
+      border: 1px solid #ddd;
+      padding: 15px;
+      margin-top: 20px;
+    }
+    h2 {
+      margin-top: 0;
+    }
+    pre {
+      background: #f6f6f6;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🧠 Stelle Task Automation – Workflow Demo</h1>
+
+  <!-- ========================= -->
+  <!-- CREATE TASK -->
+  <!-- ========================= -->
+  <div class="box">
+    <h2>1️⃣ Schedule a Task</h2>
+
+    <label>User ID</label>
+    <input id="user_id" value="demo-user-123" />
+
+    <label>Task Description</label>
+    <input id="description" placeholder="Give me 3 productivity tips" />
+
+    <label>Run At</label>
+    <input id="scheduled_time" type="datetime-local" />
+
+    <label>Frequency</label>
+    <select id="frequency">
+      <option value="">One-time</option>
+      <option value="daily">Daily</option>
+      <option value="weekly">Weekly</option>
+      <option value="monthly">Monthly</option>
+    </select>
+
+    <label>Weekly Days (for weekly)</label>
+    <input id="days" placeholder="Mon,Thu" />
+
+    <label>Monthly Date (for monthly)</label>
+    <input id="date" type="number" min="1" max="31" />
+
+    <button onclick="createTask()">Create Task</button>
+
+    <pre id="create_result"></pre>
+  </div>
+
+  <!-- ========================= -->
+  <!-- VIEW TASKS -->
+  <!-- ========================= -->
+  <div class="box">
+    <h2>2️⃣ Scheduled Tasks</h2>
+    <button onclick="loadTasks()">Refresh Tasks</button>
+    <pre id="tasks"></pre>
+  </div>
+
+  <!-- ========================= -->
+  <!-- VIEW OUTPUT -->
+  <!-- ========================= -->
+  <div class="box">
+    <h2>3️⃣ Generated Output</h2>
+    <button onclick="loadOutputs()">Refresh Output</button>
+    <pre id="outputs"></pre>
+  </div>
+
+<script>
+const API_BASE = "https://testing-new-code-9onw.onrender.com"; // change if needed
+
+async function createTask() {
+  const payload = {
+    user_id: document.getElementById("user_id").value,
+    description: document.getElementById("description").value,
+    scheduled_datetime: document.getElementById("scheduled_time").value,
+    frequency: document.getElementById("frequency").value || null,
+    days: document.getElementById("days").value
+      ? document.getElementById("days").value.split(",")
+      : [],
+    date: document.getElementById("date").value
+      ? Number(document.getElementById("date").value)
+      : null
+  };
+
+  const res = await fetch(`${API_BASE}/tasks/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  document.getElementById("create_result").textContent =
+    JSON.stringify(data, null, 2);
+}
+
+async function loadTasks() {
+  const userId = document.getElementById("user_id").value;
+  const res = await fetch(`${API_BASE}/tasks/tasks?user_id=${userId}`);
+  const data = await res.json();
+  document.getElementById("tasks").textContent =
+    JSON.stringify(data, null, 2);
+}
+
+async function loadOutputs() {
+  const userId = document.getElementById("user_id").value;
+  const res = await fetch(`${API_BASE}/tasks/blogs?user_id=${userId}`);
+  const data = await res.json();
+  document.getElementById("outputs").textContent =
+    JSON.stringify(data, null, 2);
+}
+</script>
+
+</body>
+</html>

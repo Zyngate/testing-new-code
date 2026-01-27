@@ -9,7 +9,7 @@ from config import logger
 from services.post_creation_service import create_post_from_uploaded_video
 
 
-router = APIRouter(prefix="/posts", tags=["Posts"])
+router = APIRouter(tags=["Posts"])  # Removed prefix - main.py already adds /posts
 
 
 # -------------------------------------------------------
@@ -155,19 +155,13 @@ async def upload_video_and_schedule(payload: dict):
     if not all([user_id, cloudinary_url, platform]):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    post = await create_post_from_uploaded_video(
+    result = await create_post_from_uploaded_video(
         user_id=user_id,
         cloudinary_url=cloudinary_url,
         platform=platform
     )
 
-    return {
-    "success": True,
-    "scheduledAt": post["scheduledAt"],
-    "caption": post["caption"],
-    "platform": platform,
-    "reason": post["recommendationReason"]
-}
+    return result
 
 
 

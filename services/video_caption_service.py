@@ -22,7 +22,7 @@ from services.post_generator_service import (
 # LLM / Vision model names
 VISION_MODEL = "llava-v1.5-7b"  # change if you prefer another Groq vision model
 STT_MODEL = "whisper-large-v3"
-SUMMARIZE_MODEL = "gpt-4o-mini"  # used only for text-compression if desired
+SUMMARIZE_MODEL = "llama-3.3-70b-versatile" # used only for text-compression if desired
 
 # TEMP directory
 # TEMP directory (outside project to avoid reload loop)
@@ -85,7 +85,7 @@ Return only ONE value:
 - OR "unknown"
 """
 
-    resp = groq_generate_text("gpt-4o-mini", prompt)
+    resp = groq_generate_text("llama-3.3-70b-versatile", prompt)
     if hasattr(resp, "__await__"):
         resp = await resp
     return resp.strip()
@@ -131,7 +131,11 @@ async def get_transcript_groq(audio_path: str) -> str:
     # Groq client is sync in many installs; wrap in thread
     def _blocking_transcribe(path: str) -> str:
         with open(path, "rb") as f:
-            resp = client.audio.transcriptions.create(file=f, model=STT_MODEL)
+            # Use the correct Groq API endpoint for audio transcriptions
+            resp = client.audio.transcriptions.create(
+                file=(os.path.basename(path), f),
+                model=STT_MODEL
+            )
         # response shape varies; try common fields
         if hasattr(resp, "text"):
             return (resp.text or "").strip()
@@ -142,6 +146,11 @@ async def get_transcript_groq(audio_path: str) -> str:
     try:
         transcript = await asyncio.to_thread(_blocking_transcribe, audio_path)
         return transcript
+    except AttributeError as e:
+        # If 'audio' attribute doesn't exist, log and try alternative
+        logger.error(f"Groq client doesn't support audio attribute: {e}")
+        logger.warning("Audio transcription is not available with current Groq SDK version")
+        return ""
     except Exception as e:
         logger.error(f"Groq STT transcription failed: {e}")
         return ""
@@ -184,7 +193,7 @@ OCR text:
 {text}
 """
 
-    resp = groq_generate_text("gpt-4o-mini", prompt)
+    resp = groq_generate_text("llama-3.3-70b-versatile", prompt)
 
     # groq_generate_text may be sync or async
     if hasattr(resp, "__await__"):
@@ -347,7 +356,7 @@ Return ONE value:
 - Full name
 - OR "unknown"
 """
-    resp = groq_generate_text("gpt-4o-mini", prompt)
+    resp = groq_generate_text("llama-3.3-70b-versatile", prompt)
     if hasattr(resp, "__await__"):
         resp = await resp
     return resp.strip()
@@ -419,6 +428,10 @@ def clean_transcript_for_caption(transcript: str) -> str:
 # 5. MAIN PIPELINE (Groq STT + Vision)
 # -----------------------------------------------------
 async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None) -> Dict[str, Any]:
+    # 🔒 Defensive fix: flatten platforms if nested
+    if platforms and isinstance(platforms[0], list):
+        platforms = platforms[0]
+
     # 1. audio
     try:
         audio_path = await extract_audio_from_video(video_filepath)

@@ -4,7 +4,15 @@ pip install -r requirements.txt
 pip install uvicorn fastapi
 
 uvicorn main:app --reload
+
 uvicorn test1:app --reload
+
+{
+  "userId": "test_user_1",
+  "cloudinaryUrl": "https://res.cloudinary.com/ddkdwltiz/video/upload/v1766556503/scheduler_videos/acmhtme9jm8kxtjpxlg2.mp4",
+  "platform": ["instagram", "youtube", "tiktok"]
+}
+
 
 python -m venv stelle_env
 stelle_env\Scripts\activate
@@ -12,10 +20,126 @@ stelle_env\Scripts\activate
 cd Stelle-backend-code-main
 pip install pymongo
 
-git add services/post_generator_service.py 
+git add services/ai_service.py routes/chat_routes.py
 
-git commit -m "Updated platform-wise hashtags & caption generator"
+git commit -m "Updated endpoint visulaize"
 git push origin main
+
+
+post_generation_routes
+
+
+# WebSocket DeepSearch
+@router.websocket("/ws/deepsearch/{query_id}")
+async def ws_deepsearch(websocket: WebSocket, query_id: str):
+    await websocket.accept()
+
+    # Validate incoming query_id
+    if query_id not in deepsearch_jobs:
+        await websocket.send_json({"step": "error", "message": "Invalid query_id"})
+        await websocket.close()
+        return
+
+    job = deepsearch_jobs.pop(query_id)
+    prompt = job["prompt"]
+
+    try:
+        # Step 1 — tell frontend we're starting
+        await websocket.send_json({
+            "step": "started",
+            "message": "Running deepsearch..."
+        })
+
+        # Step 2 — simulate progress (optional)
+        await asyncio.sleep(1)
+        await websocket.send_json({
+            "step": "collecting",
+            "message": "Gathering research..."
+        })
+        await asyncio.sleep(1)
+
+        # Step 3 — REAL DEEPSEARCH LLM CALL (correct indentation)
+        client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
+
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a deep research assistant. Provide detailed factual analysis."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.4,
+            max_completion_tokens=1500,
+        )
+
+        final_answer = response.choices[0].message.content
+
+        # Step 4 — Send final answer to frontend
+        await websocket.send_json({
+            "step": "done",
+            "result": final_answer
+        })
+
+    except WebSocketDisconnect:
+        print("Deepsearch client disconnected")
+
+    except Exception as e:
+        await websocket.send_json({"step": "error", "message": str(e)})
+
+    finally:
+        await websocket.close()
+
+#deepsearch
+async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
+    """
+    REAL DeepSearch-like implementation.
+    Uses Groq compound-beta (browsing model) with your DEEPSEARCH key.
+    Returns: summary, sources[]
+    """
+
+    try:
+        if not deepsearch_client:
+            return "DeepSearch client missing API key.", []
+
+        # 1️⃣ Clarify the query
+        clarify = deepsearch_client.chat.completions.create(
+            model="compound-beta",
+            messages=[
+                {"role": "system", "content": "You are an elite research analyst. Your job is to investigate any topic deeply, provide evidence-backed insights, and explain the reasoning in a structured, academically rigorous style. Cite sources when possible."},
+                {"role": "user", "content": query}
+            ]
+        )
+        clarified_query = clarify.choices[0].message.content.strip()
+
+        # 2️⃣ Ask compound-beta to research deeply
+        research = deepsearch_client.chat.completions.create(
+            model="compound-beta",
+            messages=[
+                {"role": "system", "content": "Research deeply. Summarize findings and cite sources."},
+                {"role": "user", "content": clarified_query}
+            ]
+        )
+
+        summary = research.choices[0].message.content or ""
+
+        # 3️⃣ Extract sources from executed browsing tools
+        sources = []
+        executed = getattr(research.choices[0].message, "executed_tools", [])
+
+        for tool in executed:
+            if tool.type == "search" and hasattr(tool, "search_results"):
+                for hit in tool.search_results.results:
+                    sources.append({
+                        "title": getattr(hit, "title", None),
+                        "url": getattr(hit, "url", None),
+                    })
+
+        return summary, sources
+
+    except Exception as e:
+        logger.error(f"DeepSearch failed: {e}")
+        return "DeepSearch unavailable.", []
+
+
 
 
 

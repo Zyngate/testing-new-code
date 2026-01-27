@@ -44,9 +44,11 @@ def post_scheduler():
                 )
 
                 # 3️⃣ Fetch OAuth credentials
+                # Use case-insensitive regex because DB stores "Instagram" not "instagram"
+                import re
                 auth = auth_col.find_one({
                     "userId": user_id,
-                    "platform": platform
+                    "platform": {"$regex": f"^{re.escape(platform)}$", "$options": "i"}
                 })
 
                 if not auth:
