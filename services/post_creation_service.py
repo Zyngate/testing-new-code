@@ -1,54 +1,52 @@
 import tempfile
 import os
 import requests
-from datetime import datetime, timedelta, timezone
 import asyncio
+from datetime import datetime, timedelta, timezone
+
+from groq import Groq
 
 from database import db
-from config import logger
+from config import logger, GROQ_API_KEY_CAPTION
+from services.image_caption_service import caption_from_image_file
 from services.video_caption_service import caption_from_video_file
 from services.time_slot_service import (
-    TimeSlotService,
     get_optimal_times_for_platforms,
     auto_refresh_analytics_for_user,
     PLATFORM_NAME_MAP,
-    PLATFORM_MINUTE_OFFSET,
-)
-from services.recommendation_service import (
-    RecommendationService,
-    InstagramPost,
-    YouTubePost,
-    TikTokPost,
-    FacebookPost,
-    LinkedInPost,
-    ThreadsPost,
 )
 
-# Limits how many videos are processed at once
+# -----------------------------------
+# Concurrency control
+# -----------------------------------
 VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(3)
 
-PLATFORM_MODEL_MAP = {
-    "instagram": InstagramPost,
-    "youtube": YouTubePost,
-    "tiktok": TikTokPost,
-    "facebook": FacebookPost,
-    "linkedin": LinkedInPost,
-    "threads": ThreadsPost,
-}
 
-recommendation_service = RecommendationService()
+# -----------------------------------
+# Media type detection
+# -----------------------------------
+def detect_media_type(url: str) -> str:
+    url = url.lower()
+    if url.endswith((".mp4", ".mov", ".webm")):
+        return "VIDEO"
+    return "IMAGE"
 
 
-async def create_post_from_uploaded_video(
+# -----------------------------------
+# MAIN PIPELINE
+# -----------------------------------
+async def create_post_from_uploaded_media(
     user_id: str,
     cloudinary_url: str,
-    platform
+    platform,
+    schedule_mode: str = "AUTO",
+    scheduled_at: dict | None = None,
 ):
     """
     SYSTEM-LEVEL AI PIPELINE:
-    1. Video understanding
+    1. Media understanding (video / image)
     2. Caption + hashtag generation
-    3. Content-aware best-time recommendation (uses user data if ≥15 posts, else AI research)
+    3. Best-time recommendation OR manual time
     4. Save scheduled posts (per platform)
     """
 
@@ -74,82 +72,117 @@ async def create_post_from_uploaded_video(
         logger.info("🧠 Starting AI post creation pipeline")
 
         # -----------------------------
-        # 0️⃣ AUTO-REFRESH ANALYTICS (before caption generation)
+        # Auto-refresh analytics
         # -----------------------------
-        # Automatically fetch latest posts from Meta API for Meta platforms
-        # Uses OAuth tokens stored in oauthcredentials collection
         meta_platforms = [p for p in platforms if p in ["instagram", "facebook"]]
         if meta_platforms:
-            logger.info(f"🔄 Auto-refreshing analytics for platforms: {meta_platforms}")
             try:
-                refresh_results = await auto_refresh_analytics_for_user(user_id, meta_platforms)
-                for platform_name, result in refresh_results.items():
-                    if result.get("refreshed"):
-                        logger.info(f"✅ Refreshed {result.get('posts_count', 0)} posts for {platform_name}")
-                    elif not result.get("success"):
-                        logger.warning(f"⚠️ Could not refresh {platform_name}: {result.get('message')}")
+                logger.info(f"🔄 Auto-refreshing analytics for {meta_platforms}")
+                await auto_refresh_analytics_for_user(user_id, meta_platforms)
             except Exception as e:
-                logger.warning(f"⚠️ Auto-refresh failed, using cached data: {e}")
+                logger.warning(f"⚠️ Auto-refresh failed: {e}")
 
         # -----------------------------
-        # 1️⃣ Download video temporarily
+        # Download media temporarily
         # -----------------------------
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+        media_type = detect_media_type(cloudinary_url)
+        logger.info(f"🧪 Media type detected: {media_type}")
+
+        suffix = ".mp4" if media_type == "VIDEO" else ".png"
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             response = requests.get(
                 cloudinary_url,
                 stream=True,
-                timeout=(10, 120)
+                timeout=(10, 120),
             )
             response.raise_for_status()
 
             for chunk in response.iter_content(chunk_size=8192):
                 tmp.write(chunk)
 
-            local_video_path = tmp.name
+            local_media_path = tmp.name
 
         posts = []
 
         try:
-            # ---------------------------------
-            # 2️⃣ FULL VIDEO ANALYSIS
-            # ---------------------------------
-            video_ai_result = await caption_from_video_file(
-                video_filepath=local_video_path,
-                platforms=platforms
+            # -----------------------------
+            # Media analysis
+            # -----------------------------
+            if media_type == "VIDEO":
+                ai_result = await caption_from_video_file(
+                    video_filepath=local_media_path,
+                    platforms=platforms,
+                )
+            else:
+                client = Groq(api_key=GROQ_API_KEY_CAPTION)
+                ai_result = await caption_from_image_file(
+                    image_filepath=local_media_path,
+                    platforms=platforms,
+                    client=client,
+                )
+
+            # -----------------------------
+            # AI best-time (used as fallback)
+            # -----------------------------
+            optimal_times = await get_optimal_times_for_platforms(
+                user_id,
+                platforms,
             )
 
-            # ---------------------------------
-            # 3️⃣ GET OPTIMAL TIME SLOTS FOR ALL PLATFORMS
-            # ---------------------------------
-            optimal_times = await get_optimal_times_for_platforms(user_id, platforms)
-
-            # ---------------------------------
-            # 4️⃣ PER-PLATFORM POST CREATION
-            # ---------------------------------
+            # -----------------------------
+            # Create posts per platform
+            # -----------------------------
             for p in platforms:
-
-                caption = video_ai_result.get("captions", {}).get(p, "")
-                hashtags = video_ai_result.get("platform_hashtags", {}).get(p, [])
+                caption = ai_result.get("captions", {}).get(p, "")
+                hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
 
                 final_caption = caption or " "
                 if hashtags:
                     final_caption += "\n\n" + " ".join(hashtags)
 
                 now = datetime.now(timezone.utc)
-                
-                # Get optimal time from TimeSlotService
-                time_info = optimal_times.get(p, {})
-                scheduled_at = time_info.get("scheduledAt", now + timedelta(hours=1))
-                reason = time_info.get("reason", "Safe fallback scheduling time.")
-                data_source = time_info.get("dataSource", "fallback")
 
+                # ---------------------------------
+                # MANUAL per-platform scheduling
+                # ---------------------------------
+                if (
+                    schedule_mode == "MANUAL"
+                    and scheduled_at
+                    and p in scheduled_at
+                ):
+                    scheduled_time = datetime.fromisoformat(scheduled_at[p])
+                    if scheduled_time.tzinfo is None:
+                        scheduled_time = scheduled_time.replace(
+                            tzinfo=timezone.utc
+                        )
+
+                    scheduled_at_final = scheduled_time
+                    reason = "User selected time"
+                    data_source = "manual"
+
+                # ---------------------------------
+                # AUTO scheduling (AI)
+                # ---------------------------------
+                else:
+                    time_info = optimal_times.get(p, {})
+                    scheduled_at_final = time_info.get(
+                        "scheduledAt",
+                        now + timedelta(hours=1),
+                    )
+                    reason = time_info.get("reason", "AI fallback")
+                    data_source = time_info.get("dataSource", "fallback")
+
+                # ---------------------------------
+                # Save to DB
+                # ---------------------------------
                 post_doc = {
                     "userId": user_id,
                     "mediaUrls": [cloudinary_url],
                     "caption": final_caption,
                     "platform": PLATFORM_NAME_MAP.get(p, p.capitalize()),
-                    "mediaType": "VIDEO",
-                    "scheduledAt": scheduled_at,
+                    "mediaType": media_type,
+                    "scheduledAt": scheduled_at_final,
                     "recommendationReason": reason,
                     "timeDataSource": data_source,
                     "status": "pending",
@@ -158,25 +191,27 @@ async def create_post_from_uploaded_video(
                 }
 
                 await db["scheduledposts"].insert_one(post_doc)
-                
-                # Convert datetime to JSON-serializable formats for response
-                post_response = {
+
+                # ---------------------------------
+                # Response-safe object
+                # ---------------------------------
+                posts.append({
                     "userId": user_id,
                     "mediaUrls": [cloudinary_url],
                     "caption": final_caption,
                     "platform": PLATFORM_NAME_MAP.get(p, p.capitalize()),
-                    "mediaType": "VIDEO",
-                    "scheduledAt": scheduled_at.isoformat(),
+                    "mediaType": media_type,
+                    "scheduledAt": scheduled_at_final.isoformat(),
                     "recommendationReason": reason,
                     "timeDataSource": data_source,
                     "status": "pending",
                     "createdAt": now.isoformat(),
                     "updatedAt": now.isoformat(),
-                }
-                
-                posts.append(post_response)
+                })
 
-                logger.info(f"✅ Post scheduled | {p} | {scheduled_at} | source: {data_source}")
+                logger.info(
+                    f"✅ Post scheduled | {p} | {scheduled_at_final} | {media_type}"
+                )
 
             return {
                 "success": True,
@@ -185,8 +220,8 @@ async def create_post_from_uploaded_video(
             }
 
         finally:
-            # ---------------------------------
-            # 4️⃣ Cleanup temp video
-            # ---------------------------------
-            if os.path.exists(local_video_path):
-                os.remove(local_video_path)
+            # -----------------------------
+            # Cleanup
+            # -----------------------------
+            if os.path.exists(local_media_path):
+                os.remove(local_media_path)

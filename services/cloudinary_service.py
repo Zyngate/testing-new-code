@@ -8,8 +8,8 @@ def upload_video_to_cloudinary(file: UploadFile) -> dict:
     try:
         result = cloudinary.uploader.upload(
             file.file,
-            resource_type="video",
-            folder="scheduler_videos"
+            resource_type="auto",
+            folder="scheduler_media"
         )
         return {
             "public_id": result["public_id"],

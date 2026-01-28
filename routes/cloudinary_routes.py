@@ -15,17 +15,17 @@ async def upload_video(file: UploadFile = File(...)):
 
     try:
         # Basic validation
-        if not file.content_type.startswith("video/"):
+        if not file.content_type.startswith(("video/", "image/")):
             raise HTTPException(
                 status_code=400,
-                detail="Only video files are allowed"
-            )
+                detail="Only image or video files are allowed"
+          )
 
         # Upload to Cloudinary
         result = cloudinary.uploader.upload(
             file.file,
-            resource_type="video",
-            folder="scheduler_videos"
+            resource_type="auto",
+            folder="scheduler_media"
         )
 
         return {

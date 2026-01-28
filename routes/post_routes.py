@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 
 from database import db
 from config import logger
-from services.post_creation_service import create_post_from_uploaded_video
+from services.post_creation_service import create_post_from_uploaded_media
 
 
 router = APIRouter(tags=["Posts"])  # Removed prefix - main.py already adds /posts
@@ -151,17 +151,86 @@ async def upload_video_and_schedule(payload: dict):
     user_id = payload.get("userId")
     cloudinary_url = payload.get("cloudinaryUrl")
     platform = payload.get("platform")
+    schedule_mode = payload.get("scheduleMode", "AUTO")
+    scheduled_at = payload.get("scheduledAt", {})
 
     if not all([user_id, cloudinary_url, platform]):
         raise HTTPException(status_code=400, detail="Missing fields")
 
-    result = await create_post_from_uploaded_video(
-        user_id=user_id,
-        cloudinary_url=cloudinary_url,
-        platform=platform
-    )
+    result = await create_post_from_uploaded_media(
+    user_id=user_id,
+    cloudinary_url=cloudinary_url,
+    platform=platform,
+    schedule_mode=schedule_mode,
+    scheduled_at=scheduled_at
+)
+
 
     return result
 
+@router.post("/upload-bulk")
+async def upload_bulk_posts(payload: dict):
+    """
+    Bulk upload:
+    Multiple media URLs → AI → Scheduling (manual/auto)
+    """
+
+    user_id = payload.get("userId")
+    media_urls = payload.get("mediaUrls", [])
+    platform = payload.get("platform")
+
+    schedule_mode = payload.get("scheduleMode", "AUTO")
+    scheduled_at = payload.get("scheduledAt", {})
+
+    if not user_id or not media_urls or not platform:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields"
+        )
+
+    # 🔒 MAX LIMIT
+    MAX_BULK_UPLOAD = 10
+    if len(media_urls) > MAX_BULK_UPLOAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_BULK_UPLOAD} media items allowed per bulk upload"
+        )
+
+    results = []
+
+    for index, media_url in enumerate(media_urls):
+        try:
+            result = await create_post_from_uploaded_media(
+                user_id=user_id,
+                cloudinary_url=media_url,
+                platform=platform,
+                schedule_mode=schedule_mode,
+                scheduled_at=scheduled_at
+            )
+
+            results.append({
+                "mediaUrl": media_url,
+                "status": "success",
+                "posts": result.get("results", [])
+            })
+
+        except Exception as e:
+            logger.error(
+                f"❌ Bulk post failed for {media_url}",
+                exc_info=True
+            )
+            results.append({
+                "mediaUrl": media_url,
+                "status": "failed",
+                "error": str(e)
+            })
+
+    return {
+        "success": True,
+        "totalMedia": len(media_urls),
+        "successful": len([r for r in results if r["status"] == "success"]),
+        "failed": len([r for r in results if r["status"] == "failed"]),
+        "results": results
+    }
 
 
