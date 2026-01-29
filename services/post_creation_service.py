@@ -41,7 +41,9 @@ async def create_post_from_uploaded_media(
     platform,
     schedule_mode: str = "AUTO",
     scheduled_at: dict | None = None,
+    preview_only: bool = False,   # 👈 ADD THIS
 ):
+
     """
     SYSTEM-LEVEL AI PIPELINE:
     1. Media understanding (video / image)
@@ -190,7 +192,9 @@ async def create_post_from_uploaded_media(
                     "updatedAt": now,
                 }
 
-                await db["scheduledposts"].insert_one(post_doc)
+                if not preview_only:
+                    await db["scheduledposts"].insert_one(post_doc)
+
 
                 # ---------------------------------
                 # Response-safe object
@@ -210,8 +214,10 @@ async def create_post_from_uploaded_media(
                 })
 
                 logger.info(
-                    f"✅ Post scheduled | {p} | {scheduled_at_final} | {media_type}"
-                )
+                    f"{'📝 Preview generated' if preview_only else '✅ Post scheduled'} | "
+                    f"{p} | {scheduled_at_final} | {media_type}"
+)
+
 
             return {
                 "success": True,

@@ -233,4 +233,99 @@ async def upload_bulk_posts(payload: dict):
         "results": results
     }
 
+@router.post("/upload-bulk-preview")
+async def bulk_preview(payload: dict):
+    """
+    Generate AI captions + recommended times
+    WITHOUT saving to DB
+    """
+
+    user_id = payload.get("userId")
+    media_urls = payload.get("mediaUrls", [])
+    platform = payload.get("platform")
+
+    schedule_mode = payload.get("scheduleMode", "AUTO")
+    scheduled_at = payload.get("scheduledAt", {})
+
+    if not user_id or not media_urls or not platform:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields"
+        )
+
+    previews = []
+
+    for media_url in media_urls:
+        result = await create_post_from_uploaded_media(
+            user_id=user_id,
+            cloudinary_url=media_url,
+            platform=platform,
+            schedule_mode=schedule_mode,
+            scheduled_at=scheduled_at,
+            preview_only=True,   # 👈 KEY
+        )
+
+        previews.append({
+            "mediaUrl": media_url,
+            "results": result.get("results", [])
+        })
+
+    return {
+        "success": True,
+        "preview": previews
+    }
+
+@router.post("/bulk-confirm")
+async def bulk_confirm(payload: dict):
+    """
+    Final approval step.
+    Saves user-edited posts directly to scheduler.
+    """
+
+    user_id = payload.get("userId")
+    approved_posts = payload.get("approvedPosts", [])
+
+    if not user_id or not approved_posts:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing userId or approvedPosts"
+        )
+
+    now = datetime.now(timezone.utc)
+    saved_posts = []
+
+    for post in approved_posts:
+        try:
+            scheduled_at = datetime.fromisoformat(post["scheduledAt"])
+            if scheduled_at.tzinfo is None:
+                scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+
+            post_doc = {
+                "userId": user_id,
+                "mediaUrls": [post["mediaUrl"]],
+                "caption": post.get("caption", ""),
+                "platform": post["platform"],
+                "mediaType": post["mediaType"],
+                "scheduledAt": scheduled_at,
+                "status": "pending",
+                "createdAt": now,
+                "updatedAt": now,
+                "timeDataSource": "manual",
+                "recommendationReason": "User approved"
+            }
+
+            await db["scheduledposts"].insert_one(post_doc)
+            saved_posts.append(post_doc)
+
+        except Exception as e:
+            logger.error("❌ Failed to save approved post", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save approved posts"
+            )
+
+    return {
+        "success": True,
+        "scheduledCount": len(saved_posts)
+    }
 
