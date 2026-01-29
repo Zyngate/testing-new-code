@@ -13,6 +13,19 @@ from services.ai_service import (
 
 MODEL = "llama-3.3-70b-versatile"
 
+async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
+    for attempt in range(retries):
+        try:
+            text = await groq_generate_text(MODEL, prompt)
+            if text and text.strip():
+                return text.strip()
+        except Exception as e:
+            logger.warning(
+                f"Caption generation failed for {platform} (attempt {attempt + 1}): {e}"
+            )
+    return None
+
+
 class Platforms(str, Enum):
     Instagram = "instagram"
     Facebook = "facebook"
@@ -122,7 +135,6 @@ def rotating_hashtag_picker(pool: list, k: int = 4):
     cycle = itertools.cycle(pool)
     while True:
         yield [next(cycle) for _ in range(k)]
-
 
 # ---------------------------
 # 1) keyword generation
@@ -422,11 +434,11 @@ Return ONLY the caption text.
         # ---------------------------
         # Generate caption
         # ---------------------------
-        try:
-            caption_text = await groq_generate_text(MODEL, caption_prompt)
-            caption_text = caption_text.strip() if caption_text else ""
-        except Exception as e:
-            logger.error(f"Caption generation failed for {p_norm}: {e}")
+        caption_text = await safe_generate_caption(
+            caption_prompt,
+            platform=p_norm
+)
+        if not caption_text:
             caption_text = ""
 
         # ---------------------------
@@ -442,7 +454,15 @@ Return ONLY the caption text.
             [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
         )
 
+        logger.info(
+    f"Caption generated for {p_norm}: {len(caption_text)} characters"
+)
+
+        
+        if not caption_text:
+            caption_text = f"Caption could not be generated for {p_norm}. Please retry."
         captions[p_norm] = caption_text
+
 
     return {
         "captions": captions,
