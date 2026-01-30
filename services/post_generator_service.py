@@ -677,6 +677,9 @@ Return ONLY the caption text.
         caption_text = "\n\n".join(
             [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
         )
+ 
+        if p_norm == "instagram":
+            caption_text = enforce_instagram_constraints(caption_text, target_chars=1000)
 
         logger.info(
     f"Caption generated for {p_norm}: {len(caption_text)} characters"
