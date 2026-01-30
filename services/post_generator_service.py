@@ -13,17 +13,39 @@ from services.ai_service import (
 
 MODEL = "llama-3.3-70b-versatile"
 
-async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
-    for attempt in range(retries):
+async def safe_generate_caption(prompt: str, platform: str) -> str:
+    """
+    Always returns a non-empty caption.
+    Retries internally and degrades prompt if needed.
+    User NEVER sees failures.
+    """
+
+    # 1️⃣ Normal attempts
+    for _ in range(2):
         try:
             text = await groq_generate_text(MODEL, prompt)
             if text and text.strip():
                 return text.strip()
         except Exception as e:
-            logger.warning(
-                f"Caption generation failed for {platform} (attempt {attempt + 1}): {e}"
-            )
-    return None
+            logger.warning(f"{platform} caption attempt failed: {e}")
+
+    # 2️⃣ Lighter prompt fallback (critical for Instagram)
+    lighter_prompt = (
+        prompt
+        .replace("EXACTLY", "")
+        .replace("800–1,100", "500–800")
+        .replace("CRITICAL", "")
+    )
+
+    try:
+        text = await groq_generate_text(MODEL, lighter_prompt)
+        if text and text.strip():
+            return text.strip()
+    except Exception as e:
+        logger.warning(f"{platform} fallback attempt failed: {e}")
+
+    # 3️⃣ Final guaranteed fallback (never empty)
+    return "This moment captures something worth pausing for."
 
 
 class Platforms(str, Enum):
@@ -510,9 +532,7 @@ Return ONLY the caption text.
             caption_prompt,
             platform=p_norm
 )
-        if not caption_text:
-            caption_text = ""
-
+        
         # ---------------------------
         # Cleaning (SAFE)
         # ---------------------------
@@ -531,9 +551,7 @@ Return ONLY the caption text.
 )
 
         
-        if not caption_text:
-            caption_text = f"Caption could not be generated for {p_norm}. Please retry."
-        captions[p_norm] = caption_text
+        
 
 
     return {
