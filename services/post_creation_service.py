@@ -1,649 +1,233 @@
-# stelle_backend/services/post_generator_service.py
+import tempfile
+import os
+import requests
 import asyncio
-import itertools
-import random
-from typing import List, Dict, Any
-from groq import AsyncGroq
-from enum import Enum
-from config import logger
-from services.ai_service import (
-    rate_limited_groq_call,
-    groq_generate_text,
+from datetime import datetime, timedelta, timezone
+
+from groq import Groq
+
+from database import db
+from config import logger, GROQ_API_KEY_CAPTION
+from services.image_caption_service import caption_from_image_file
+from services.video_caption_service import caption_from_video_file
+from services.time_slot_service import (
+    get_optimal_times_for_platforms,
+    auto_refresh_analytics_for_user,
+    PLATFORM_NAME_MAP,
 )
 
-MODEL = "llama-3.1-8b-instant"
+# -----------------------------------
+# Concurrency control
+# -----------------------------------
+VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(3)
 
-async def safe_generate_caption(prompt: str, platform: str) -> str:
+
+# -----------------------------------
+# Media type detection
+# -----------------------------------
+def detect_media_type(url: str) -> str:
+    url = url.lower()
+    if url.endswith((".mp4", ".mov", ".webm")):
+        return "VIDEO"
+    return "IMAGE"
+
+
+# -----------------------------------
+# MAIN PIPELINE
+# -----------------------------------
+async def create_post_from_uploaded_media(
+    user_id: str,
+    cloudinary_url: str,
+    platform,
+    schedule_mode: str = "AUTO",
+    scheduled_at: dict | None = None,
+    preview_only: bool = False,   # 👈 ADD THIS
+):
+
     """
-    Always returns a non-empty caption.
-    Retries internally and degrades prompt if needed.
-    User NEVER sees failures.
+    SYSTEM-LEVEL AI PIPELINE:
+    1. Media understanding (video / image)
+    2. Caption + hashtag generation
+    3. Best-time recommendation OR manual time
+    4. Save scheduled posts (per platform)
     """
 
-    # 1️⃣ Normal attempts
-    for _ in range(2):
-        try:
-            text = await groq_generate_text(MODEL, prompt)
-            if text and text.strip():
-                return text.strip()
-        except Exception as e:
-            logger.warning(f"{platform} caption attempt failed: {e}")
+    async with VIDEO_PROCESS_SEMAPHORE:
 
-    # 2️⃣ Lighter prompt fallback (critical for Instagram)
-    lighter_prompt = (
-        prompt
-        .replace("EXACTLY", "")
-        .replace("800–1,100", "500–800")
-        .replace("CRITICAL", "")
-    )
-
-    try:
-        text = await groq_generate_text(MODEL, lighter_prompt)
-        if text and text.strip():
-            return text.strip()
-    except Exception as e:
-        logger.warning(f"{platform} fallback attempt failed: {e}")
-
-    # 3️⃣ Final guaranteed fallback (never empty)
-    return ""
-
-
-
-class Platforms(str, Enum):
-    Instagram = "instagram"
-    Facebook = "facebook"
-    LinkedIn = "linkedin"
-    Pinterest = "pinterest"
-    Threads = "threads"
-    TikTok = "tiktok"
-    YouTube = "youtube"
-    Twitter = "twitter"
-    Reddit = "reddit"
-
-# ---------------------------
-# PLATFORM TONE SETTINGS
-# ---------------------------
-PLATFORM_STYLES = {
-    "instagram": "Write a clean, trendy, aesthetic caption. No Gen-Z slang. No words like lowkey, highkey, obsessed, fr, no cap.",
-    "linkedin": "Write a polished professional, business-focused caption.",
-    "facebook": "Write a warm, friendly and conversational caption.",
-    "pinterest": "Write an aesthetic, dreamy, mood-board style caption.",
-    "threads": "Write a bold, expressive caption. No slang like lowkey/highkey.",
-    "tiktok": "Write an engaging, hook-first caption without slang (no lowkey/highkey/no cap).",
-    "youtube": "Write a SEO-friendly YouTube description with CTA.",
-    "twitter": "Write a short, punchy, bold tweet without slang.",
-    "reddit": "Write an informative, discussion-starter caption."
-}
-
-# ---------------------------
-# GLOBAL SLANG BAN WORD LIST
-# ---------------------------
-BANNED_WORDS = [
-    "lowkey", "low key", "low-key",
-    "highkey", "high key", "high-key",
-    "obsessed", "literally", "fr", "no cap",
-    "delulu"
-]
-
-INSTAGRAM_DISCOVERY_CORE = [
-    "#fyp", "#explore", "#viral", "#foryou"
-]
-
-
-TRENDING_POOLS = {
-
-    "instagram": [
-        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
-        "#reels", "#instareels", "#reelsinstagram", "#reelsoftheday",
-        "#explore", "#explorepage", "#viral", "#trending",
-        "#instadaily", "#instagood", "#creatorlife",
-        "#reelsdaily", "#viralreels", "#discover",
-        "#watchthis", "#shortformvideo", "#digitalcreator",
-        "#reeltrend", "#socialreels"
-    ],
-
-    "tiktok": [
-        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
-        "#viralvideo", "#tiktoktrend", "#trending",
-        "#watchthis", "#discover", "#trendingsound",
-        "#creatorcontent", "#videocreator",
-        "#dailyvideo", "#shortvideo",
-        "#tiktokcommunity", "#fypviral"
-    ],
-
-    "youtube": [
-        "#shorts", "#youtubeshorts", "#viralshorts",
-        "#watchnow", "#mustwatch", "#trendingnow",
-        "#contentcreator", "#videocontent",
-        "#discover", "#recommended",
-        "#subscribe", "#newvideo"
-    ],
-
-    "threads": [
-        "#threadsapp", "#threadscommunity",
-        "#trendingnow", "#dailythoughts",
-        "#conversationstarter", "#creatorvoices",
-        "#digitalculture", "#modernlife",
-        "#discoverthreads", "#threadtalk"
-    ],
-
-    "pinterest": [
-        "#pinterestinspo", "#pinterestideas",
-        "#aestheticinspo", "#creativeideas",
-        "#moodboard", "#visualinspo",
-        "#designinspiration", "#discoverideas"
-    ],
-
-    "facebook": [
-        "#watchthis", "#mustsee", "#viralcontent",
-        "#socialmedia", "#onlinecontent",
-        "#communitypost", "#shareworthy",
-        "#discovercontent", "#videooftheday"
-    ],
-
-    # ✅ ADD THIS
-    "linkedin": [
-        "#leadership", "#careerdevelopment",
-        "#professionalgrowth", "#industryinsights",
-        "#businessstrategy", "#futureofwork",
-        "#innovation", "#thoughtleadership",
-        "#workplaceculture", "#professionaldevelopment",
-        "#careertips", "#businesscontent"
-    ]
-}
-
-def rotating_hashtag_picker(pool: list, k: int = 4):
-    pool = pool[:]  # copy
-    random.shuffle(pool)
-    cycle = itertools.cycle(pool)
-    while True:
-        yield [next(cycle) for _ in range(k)]
-
-# ---------------------------
-# 1) keyword generation
-# ---------------------------
-async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> List[str]:
-    if not client:
-        try:
-            fallback = await groq_generate_text(MODEL, f"Generate 3 short marketing keywords for: {effective_query}. Return comma-separated.")
-            kws = [k.strip() for k in fallback.replace("\n", ",").split(",") if k.strip()]
-            return kws[:3] if kws else ["brand", "marketing", "content"]
-        except:
-            return ["brand", "marketing", "content"]
-
-    prompt = f"Generate exactly 3 short marketing keywords for: {effective_query}. Only return 3 comma-separated keywords."
-
-    try:
-        resp = await rate_limited_groq_call(
-            client,
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_completion_tokens=40,
-        )
-        raw = resp.choices[0].message.content or ""
-        kws = [k.strip() for k in raw.replace("\n", ",").split(",") if k.strip()]
-        return kws[:3] if kws else ["brand", "marketing", "content"]
-
-    except Exception as e:
-        logger.error(f"Keyword generation failed: {e}")
-        return ["brand", "marketing", "content"]
-
-#hashtag
-
-async def generate_trending_hashtags(platform: str, topic: str) -> List[str]:
-    prompt = f"""
-Generate 4 currently trending hashtags for {platform}.
-They must feel natural, platform-native, and not generic spam.
-
-Context:
-{topic}
-
-Rules:
-- Output ONLY hashtags
-- No explanations
-- No generic words like viral, trending unless platform-native
-"""
-    try:
-        text = await groq_generate_text(MODEL, prompt)
-        return [t for t in text.split() if t.startswith("#")][:4]
-    except:
-        return []
-
-TRENDING_GENERATORS = {
-    platform: rotating_hashtag_picker(tags, 4)
-    for platform, tags in TRENDING_POOLS.items()
-}
-
-async def fetch_platform_hashtags(
-    client: AsyncGroq,
-    seed_keywords: List[str],
-    platform: str,
-    effective_query: str
-) -> List[str]:
-
-    platform = platform.lower()
-
-    # -------------------------------
-    # 1) TRENDING / DISCOVERY → 4
-    # -------------------------------
-    if platform == "instagram":
-        discovery_tags = random.sample(
-            INSTAGRAM_DISCOVERY_CORE,
-            k=min(2, len(INSTAGRAM_DISCOVERY_CORE))
-        )
-        remaining_pool = [
-            t for t in TRENDING_POOLS["instagram"]
-            if t not in INSTAGRAM_DISCOVERY_CORE
-        ]
-        secondary_trending = random.sample(
-            remaining_pool,
-            k=min(2, len(remaining_pool))
-        )
-        trending_tags = discovery_tags + secondary_trending
-    else:
-        gen = TRENDING_GENERATORS.get(platform)
-        trending_tags = next(gen) if gen else []
-
-    # -------------------------------
-    # 2) RELEVANT (contextual) → 3
-    # -------------------------------
-    try:
-        if platform == "instagram":
-            relevant_prompt = f"""
-Generate EXACTLY 3 Instagram hashtags that are:
-
-CRITICAL REQUIREMENTS:
-- DIRECTLY relevant to the video topic
-- COMMONLY FOLLOWED by users (not just used)
-- Estimated usage between ~300K and ~5M posts
-- High-discovery but NOT ultra-broad
-- Creator-native hashtags
-
-AVOID:
-- Ultra-broad hashtags (>50M posts)
-- Tiny niche hashtags (<50K posts)
-- Keyword-stuffed or invented hashtags
-
-VIDEO CONTEXT:
-{effective_query}
-
-Output ONLY hashtags.
-"""
+        # -----------------------------
+        # Normalize platform input
+        # -----------------------------
+        if isinstance(platform, list):
+            platforms = platform
         else:
-            relevant_prompt = f"""
-Generate 3 relevant hashtags commonly used on {platform}.
+            platforms = [platform]
 
-Context:
-{effective_query}
+        flat_platforms = []
+        for p in platforms:
+            if isinstance(p, list):
+                flat_platforms.extend(p)
+            else:
+                flat_platforms.append(p)
 
-Output ONLY hashtags.
-"""
+        platforms = [p.lower().strip() for p in flat_platforms]
 
-        text = await groq_generate_text(MODEL, relevant_prompt)
-        relevant_tags = [t for t in text.split() if t.startswith("#")][:3]
+        logger.info("🧠 Starting AI post creation pipeline")
 
-    except Exception:
-        relevant_tags = [f"#{k.replace(' ', '')}" for k in seed_keywords][:3]
-
-    # -------------------------------
-    # 3) BROAD (category-level) → 3
-    # -------------------------------
-    try:
-        broad_prompt = f"""
-Generate 3 broad, category-level hashtags.
-
-They should describe the general domain of the content,
-not specific details.
-
-Content:
-{effective_query}
-
-Rules:
-- High-level categories
-- No trending or viral tags
-- Output ONLY hashtags
-"""
-        text = await groq_generate_text(MODEL, broad_prompt)
-        broad_tags = [t for t in text.split() if t.startswith("#")][:3]
-    except Exception:
-        broad_tags = []
-
-    # -------------------------------
-    # FINAL MERGE
-    # -------------------------------
-    final_tags = trending_tags + relevant_tags + broad_tags
-
-    # Remove duplicates, preserve order
-    return list(dict.fromkeys(final_tags))
-
-def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
-    """
-    Enforces:
-    - EXACTLY target_chars characters (including spaces)
-    - EXACTLY 3 paragraphs
-    - No sentence cut-off
-    """
-
-    # 1️⃣ Normalize paragraphs FIRST (before counting)
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-
-    # Force exactly 3 paragraphs
-    if len(paragraphs) > 3:
-        paragraphs = paragraphs[:3]
-    while len(paragraphs) < 3:
-        paragraphs.append("")
-
-    text = "\n\n".join(paragraphs)
-
-    # 2️⃣ If too long → trim safely at sentence boundary
-    if len(text) > target_chars:
-        trimmed = text[:target_chars]
-
-        last_punct = max(
-            trimmed.rfind("."),
-            trimmed.rfind("?"),
-            trimmed.rfind("!")
-        )
-
-        if last_punct != -1:
-            trimmed = trimmed[: last_punct + 1]
-
-        text = trimmed.strip()
-
-    # 3️⃣ If too short → PAD safely (controlled filler)
-    filler = " Moments like this invite closer attention to how public images are shaped and interpreted."
-    while len(text) < target_chars:
-        # Add filler to LAST paragraph only
-        parts = text.split("\n\n")
-        parts[-1] += filler
-        text = "\n\n".join(parts)
-
-    # 4️⃣ Final hard trim (guaranteed safe now)
-    return text[:target_chars]
-
-# ---------------------------
-# 3) caption generator
-# ---------------------------
-async def generate_caption_post(
-    effective_query: str,
-    seed_keywords: List[str],
-    platforms: List[str],
-) -> Dict[str, Any]:
-
-    captions: Dict[str, str] = {}
-    platform_hashtags: Dict[str, List[str]] = {}
-
-    for p in platforms:
-        p_norm = p.lower().strip()
-        tone = PLATFORM_STYLES.get(p_norm, "Write a clean, engaging caption.")
-
-        # ---------------------------
-        # Hashtags
-        # ---------------------------
-        if p_norm == "instagram":
-            tags = await fetch_platform_hashtags(
-        client=None,
-        seed_keywords=seed_keywords,
-        platform="instagram",
-        effective_query=effective_query
-    )
-
-        else:
+        # -----------------------------
+        # Auto-refresh analytics
+        # -----------------------------
+        meta_platforms = [p for p in platforms if p in ["instagram", "facebook"]]
+        if meta_platforms:
             try:
-                tags = await fetch_platform_hashtags(
-                    None,
-                    seed_keywords,
-                    p_norm,
-                    effective_query
-                )
+                logger.info(f"🔄 Auto-refreshing analytics for {meta_platforms}")
+                await auto_refresh_analytics_for_user(user_id, meta_platforms)
             except Exception as e:
-                logger.error(f"Hashtag generation failed for {p_norm}: {e}")
-                tags = []
+                logger.warning(f"⚠️ Auto-refresh failed: {e}")
 
-        platform_hashtags[p_norm] = tags
+        # -----------------------------
+        # Download media temporarily
+        # -----------------------------
+        media_type = detect_media_type(cloudinary_url)
+        logger.info(f"🧪 Media type detected: {media_type}")
 
-        
+        suffix = ".mp4" if media_type == "VIDEO" else ".png"
 
-        # ---------------------------
-        # Caption prompt
-        # ---------------------------
-        if p_norm == "instagram":
-            caption_prompt = f"""
-Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            response = requests.get(
+                cloudinary_url,
+                stream=True,
+                timeout=(10, 120),
+            )
+            response.raise_for_status()
 
-STRUCTURE (MANDATORY):
+            for chunk in response.iter_content(chunk_size=8192):
+                tmp.write(chunk)
 
-PARAGRAPH 1 — HOOK  
-- 2–3 short lines  
-- Strong curiosity, tension, or emotional pull  
-- Must clearly connect to the video  
-- Designed to stop scrolling and trigger “more”
+            local_media_path = tmp.name
 
-PARAGRAPH 2 — CONTEXT & INSIGHT  
-- Explain what’s happening in the video  
-- Add reasoning, meaning, or perspective  
-- Human, conversational tone  
-- Grounded in the actual video content  
-- This should be the longest paragraph
+        posts = []
 
-PARAGRAPH 3 — REFLECTION / CTA  
-- Invite the viewer to think, react, or comment  
-- Natural and thoughtful, not salesy  
-- End with a question or reflective line
+        try:
+            # -----------------------------
+            # Media analysis
+            # -----------------------------
+            if media_type == "VIDEO":
+                ai_result = await caption_from_video_file(
+                    video_filepath=local_media_path,
+                    platforms=platforms,
+                )
+            else:
+                client = Groq(api_key=GROQ_API_KEY_CAPTION)
+                ai_result = await caption_from_image_file(
+                    image_filepath=local_media_path,
+                    platforms=platforms,
+                    client=client,
+                )
 
-STYLE:
-- Human and engaging  
-- Confident, not corporate  
-- Clear, not abstract  
+            # -----------------------------
+            # AI best-time (used as fallback)
+            # -----------------------------
+            optimal_times = await get_optimal_times_for_platforms(
+                user_id,
+                platforms,
+            )
 
-RULES:
-- You MAY reference visuals or moments in the video  
-VOICE RULE (CRITICAL):
-- Write in a third-person, editorial voice
-- Sound like a news editor or brand narrator
-- NEVER use first-person language (I, me, my, we, our)
-- Do NOT describe personal reactions or observations
-- No emojis  
-- No hashtags inside the caption text  
-- Avoid generic motivational filler  
-SELF-CHECK:
-- If first-person appears, rewrite internally before responding  
+            # -----------------------------
+            # Create posts per platform
+            # -----------------------------
+            for p in platforms:
+                caption = ai_result.get("captions", {}).get(p, "")
+                hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
 
+                final_caption = caption or " "
+                if hashtags:
+                    final_caption += "\n\n" + " ".join(hashtags)
 
-LENGTH:
-- Long-form: 800–1,100 characters total  
-- EXACTLY 3 paragraphs separated by a blank line  
+                now = datetime.now(timezone.utc)
 
-VIDEO CONTEXT:
-{effective_query}
+                # ---------------------------------
+                # MANUAL per-platform scheduling
+                # ---------------------------------
+                if (
+                    schedule_mode == "MANUAL"
+                    and scheduled_at
+                    and p in scheduled_at
+                ):
+                    scheduled_time = datetime.fromisoformat(scheduled_at[p])
+                    if scheduled_time.tzinfo is None:
+                        scheduled_time = scheduled_time.replace(
+                            tzinfo=timezone.utc
+                        )
 
-Return ONLY the caption text.
-"""
+                    scheduled_at_final = scheduled_time
+                    reason = "User selected time"
+                    data_source = "manual"
 
-        elif p_norm == "threads":
-            caption_prompt = f"""
-Write a LONG-FORM Threads post (800–1000 characters).
+                # ---------------------------------
+                # AUTO scheduling (AI)
+                # ---------------------------------
+                else:
+                    time_info = optimal_times.get(p, {})
+                    scheduled_at_final = time_info.get(
+                        "scheduledAt",
+                        now + timedelta(hours=1),
+                    )
+                    reason = time_info.get("reason", "AI fallback")
+                    data_source = time_info.get("dataSource", "fallback")
 
-STRUCTURE:
-- Bold hook that stops scrolling
-- Expressive insight or opinion
-- Reflective CTA at the end
+                # ---------------------------------
+                # Save to DB
+                # ---------------------------------
+                post_doc = {
+                    "userId": user_id,
+                    "mediaUrls": [cloudinary_url],
+                    "caption": final_caption,
+                    "platform": PLATFORM_NAME_MAP.get(p, p.capitalize()),
+                    "mediaType": media_type,
+                    "scheduledAt": scheduled_at_final,
+                    "recommendationReason": reason,
+                    "timeDataSource": data_source,
+                    "status": "pending",
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
 
-RULES:
-- Opinionated, not descriptive
-- No emojis
-- No hashtags
-
-CONTEXT:
-{effective_query}
-
-Return ONLY the caption text.
-"""
-
-
-        elif p_norm == "linkedin":
-            caption_prompt = f"""
-Write a LONG-FORM LinkedIn post (800–1000 characters).
-
-STRUCTURE (MANDATORY):
-PARAGRAPH 1 — HOOK
-- 2–3 compelling lines that challenge or provoke thought
-
-PARAGRAPH 2 — INSIGHT
-- Explain ONE professional insight or lesson
-- Why this moment matters in work, leadership, or growth
-- This should be the longest paragraph
-
-PARAGRAPH 3 — CTA
-- Invite reflection or discussion
-- End with a thoughtful question
-
-RULES:
-- Do NOT describe the video or image
-- Do NOT summarize scenes
-- Confident, human, professional tone
-- No hashtags inside the text
-
-CONTEXT (for understanding only):
-{effective_query}
-
-Return ONLY the caption text.
-"""
-
-        elif p_norm == "facebook":
-            caption_prompt = f"""
-Write a LONG-FORM Facebook caption (800–1000 characters).
-
-STRUCTURE:
-- Strong emotional or relatable HOOK
-- Deeper reflection or story
-- Clear CTA at the end (question or thought)
-
-RULES:
-- Do NOT explain what happens in the video
-- Sound natural and human
-- No hashtags inside the text
-
-CONTEXT:
-{effective_query}
-
-Return ONLY the caption text.
-"""
-        elif p_norm == "pinterest":
-            caption_prompt = f"""
-Write a LONG-FORM Pinterest description (800–1000 characters).
-
-STRUCTURE:
-- Inspiring or curiosity-driven hook
-- Aesthetic or thoughtful insight
-- Clear CTA (save, reflect, explore)
-
-RULES:
-- Do NOT describe the image literally
-- Evoke mood and meaning
-- No hashtags in text
-
-CONTEXT:
-{effective_query}
-
-Return ONLY the caption text.
-"""
-        elif p_norm == "youtube":
-            caption_prompt = f"""
-Write a LONG-FORM YouTube description (800–1000 characters).
-
-STRUCTURE:
-- Hook that builds curiosity
-- Explain why this video matters
-- Invite engagement (like, comment, reflect)
-
-RULES:
-- Do NOT list scenes
-- Human, engaging tone
-- CTA is mandatory
-
-CONTEXT:
-{effective_query}
-
-Return ONLY the description text.
-"""
-        elif p_norm == "tiktok":
-            caption_prompt = f"""
-Write a LONG-FORM TikTok caption (800–1000 characters).
-
-STRUCTURE (MANDATORY):
-
-PARAGRAPH 1 — HOOK
-- First 2–3 lines must stop scrolling
-- Create curiosity, tension, or emotion
-- Make the viewer NEED to watch
-
-PARAGRAPH 2 — CORE IDEA
-- Focus on ONE strong reaction, thought, or insight
-- Explain why this moment matters
-- Human, creator-style tone
-- This should be the longest paragraph
-
-PARAGRAPH 3 — CTA
-- Invite engagement (comment, share, reflect)
-- End with a direct or thoughtful question
-
-RULES:
-- Do NOT describe scenes or actions
-- Do NOT summarize the video
-- Sound like a real creator, not a brand
-- No emojis
-- No hashtags inside the text
-
-CONTEXT (for understanding only):
-{effective_query}
-
-Return ONLY the caption text.
-"""
+                if not preview_only:
+                    await db["scheduledposts"].insert_one(post_doc)
 
 
-        else:
-            caption_prompt = f"""
-Write a natural social media caption.
+                # ---------------------------------
+                # Response-safe object
+                # ---------------------------------
+                posts.append({
+                    "userId": user_id,
+                    "mediaUrls": [cloudinary_url],
+                    "caption": final_caption,
+                    "platform": PLATFORM_NAME_MAP.get(p, p.capitalize()),
+                    "mediaType": media_type,
+                    "scheduledAt": scheduled_at_final.isoformat(),
+                    "recommendationReason": reason,
+                    "timeDataSource": data_source,
+                    "status": "pending",
+                    "createdAt": now.isoformat(),
+                    "updatedAt": now.isoformat(),
+                })
 
-RULES:
-- Do NOT describe the media
-- React like a human
-- Be platform-appropriate
-- No hashtags in text
-
-Context:
-{effective_query}
-
-Return ONLY the caption text.
-"""
-
-        # ---------------------------
-        # Generate caption
-        # ---------------------------
-        caption_text = await safe_generate_caption(
-            caption_prompt,
-            platform=p_norm
+                logger.info(
+                    f"{'📝 Preview generated' if preview_only else '✅ Post scheduled'} | "
+                    f"{p} | {scheduled_at_final} | {media_type}"
 )
-        
-        # ---------------------------
-        # Cleaning (SAFE)
-        # ---------------------------
-        caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
 
-        for bad in BANNED_WORDS:
-            caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
 
-        logger.info(
-    f"Caption generated for {p_norm}: {len(caption_text)} characters"
-)
-        if not caption_text:
-            caption_text = " "
+            return {
+                "success": True,
+                "totalPlatforms": len(posts),
+                "results": posts,
+            }
 
-        captions[p_norm] = caption_text
-
-    return {
-        "captions": captions,
-        "platform_hashtags": platform_hashtags
-    }
+        finally:
+            # -----------------------------
+            # Cleanup
+            # -----------------------------
+            if os.path.exists(local_media_path):
+                os.remove(local_media_path)
