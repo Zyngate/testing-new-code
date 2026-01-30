@@ -11,7 +11,7 @@ from services.ai_service import (
     groq_generate_text,
 )
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 
 async def safe_generate_caption(prompt: str, platform: str) -> str:
     """
@@ -45,7 +45,8 @@ async def safe_generate_caption(prompt: str, platform: str) -> str:
         logger.warning(f"{platform} fallback attempt failed: {e}")
 
     # 3️⃣ Final guaranteed fallback (never empty)
-    return "This moment captures something worth pausing for."
+    return ""
+
 
 
 class Platforms(str, Enum):
@@ -549,6 +550,10 @@ Return ONLY the caption text.
         logger.info(
     f"Caption generated for {p_norm}: {len(caption_text)} characters"
 )
+        if not caption_text:
+            caption_text = " "
+        captions[p_norm] = caption_text
+
 
         
         
