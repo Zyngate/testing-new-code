@@ -671,7 +671,7 @@ Return ONLY the caption text.
 
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
-            caption_text = remove_first_person(caption_text)
+        caption_text = remove_first_person(caption_text)
 
         # Preserve paragraphs
         caption_text = "\n\n".join(
