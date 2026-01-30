@@ -636,40 +636,10 @@ Return ONLY the caption text.
         logger.info(
     f"Caption generated for {p_norm}: {len(caption_text)} characters"
 )
-        # ---------------------------
-        # Title (Pinterest & YouTube only)
-        # ---------------------------
-        title = None
-        if p_norm in ["pinterest", "youtube"]:
-            title_prompt = f"""
-Write an intriguing, curiosity-driven TITLE.
-
-RULES:
-- 6–12 words
-- Emotion or curiosity based
-- NOT descriptive
-
-CONTEXT:
-{effective_query}
-
-Return ONLY the title.
-"""
-            try:
-                title = await groq_generate_text(MODEL, title_prompt)
-                title = title.strip().replace('"', '')
-            except Exception:
-                title = None
-
         if not caption_text:
             caption_text = " "
 
-        if title:
-            captions[p_norm] = {
-                "title": title,
-                "caption": caption_text
-            }
-        else:
-            captions[p_norm] = caption_text
+        captions[p_norm] = caption_text
 
     return {
         "captions": captions,
