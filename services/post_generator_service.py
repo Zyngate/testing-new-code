@@ -13,6 +13,40 @@ from services.ai_service import (
 
 MODEL = "llama-3.1-8b-instant"
 
+import re
+
+FIRST_PERSON_PRONOUNS = r"\b(i|me|my|mine|we|us|our|ours)\b"
+
+def remove_first_person(text: str) -> str:
+    """
+    Removes first-person voice in a generic, non-hardcoded way.
+    This does NOT depend on specific phrases.
+    """
+
+    # 1️⃣ Remove sentence-leading first-person clauses
+    # Example: "As I watched the event unfold, ..." → "As the event unfolded, ..."
+    text = re.sub(
+        rf"(^|[.!?]\s+)(?:as\s+)?{FIRST_PERSON_PRONOUNS}\s+\w+[^,]*,",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # 2️⃣ Remove remaining standalone first-person pronouns
+    text = re.sub(
+        FIRST_PERSON_PRONOUNS,
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # 3️⃣ Cleanup spacing and grammar artifacts
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
+
+    return text.strip()
+
+
 async def safe_generate_caption(prompt: str, platform: str) -> str:
     """
     Always returns a non-empty caption.
@@ -637,6 +671,7 @@ Return ONLY the caption text.
 
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
+            caption_text = remove_first_person(caption_text)
 
         # Preserve paragraphs
         caption_text = "\n\n".join(
