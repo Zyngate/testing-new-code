@@ -439,10 +439,20 @@ STYLE:
 
 RULES:
 - You MAY reference visuals or moments in the video  
-- First-person language is allowed (use sparingly)  
+- Write in a neutral, observer-style voice
+- STRICTLY NO first-person language (no I, me, my, we)  
 - No emojis  
 - No hashtags inside the caption text  
 - Avoid generic motivational filler  
+
+AVOID THESE OPENINGS:
+- "As I watched"
+- "I noticed"
+- "I realized"
+- "Watching this"
+- "This video shows"
+- "In this video"
+- "Here we see"
 
 LENGTH:
 - Long-form: 800–1,100 characters total  
