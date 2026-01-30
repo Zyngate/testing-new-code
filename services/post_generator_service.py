@@ -456,38 +456,49 @@ Return ONLY the caption text.
 
         elif p_norm == "threads":
             caption_prompt = f"""
-Write a Threads post as a HUMAN reaction.
+Write a LONG-FORM Threads post (800–1000 characters).
 
-CRITICAL:
-- DO NOT describe the image or video
-- DO NOT summarize what is happening
-- React with a thought, opinion, or feeling
+STRUCTURE:
+- Bold hook that stops scrolling
+- Expressive insight or opinion
+- Reflective CTA at the end
 
-STYLE:
-- Short (1–3 lines)
-- Conversational
-- Reflective or curious
-- No hashtags
+RULES:
+- Opinionated, not descriptive
 - No emojis
+- No hashtags
 
-Context (for understanding only):
+CONTEXT:
 {effective_query}
 
 Return ONLY the caption text.
 """
 
+
         elif p_norm == "linkedin":
             caption_prompt = f"""
-Write a LinkedIn post reacting to this content.
+Write a LONG-FORM LinkedIn post (800–1000 characters).
+
+STRUCTURE (MANDATORY):
+PARAGRAPH 1 — HOOK
+- 2–3 compelling lines that challenge or provoke thought
+
+PARAGRAPH 2 — INSIGHT
+- Explain ONE professional insight or lesson
+- Why this moment matters in work, leadership, or growth
+- This should be the longest paragraph
+
+PARAGRAPH 3 — CTA
+- Invite reflection or discussion
+- End with a thoughtful question
 
 RULES:
-- Do NOT describe the video/image
-- Focus on insight, takeaway, or professional relevance
-- Thoughtful, human, confident tone
-- 3–5 lines max
+- Do NOT describe the video or image
+- Do NOT summarize scenes
+- Confident, human, professional tone
 - No hashtags inside the text
 
-Context:
+CONTEXT (for understanding only):
 {effective_query}
 
 Return ONLY the caption text.
@@ -495,20 +506,95 @@ Return ONLY the caption text.
 
         elif p_norm == "facebook":
             caption_prompt = f"""
-Write a Facebook caption as a casual human reaction.
+Write a LONG-FORM Facebook caption (800–1000 characters).
+
+STRUCTURE:
+- Strong emotional or relatable HOOK
+- Deeper reflection or story
+- Clear CTA at the end (question or thought)
 
 RULES:
-- Conversational
-- Relatable
-- No scene description
-- 2–4 lines
+- Do NOT explain what happens in the video
+- Sound natural and human
 - No hashtags inside the text
 
-Context:
+CONTEXT:
 {effective_query}
 
 Return ONLY the caption text.
 """
+        elif p_norm == "pinterest":
+            caption_prompt = f"""
+Write a LONG-FORM Pinterest description (800–1000 characters).
+
+STRUCTURE:
+- Inspiring or curiosity-driven hook
+- Aesthetic or thoughtful insight
+- Clear CTA (save, reflect, explore)
+
+RULES:
+- Do NOT describe the image literally
+- Evoke mood and meaning
+- No hashtags in text
+
+CONTEXT:
+{effective_query}
+
+Return ONLY the caption text.
+"""
+        elif p_norm == "youtube":
+            caption_prompt = f"""
+Write a LONG-FORM YouTube description (800–1000 characters).
+
+STRUCTURE:
+- Hook that builds curiosity
+- Explain why this video matters
+- Invite engagement (like, comment, reflect)
+
+RULES:
+- Do NOT list scenes
+- Human, engaging tone
+- CTA is mandatory
+
+CONTEXT:
+{effective_query}
+
+Return ONLY the description text.
+"""
+        elif p_norm == "tiktok":
+            caption_prompt = f"""
+Write a LONG-FORM TikTok caption (800–1000 characters).
+
+STRUCTURE (MANDATORY):
+
+PARAGRAPH 1 — HOOK
+- First 2–3 lines must stop scrolling
+- Create curiosity, tension, or emotion
+- Make the viewer NEED to watch
+
+PARAGRAPH 2 — CORE IDEA
+- Focus on ONE strong reaction, thought, or insight
+- Explain why this moment matters
+- Human, creator-style tone
+- This should be the longest paragraph
+
+PARAGRAPH 3 — CTA
+- Invite engagement (comment, share, reflect)
+- End with a direct or thoughtful question
+
+RULES:
+- Do NOT describe scenes or actions
+- Do NOT summarize the video
+- Sound like a real creator, not a brand
+- No emojis
+- No hashtags inside the text
+
+CONTEXT (for understanding only):
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
 
         else:
             caption_prompt = f"""
@@ -550,14 +636,40 @@ Return ONLY the caption text.
         logger.info(
     f"Caption generated for {p_norm}: {len(caption_text)} characters"
 )
+        # ---------------------------
+        # Title (Pinterest & YouTube only)
+        # ---------------------------
+        title = None
+        if p_norm in ["pinterest", "youtube"]:
+            title_prompt = f"""
+Write an intriguing, curiosity-driven TITLE.
+
+RULES:
+- 6–12 words
+- Emotion or curiosity based
+- NOT descriptive
+
+CONTEXT:
+{effective_query}
+
+Return ONLY the title.
+"""
+            try:
+                title = await groq_generate_text(MODEL, title_prompt)
+                title = title.strip().replace('"', '')
+            except Exception:
+                title = None
+
         if not caption_text:
             caption_text = " "
-        captions[p_norm] = caption_text
 
-
-        
-        
-
+        if title:
+            captions[p_norm] = {
+                "title": title,
+                "caption": caption_text
+            }
+        else:
+            captions[p_norm] = caption_text
 
     return {
         "captions": captions,

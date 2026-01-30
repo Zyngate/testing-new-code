@@ -550,25 +550,51 @@ class RecommendationEngine:
                 shares = post_dict.get('reposts', 0)
 
             try:
-                # Try ISO format first
                 posting_time_str = post_dict['posting_time']
+                posting_time_utc = None
+                
+                # Try ISO format first (e.g., "2025-11-11T13:15:00+0000")
                 try:
                     posting_time_utc = datetime.fromisoformat(posting_time_str.replace('Z', '+00:00'))
                 except:
-                    # Try alternative formats like "13 Jan 2026, 01:01 pm IST"
-                    try:
-                        # Remove timezone from end and parse
-                        time_part = posting_time_str.rsplit(' ', 1)[0]  # Remove "IST" or "UTC"
-                        posting_time_utc = datetime.strptime(time_part, "%d %b %Y, %I:%M %p")
-                        posting_time_utc = utc_tz.localize(posting_time_utc)
-                    except:
-                        # If still fails, use current time
-                        posting_time_utc = datetime.now(utc_tz)
+                    pass
                 
+                # Try alternative formats if ISO failed
+                if posting_time_utc is None:
+                    # Remove timezone suffix (IST, UTC, etc.)
+                    time_part = posting_time_str.rsplit(' ', 1)[0] if ' ' in posting_time_str else posting_time_str
+                    
+                    # Try multiple date format patterns
+                    formats_to_try = [
+                        "%d %b %Y, %I:%M %p",      # "30 Jan 2026, 03:37 am"
+                        "%d %b %Y, %I:%M%p",       # "30 Jan 2026, 03:37am" (no space before am/pm)
+                        "%Y-%m-%d %H:%M:%S",       # "2026-01-30 03:37:00"
+                        "%Y-%m-%d",                # "2026-01-30"
+                        "%d/%m/%Y %I:%M %p",       # "30/01/2026 03:37 am"
+                        "%d-%m-%Y %I:%M %p",       # "30-01-2026 03:37 am"
+                    ]
+                    
+                    for fmt in formats_to_try:
+                        try:
+                            posting_time_utc = datetime.strptime(time_part.strip(), fmt)
+                            break
+                        except:
+                            continue
+                    
+                    # If still not parsed, use current time as fallback
+                    if posting_time_utc is None:
+                        posting_time_utc = datetime.now(utc_tz)
+                        print(f"Warning: Could not parse timestamp '{posting_time_str}', using current time")
+                
+                # Ensure timezone awareness
                 if posting_time_utc.tzinfo is None:
                     posting_time_utc = utc_tz.localize(posting_time_utc)
+                
+                # Convert to user timezone
                 posting_time_user = posting_time_utc.astimezone(user_tz)
-            except:
+                
+            except Exception as e:
+                print(f"Error processing posting_time '{post_dict.get('posting_time', 'N/A')}': {e}")
                 posting_time_user = datetime.now(user_tz)
 
             engagement_score = likes + (comments * 2) + (shares * 3) + saved
@@ -1199,7 +1225,7 @@ class RecommendationEngine:
                 f"🎉 Your audience is more active on weekends! Weekend posts get about {((weekend_engagement - weekday_engagement) / weekday_engagement * 100):.0f}% more engagement. "
                 f"Don't let those days go to waste."
             )
-        elif weekday_engagement > weekend_engagement * 1.2:
+        elif weekday_engagement > weekend_engagement * 1.2 and weekend_engagement > 0:
             insights.append(
                 f"💼 Your audience is more engaged during the workweek. Weekday posts outperform weekends by about "
                 f"{((weekday_engagement - weekend_engagement) / weekend_engagement * 100):.0f}%. Focus your energy Monday through Friday!"
@@ -1256,7 +1282,7 @@ class RecommendationEngine:
         
         # Comment-to-like ratio insight
         if total_likes > 0 and total_comments > 0:
-            comment_ratio = (total_comments / total_likes) * 100
+            comment_ratio = (total_comments / max(total_likes, 1)) * 100
             if comment_ratio > 10:
                 insights.append(
                     f"💬 Your audience loves to chat! You're getting {comment_ratio:.1f} comments for every 100 likes — "
@@ -1289,7 +1315,13 @@ class RecommendationEngine:
             top_avg = top_20_pct['engagement_score'].mean()
             bottom_avg = bottom_20_pct['engagement_score'].mean()
             
-            if top_avg > bottom_avg * 5:
+            # Protect against NaN values
+            if pd.isna(top_avg):
+                top_avg = 0
+            if pd.isna(bottom_avg):
+                bottom_avg = 0
+            
+            if bottom_avg > 0 and top_avg > bottom_avg * 5:
                 insights.append(
                     f"⭐ Your top-performing posts get {(top_avg / bottom_avg):.1f}x more engagement than your lowest performers. "
                     f"Study what made those posts work — the topic, the format, the caption style — and do more of that!"
@@ -1302,6 +1334,12 @@ class RecommendationEngine:
             worst_platform = platform_rates.idxmin()
             best_rate = platform_rates[best_platform]
             worst_rate = platform_rates[worst_platform]
+            
+            # Protect against NaN values
+            if pd.isna(best_rate):
+                best_rate = 0
+            if pd.isna(worst_rate):
+                worst_rate = 0
             
             if best_rate > worst_rate * 1.5:
                 insights.append(
@@ -1320,7 +1358,13 @@ class RecommendationEngine:
             # Best category insight
             best_category = max(category_perf, key=category_perf.get)
             best_engagement = category_perf[best_category]
-            avg_engagement = sum(category_perf.values()) / len(category_perf)
+            avg_engagement = sum(category_perf.values()) / len(category_perf) if len(category_perf) > 0 else 0
+            
+            # Protect against NaN
+            if pd.isna(best_engagement):
+                best_engagement = 0
+            if pd.isna(avg_engagement):
+                avg_engagement = 0
             
             boost_pct = ((best_engagement - avg_engagement) / avg_engagement * 100) if avg_engagement > 0 else 0
             
@@ -1374,12 +1418,18 @@ class RecommendationEngine:
                 short_engagement = short_captions['engagement_score'].mean()
                 long_engagement = long_captions['engagement_score'].mean()
                 
-                if long_engagement > short_engagement * 1.3:
+                # Protect against NaN values
+                if pd.isna(short_engagement):
+                    short_engagement = 0
+                if pd.isna(long_engagement):
+                    long_engagement = 0
+                
+                if short_engagement > 0 and long_engagement > short_engagement * 1.3:
                     insights.append(
                         f"📝 Longer captions are working for you! Posts with detailed captions get about "
                         f"{((long_engagement - short_engagement) / short_engagement * 100):.0f}% more engagement. Your audience appreciates the depth!"
                     )
-                elif short_engagement > long_engagement * 1.3:
+                elif long_engagement > 0 and short_engagement > long_engagement * 1.3:
                     insights.append(
                         f"📝 Short and punchy works! Your concise captions outperform longer ones by "
                         f"{((short_engagement - long_engagement) / long_engagement * 100):.0f}%. Keep it snappy!"
@@ -1408,6 +1458,13 @@ class RecommendationEngine:
             
             early_engagement = early_df['engagement_score'].mean()
             recent_engagement = recent_df['engagement_score'].mean()
+            
+            # Protect against NaN values
+            if pd.isna(early_engagement):
+                early_engagement = 0
+            if pd.isna(recent_engagement):
+                recent_engagement = 0
+            
             change_pct = ((recent_engagement - early_engagement) / early_engagement * 100) if early_engagement > 0 else 0
             
             if change_pct > 30:
@@ -1882,10 +1939,16 @@ class RecommendationEngine:
             if len(category_perf) >= 3:
                 worst_category = min(category_perf, key=category_perf.get)
                 worst_engagement = category_perf[worst_category]
-                avg_engagement = sum(category_perf.values()) / len(category_perf)
+                avg_engagement = sum(category_perf.values()) / len(category_perf) if len(category_perf) > 0 else 0
+                
+                # Protect against NaN
+                if pd.isna(worst_engagement):
+                    worst_engagement = 0
+                if pd.isna(avg_engagement):
+                    avg_engagement = 0
                 
                 worst_posts = len(df[df['category'] == worst_category])
-                if worst_posts >= 2 and worst_engagement < avg_engagement * 0.6:
+                if avg_engagement > 0 and worst_posts >= 2 and worst_engagement < avg_engagement * 0.6:
                     recommendations.append({
                         'priority': 'low',
                         'category': 'Content Optimization',
@@ -1907,7 +1970,13 @@ class RecommendationEngine:
                 video_engagement = df[df['content_type'] == 'video']['engagement_score'].mean()
                 other_engagement = df[df['content_type'] != 'video']['engagement_score'].mean()
                 
-                if video_engagement > other_engagement * 1.3:
+                # Protect against NaN values
+                if pd.isna(video_engagement):
+                    video_engagement = 0
+                if pd.isna(other_engagement):
+                    other_engagement = 0
+                
+                if other_engagement > 0 and video_engagement > other_engagement * 1.3:
                     recommendations.append({
                         'priority': 'medium',
                         'category': 'Content Format',
