@@ -431,6 +431,78 @@ VIDEO CONTEXT:
 Return ONLY the caption text.
 """
 
+        elif p_norm == "threads":
+            caption_prompt = f"""
+Write a Threads post as a HUMAN reaction.
+
+CRITICAL:
+- DO NOT describe the image or video
+- DO NOT summarize what is happening
+- React with a thought, opinion, or feeling
+
+STYLE:
+- Short (1–3 lines)
+- Conversational
+- Reflective or curious
+- No hashtags
+- No emojis
+
+Context (for understanding only):
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
+        elif p_norm == "linkedin":
+            caption_prompt = f"""
+Write a LinkedIn post reacting to this content.
+
+RULES:
+- Do NOT describe the video/image
+- Focus on insight, takeaway, or professional relevance
+- Thoughtful, human, confident tone
+- 3–5 lines max
+- No hashtags inside the text
+
+Context:
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
+        elif p_norm == "facebook":
+            caption_prompt = f"""
+Write a Facebook caption as a casual human reaction.
+
+RULES:
+- Conversational
+- Relatable
+- No scene description
+- 2–4 lines
+- No hashtags inside the text
+
+Context:
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
+        else:
+            caption_prompt = f"""
+Write a natural social media caption.
+
+RULES:
+- Do NOT describe the media
+- React like a human
+- Be platform-appropriate
+- No hashtags in text
+
+Context:
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
         # ---------------------------
         # Generate caption
         # ---------------------------
