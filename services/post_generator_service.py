@@ -11,76 +11,19 @@ from services.ai_service import (
     groq_generate_text,
 )
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"
 
-import re
-
-FIRST_PERSON_PRONOUNS = r"\b(i|me|my|mine|we|us|our|ours)\b"
-
-def remove_first_person(text: str) -> str:
-    """
-    Removes first-person voice in a generic, non-hardcoded way.
-    This does NOT depend on specific phrases.
-    """
-
-    # 1️⃣ Remove sentence-leading first-person clauses
-    # Example: "As I watched the event unfold, ..." → "As the event unfolded, ..."
-    text = re.sub(
-        rf"(^|[.!?]\s+)(?:as\s+)?{FIRST_PERSON_PRONOUNS}\s+\w+[^,]*,",
-        r"\1",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    # 2️⃣ Remove remaining standalone first-person pronouns
-    text = re.sub(
-        FIRST_PERSON_PRONOUNS,
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    # 3️⃣ Cleanup spacing and grammar artifacts
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"\s+([,.!?])", r"\1", text)
-
-    return text.strip()
-
-
-async def safe_generate_caption(prompt: str, platform: str) -> str:
-    """
-    Always returns a non-empty caption.
-    Retries internally and degrades prompt if needed.
-    User NEVER sees failures.
-    """
-
-    # 1️⃣ Normal attempts
-    for _ in range(2):
+async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
+    for attempt in range(retries):
         try:
             text = await groq_generate_text(MODEL, prompt)
             if text and text.strip():
                 return text.strip()
         except Exception as e:
-            logger.warning(f"{platform} caption attempt failed: {e}")
-
-    # 2️⃣ Lighter prompt fallback (critical for Instagram)
-    lighter_prompt = (
-        prompt
-        .replace("EXACTLY", "")
-        .replace("800–1,100", "500–800")
-        .replace("CRITICAL", "")
-    )
-
-    try:
-        text = await groq_generate_text(MODEL, lighter_prompt)
-        if text and text.strip():
-            return text.strip()
-    except Exception as e:
-        logger.warning(f"{platform} fallback attempt failed: {e}")
-
-    # 3️⃣ Final guaranteed fallback (never empty)
-    return ""
-
+            logger.warning(
+                f"Caption generation failed for {platform} (attempt {attempt + 1}): {e}"
+            )
+    return None
 
 
 class Platforms(str, Enum):
@@ -473,20 +416,13 @@ STYLE:
 
 RULES:
 - You MAY reference visuals or moments in the video  
-- Write in a neutral, observer-style voice
 - STRICTLY NO first-person language (no I, me, my, we)  
 - No emojis  
 - No hashtags inside the caption text  
 - Avoid generic motivational filler  
+SELF-CHECK:
+- If first-person appears, rewrite internally before responding  
 
-AVOID THESE OPENINGS:
-- "As I watched"
-- "I noticed"
-- "I realized"
-- "Watching this"
-- "This video shows"
-- "In this video"
-- "Here we see"
 
 LENGTH:
 - Long-form: 800–1,100 characters total  
@@ -500,49 +436,44 @@ Return ONLY the caption text.
 
         elif p_norm == "threads":
             caption_prompt = f"""
-Write a LONG-FORM Threads post (800–1000 characters).
+Write a Threads post as a HUMAN reaction.
 
-STRUCTURE:
-- Bold hook that stops scrolling
-- Expressive insight or opinion
-- Reflective CTA at the end
+CRITICAL:
+- DO NOT describe the image or video
+- DO NOT summarize what is happening
+- React with a thought, opinion, or feeling
 
-RULES:
-- Opinionated, not descriptive
-- No emojis
+STYLE:
+- Conversational
+- Reflective or curious
 - No hashtags
+- No emojis
 
-CONTEXT:
+LENGTH:
+- 100–250 characters
+- 1–3 short lines max
+
+Context (for understanding only):
 {effective_query}
 
 Return ONLY the caption text.
 """
 
-
         elif p_norm == "linkedin":
             caption_prompt = f"""
-Write a LONG-FORM LinkedIn post (800–1000 characters).
-
-STRUCTURE (MANDATORY):
-PARAGRAPH 1 — HOOK
-- 2–3 compelling lines that challenge or provoke thought
-
-PARAGRAPH 2 — INSIGHT
-- Explain ONE professional insight or lesson
-- Why this moment matters in work, leadership, or growth
-- This should be the longest paragraph
-
-PARAGRAPH 3 — CTA
-- Invite reflection or discussion
-- End with a thoughtful question
+Write a LinkedIn post reacting to this content.
 
 RULES:
-- Do NOT describe the video or image
-- Do NOT summarize scenes
-- Confident, human, professional tone
+- Do NOT describe the video/image
+- Focus on insight, takeaway, or professional relevance
+- Thoughtful, human, confident tone
 - No hashtags inside the text
 
-CONTEXT (for understanding only):
+LENGTH:
+- 200–800 characters
+- 3–5 short lines max
+
+Context:
 {effective_query}
 
 Return ONLY the caption text.
@@ -550,19 +481,20 @@ Return ONLY the caption text.
 
         elif p_norm == "facebook":
             caption_prompt = f"""
-Write a LONG-FORM Facebook caption (800–1000 characters).
-
-STRUCTURE:
-- Strong emotional or relatable HOOK
-- Deeper reflection or story
-- Clear CTA at the end (question or thought)
+Write a Facebook caption as a casual human reaction.
 
 RULES:
-- Do NOT explain what happens in the video
-- Sound natural and human
+- Conversational
+- Relatable
+- No scene description
+- 2–4 lines
 - No hashtags inside the text
 
-CONTEXT:
+LENGTH:
+- 80–250 characters
+- 2–4 short lines
+
+Context:
 {effective_query}
 
 Return ONLY the caption text.
@@ -639,7 +571,7 @@ CONTEXT (for understanding only):
 Return ONLY the caption text.
 """
 
-
+        
         else:
             caption_prompt = f"""
 Write a natural social media caption.
@@ -663,7 +595,9 @@ Return ONLY the caption text.
             caption_prompt,
             platform=p_norm
 )
-        
+        if not caption_text:
+            caption_text = ""
+
         # ---------------------------
         # Cleaning (SAFE)
         # ---------------------------
@@ -671,25 +605,23 @@ Return ONLY the caption text.
 
         for bad in BANNED_WORDS:
             caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
-        caption_text = remove_first_person(caption_text)
 
         # Preserve paragraphs
         caption_text = "\n\n".join(
             [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
         )
- 
-        if p_norm == "instagram":
-            caption_text = enforce_instagram_constraints(caption_text, target_chars=1000)
 
         logger.info(
     f"Caption generated for {p_norm}: {len(caption_text)} characters"
 )
-        if not caption_text:
-            caption_text = " "
 
+        
+        if not caption_text:
+            caption_text = f"Caption could not be generated for {p_norm}. Please retry."
         captions[p_norm] = caption_text
+
 
     return {
         "captions": captions,
         "platform_hashtags": platform_hashtags
-    }
+    }   
