@@ -513,6 +513,14 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
     "- Answer clearly and directly\n"
     "- Be friendly, calm, and easy to understand\n\n"
 
+    "Default structure guideline:\n"
+    "- Start with a brief framing sentence (1–2 lines)\n"
+    "- Organize the main content into clearly labeled sections or bullets\n"
+    "- Keep sections concise by default, expanding only when the concept requires depth\n"
+    "- Add one short example or practical insight when it improves understanding\n"
+    "- End cleanly without unnecessary repetition\n\n"
+
+
     "When answering:\n"
     "- Prefer explaining concepts in a clear, teaching-oriented way\n"
     "- Start with a simple framing sentence before details\n"
@@ -525,7 +533,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
     "- Do NOT over-explain\n"
     "- Do NOT summarize everything you know\n"
     "- Avoid generic or obvious statements\n\n"
-
+    
     "Response style:\n"
     "- Conversational and natural\n"
     "- Clear and focused\n"
