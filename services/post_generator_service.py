@@ -441,7 +441,14 @@ Write a Threads post as a HUMAN reaction.
 CRITICAL:
 - DO NOT describe the image or video
 - DO NOT summarize what is happening
-- React with a thought, opinion, or feeling
+-React as if you just watched this and had an immediate thought.
+-Do NOT explain why or what happened.
+
+ENGAGEMENT RULE:
+- Engagement = facts + tension
+- Do not state facts alone
+- Every factual idea must introduce doubt, contrast, risk, or a consequence
+- If a sentence sounds neutral or agreeable, rewrite it internally to add tension
 
 STYLE:
 - Conversational
@@ -468,6 +475,11 @@ RULES:
 - Focus on insight, takeaway, or professional relevance
 - Thoughtful, human, confident tone
 - No hashtags inside the text
+ENGAGEMENT RULE:
+- Engagement = facts + tension
+- Do not state facts alone
+- Every factual idea must introduce doubt, contrast, risk, or a consequence
+- If a sentence sounds neutral or agreeable, rewrite it internally to add tension
 
 LENGTH:
 - 200–800 characters
