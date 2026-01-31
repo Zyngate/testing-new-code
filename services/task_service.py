@@ -377,4 +377,6 @@ def scheduler_loop():
         time.sleep(SCHEDULER_POLL_INTERVAL)
 
 
-task_thread = threading.Thread(target=scheduler_loop, daemon=True)
+def start_task_scheduler():
+    thread = threading.Thread(target=scheduler_loop, daemon=True)
+    thread.start()

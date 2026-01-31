@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import os
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,8 +25,7 @@ from services.subscription_service import (
     proactive_checkin_scheduler,
     notification_sender_loop
 )
-from services.task_service import task_thread
-
+from services.task_service import start_task_scheduler
 from routes import post_generation_routes
 from routes.post_routes import router as post_router
 
@@ -192,7 +192,7 @@ from database import get_or_init_sync_collections
 async def startup():
     await load_faiss_indices()
 
-    # 🔥 RESET STUCK TASKS
+    # Reset stuck tasks (this is fine)
     tasks_col, _ = get_or_init_sync_collections()
     if tasks_col is not None:
         tasks_col.update_many(
@@ -200,13 +200,12 @@ async def startup():
             {"$set": {"status": "scheduled", "retrieved": False}}
         )
 
-    asyncio.create_task(notification_sender_loop())
-    asyncio.create_task(daily_checkin_scheduler())
-    asyncio.create_task(proactive_checkin_scheduler())
-
-    if not task_thread.is_alive():
-        task_thread.start()
-
+    # 🚫 DO NOT run schedulers on web service
+    if os.getenv("ENABLE_SCHEDULERS") == "true":
+        asyncio.create_task(notification_sender_loop())
+        asyncio.create_task(daily_checkin_scheduler())
+        asyncio.create_task(proactive_checkin_scheduler())
+        start_task_scheduler()
 
 # -------------------------
 #   ROOT ENDPOINT
