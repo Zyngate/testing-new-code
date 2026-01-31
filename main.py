@@ -190,7 +190,7 @@ from database import get_or_init_sync_collections
 
 @app.on_event("startup")
 async def startup():
-    await load_faiss_indices()
+    asyncio.create_task(load_faiss_indices())
 
     # Reset stuck tasks (this is fine)
     tasks_col, _ = get_or_init_sync_collections()
