@@ -441,14 +441,21 @@ Write a Threads post as a HUMAN reaction.
 CRITICAL:
 - DO NOT describe the image or video
 - DO NOT summarize what is happening
--React as if you just watched this and had an immediate thought.
--Do NOT explain why or what happened.
+- React as if you just watched this and had an immediate thought
+- Do NOT explain the full context or backstory
+- You MAY imply a consequence, concern, or realization
+
+STRUCTURE (MANDATORY):
+- MUST be written in 2 or 3 lines
+- Each line must be a complete thought
+- A single-line response is INVALID
 
 ENGAGEMENT RULE:
 - Engagement = facts + tension
 - Do not state facts alone
 - Every factual idea must introduce doubt, contrast, risk, or a consequence
-- If a sentence sounds neutral or agreeable, rewrite it internally to add tension
+- At least one line must introduce a specific implication or consequence
+- If a sentence sounds neutral, rewrite it internally to add tension
 
 STYLE:
 - Conversational
@@ -457,13 +464,15 @@ STYLE:
 - No emojis
 
 LENGTH:
-- 100–250 characters
-- 1–3 short lines max
+- 120–280 characters total
 
 Context (for understanding only):
 {effective_query}
 
-Return ONLY the caption text.
+VALIDATION:
+- If the caption is only one line, rewrite it into multiple lines before returning.
+
+Return ONLY the caption text with line breaks preserved.
 """
 
         elif p_norm == "linkedin":
@@ -495,21 +504,38 @@ Return ONLY the caption text.
             caption_prompt = f"""
 Write a Facebook caption as a casual human reaction.
 
-RULES:
+CRITICAL:
+- Do NOT describe the video or image
+- Do NOT summarize events
+
+STRUCTURE (MANDATORY):
+- MUST contain at least 3 lines
+- First line: engaging or opinionated opening
+- Remaining lines: expand with thoughts, implications, or takeaways
+- A single-line caption is INVALID
+
+ENGAGEMENT RULE:
+- Engagement = relatability + implication
+- At least one line must add a concern, insight, or reflection
+- If the caption feels light, expand it internally before returning
+
+STYLE:
 - Conversational
 - Relatable
-- No scene description
-- 2–4 lines
-- No hashtags inside the text
+- Human
+- Emojis optional (max 1–2 if natural)
+- No hashtags
 
 LENGTH:
-- 80–250 characters
-- 2–4 short lines
+- 180–450 characters
 
 Context:
 {effective_query}
 
-Return ONLY the caption text.
+VALIDATION:
+- If fewer than 3 lines are produced, rewrite the caption to meet the structure.
+
+Return ONLY the caption text with line breaks preserved.
 """
         elif p_norm == "pinterest":
             caption_prompt = f"""
