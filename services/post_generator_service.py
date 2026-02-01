@@ -477,28 +477,46 @@ Return ONLY the caption text with line breaks preserved.
 
         elif p_norm == "linkedin":
             caption_prompt = f"""
-Write a LinkedIn post reacting to this content.
+Write a LinkedIn post with a PROFESSIONAL, INSIGHT-DRIVEN tone.
 
-RULES:
-- Do NOT describe the video/image
-- Focus on insight, takeaway, or professional relevance
-- Thoughtful, human, confident tone
-- No hashtags inside the text
-ENGAGEMENT RULE:
-- Engagement = facts + tension
-- Do not state facts alone
-- Every factual idea must introduce doubt, contrast, risk, or a consequence
-- If a sentence sounds neutral or agreeable, rewrite it internally to add tension
+PURPOSE:
+- Share a thoughtful perspective relevant to work, leadership, strategy, or industry learning
+- Sound like a professional reflecting, not reacting
+
+STRICT RULES:
+- Do NOT sound casual, viral, or trendy
+- Do NOT use short-form social media language
+- Do NOT write like TikTok, Instagram, or Threads
+- Do NOT use emojis or hashtags
+- Do NOT describe the video or scene
+
+STRUCTURE (MANDATORY):
+1. Start with a clear professional framing (context or observation)
+2. Expand with insight, implication, or lesson
+3. Connect it to a broader professional takeaway (work, decisions, growth, systems)
+
+STYLE:
+- Calm
+- Confident
+- Thoughtful
+- Articulate
+- Slightly formal but human
+
+DEPTH REQUIREMENT:
+- Explain ideas clearly
+- Prefer clarity over cleverness
+- Insight > engagement tricks
 
 LENGTH:
-- 200–800 characters
-- 3–5 short lines max
+- 300–800 characters
+- 3–5 well-formed paragraphs (not single lines)
 
-Context:
+Context (for understanding only):
 {effective_query}
 
 Return ONLY the caption text.
 """
+
 
         elif p_norm == "facebook":
             caption_prompt = f"""
