@@ -477,39 +477,40 @@ Return ONLY the caption text with line breaks preserved.
 
         elif p_norm == "linkedin":
             caption_prompt = f"""
-Write a LinkedIn post with a PROFESSIONAL, INSIGHT-DRIVEN tone.
+Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a company page).
 
-PURPOSE:
-- Share a thoughtful perspective relevant to work, leadership, strategy, or industry learning
-- Sound like a professional reflecting, not reacting
+GOAL:
+- Write a short, structured, professional post similar to a mini blog
+- Share insight, reflection, or learning relevant to work or industry
+
+TONE:
+- Professional
+- Thoughtful
+- Calm and confident
+- Descriptive, not promotional
+- Written like a real person reflecting, not reacting
 
 STRICT RULES:
-- Do NOT sound casual, viral, or trendy
-- Do NOT use short-form social media language
-- Do NOT write like TikTok, Instagram, or Threads
+- Do NOT sound like TikTok, Instagram, or Threads
 - Do NOT use emojis or hashtags
-- Do NOT describe the video or scene
+- Do NOT write marketing copy or slogans
+- Do NOT describe the video or visuals
 
 STRUCTURE (MANDATORY):
-1. Start with a clear professional framing (context or observation)
-2. Expand with insight, implication, or lesson
-3. Connect it to a broader professional takeaway (work, decisions, growth, systems)
+1. Start with a professional framing paragraph (2–3 lines) explaining the context
+2. Add a second short paragraph explaining why this matters from a professional or decision-making perspective
+3. Follow with bullet points (• or -) breaking down key observations or implications
+4. End with a reflective closing paragraph that connects the topic to judgment, responsibility, or leadership
 
-STYLE:
-- Calm
-- Confident
-- Thoughtful
-- Articulate
-- Slightly formal but human
-
-DEPTH REQUIREMENT:
-- Explain ideas clearly
-- Prefer clarity over cleverness
-- Insight > engagement tricks
+BULLET POINT GUIDELINES:
+- 4–6 bullet points
+- Each bullet should focus on ONE idea
+- Prefer shorter bullets with clear spacing
 
 LENGTH:
-- 300–800 characters
-- 3–5 well-formed paragraphs (not single lines)
+- 500–1,000 characters
+- Proper spacing between sections
+- Multi-paragraph output required
 
 Context (for understanding only):
 {effective_query}

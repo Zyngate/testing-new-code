@@ -189,12 +189,12 @@ async def upload_bulk_posts(payload: dict):
         )
 
     # 🔒 MAX LIMIT
-    MAX_BULK_UPLOAD = 10
+    MAX_BULK_UPLOAD = 20
     if len(media_urls) > MAX_BULK_UPLOAD:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {MAX_BULK_UPLOAD} media items allowed per bulk upload"
-        )
+       )
 
     results = []
 
