@@ -37,6 +37,22 @@ class Platforms(str, Enum):
     Twitter = "twitter"
     Reddit = "reddit"
 
+def enforce_vertical_bullets(text: str) -> str:
+    lines = text.split("\n")
+    fixed_lines = []
+
+    for line in lines:
+        if "•" in line and not line.strip().startswith("•"):
+            # Split inline bullets into separate lines
+            parts = [p.strip() for p in line.split("•") if p.strip()]
+            for part in parts:
+                fixed_lines.append(f"• {part}")
+        else:
+            fixed_lines.append(line)
+
+    return "\n\n".join(fixed_lines)
+
+
 # ---------------------------
 # PLATFORM TONE SETTINGS
 # ---------------------------
@@ -668,6 +684,10 @@ Return ONLY the caption text.
 )
         if not caption_text:
             caption_text = ""
+
+        # 🔒 PLATFORM-SPECIFIC FORMAT GUARD
+        if p_norm == "linkedin":
+            caption_text = enforce_vertical_bullets(caption_text)
 
         # ---------------------------
         # Cleaning (SAFE)
