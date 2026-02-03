@@ -478,17 +478,15 @@ Return ONLY the caption text with line breaks preserved.
         elif p_norm == "linkedin":
             caption_prompt = f"""
 Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a company page).
-
 GOAL:
-- Write a short, structured, professional post similar to a mini blog
-- Share insight, reflection, or learning relevant to work or industry
+- Write a structured, professional mini-blog post
+- Share a thoughtful reflection relevant to work, leadership, or decision-making
 
 TONE:
 - Professional
-- Thoughtful
-- Calm and confident
-- Descriptive, not promotional
-- Written like a real person reflecting, not reacting
+- Calm
+- Reflective
+- Descriptive (not promotional, not reactive)
 
 STRICT RULES:
 - Do NOT sound like TikTok, Instagram, or Threads
@@ -496,20 +494,32 @@ STRICT RULES:
 - Do NOT write marketing copy or slogans
 - Do NOT describe the video or visuals
 
-STRUCTURE (MANDATORY):
-1. Start with a professional framing paragraph (2–3 lines) explaining the context
-2. Add a second short paragraph explaining why this matters from a professional or decision-making perspective
-3. Follow with bullet points (• or -) breaking down key observations or implications
-4. End with a reflective closing paragraph that connects the topic to judgment, responsibility, or leadership
+STRUCTURE (MANDATORY — MUST FOLLOW EXACTLY):
 
-BULLET POINT GUIDELINES:
-- 4–6 bullet points
-- Each bullet should focus on ONE idea
-- Prefer shorter bullets with clear spacing
+PARAGRAPH 1:
+- Professional framing and context (2–3 lines)
+
+PARAGRAPH 2:
+- Why this topic matters from a professional or decision-making perspective (1–2 lines)
+
+BULLET SECTION (MANDATORY):
+- Write 4–6 bullet points
+- EACH bullet MUST be on its OWN line
+- Use ONE bullet per line only
+- Do NOT combine bullets into a paragraph
+- Do NOT place multiple bullets on the same line
+- Bullets must explain ONE clear idea each
+
+CLOSING PARAGRAPH:
+- A reflective conclusion connecting the topic to judgment, responsibility, or leadership
+
+FORMAT REQUIREMENTS (VERY IMPORTANT):
+- Use blank lines between paragraphs
+- Each bullet must start on a new line with “• ”
+- Never place bullets inline with text
 
 LENGTH:
 - 500–1,000 characters
-- Proper spacing between sections
 - Multi-paragraph output required
 
 Context (for understanding only):
@@ -517,6 +527,7 @@ Context (for understanding only):
 
 Return ONLY the caption text.
 """
+
 
 
         elif p_norm == "facebook":
