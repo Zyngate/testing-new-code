@@ -173,6 +173,7 @@ async def upload_bulk_posts(payload: dict):
     """
     Bulk upload:
     Multiple media URLs → AI → Scheduling (manual/auto)
+    PARALLEL PROCESSING for faster execution
     """
 
     user_id = payload.get("userId")
@@ -196,9 +197,9 @@ async def upload_bulk_posts(payload: dict):
             detail=f"Maximum {MAX_BULK_UPLOAD} media items allowed per bulk upload"
        )
 
-    results = []
+    import asyncio
 
-    for index, media_url in enumerate(media_urls):
+    async def process_single_media(media_url: str):
         try:
             result = await create_post_from_uploaded_media(
                 user_id=user_id,
@@ -208,22 +209,25 @@ async def upload_bulk_posts(payload: dict):
                 scheduled_at=scheduled_at
             )
 
-            results.append({
+            return {
                 "mediaUrl": media_url,
                 "status": "success",
                 "posts": result.get("results", [])
-            })
+            }
 
         except Exception as e:
             logger.error(
                 f"❌ Bulk post failed for {media_url}",
                 exc_info=True
             )
-            results.append({
+            return {
                 "mediaUrl": media_url,
                 "status": "failed",
                 "error": str(e)
-            })
+            }
+
+    # Process all media URLs in parallel
+    results = await asyncio.gather(*[process_single_media(url) for url in media_urls])
 
     return {
         "success": True,
@@ -238,6 +242,7 @@ async def bulk_preview(payload: dict):
     """
     Generate AI captions + recommended times
     WITHOUT saving to DB
+    PARALLEL PROCESSING for faster previews
     """
 
     user_id = payload.get("userId")
@@ -253,9 +258,9 @@ async def bulk_preview(payload: dict):
             detail="Missing required fields"
         )
 
-    previews = []
+    import asyncio
 
-    for media_url in media_urls:
+    async def preview_single_media(media_url: str):
         result = await create_post_from_uploaded_media(
             user_id=user_id,
             cloudinary_url=media_url,
@@ -265,10 +270,13 @@ async def bulk_preview(payload: dict):
             preview_only=True,   # 👈 KEY
         )
 
-        previews.append({
+        return {
             "mediaUrl": media_url,
             "results": result.get("results", [])
-        })
+        }
+
+    # Process all previews in parallel
+    previews = await asyncio.gather(*[preview_single_media(url) for url in media_urls])
 
     return {
         "success": True,

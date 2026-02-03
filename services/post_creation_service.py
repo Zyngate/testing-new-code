@@ -19,7 +19,8 @@ from services.time_slot_service import (
 # -----------------------------------
 # Concurrency control
 # -----------------------------------
-VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(3)
+VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(3)  # Max 3 concurrent video processes
+API_RATE_LIMIT_SEMAPHORE = asyncio.Semaphore(5)  # Max 5 concurrent API calls
 
 
 # -----------------------------------
@@ -109,27 +110,34 @@ async def create_post_from_uploaded_media(
 
         try:
             # -----------------------------
-            # Media analysis
+            # Run AI analysis AND time calculation IN PARALLEL
+            # (with API rate limiting)
             # -----------------------------
-            if media_type == "VIDEO":
-                ai_result = await caption_from_video_file(
-                    video_filepath=local_media_path,
-                    platforms=platforms,
-                )
-            else:
-                client = Groq(api_key=GROQ_API_KEY_CAPTION)
-                ai_result = await caption_from_image_file(
-                    image_filepath=local_media_path,
-                    platforms=platforms,
-                    client=client,
+            async def get_ai_captions():
+                async with API_RATE_LIMIT_SEMAPHORE:
+                    if media_type == "VIDEO":
+                        return await caption_from_video_file(
+                            video_filepath=local_media_path,
+                            platforms=platforms,
+                        )
+                    else:
+                        client = Groq(api_key=GROQ_API_KEY_CAPTION)
+                        return await caption_from_image_file(
+                            image_filepath=local_media_path,
+                            platforms=platforms,
+                            client=client,
+                        )
+
+            async def get_ai_times():
+                return await get_optimal_times_for_platforms(
+                    user_id,
+                    platforms,
                 )
 
-            # -----------------------------
-            # AI best-time (used as fallback)
-            # -----------------------------
-            optimal_times = await get_optimal_times_for_platforms(
-                user_id,
-                platforms,
+            # Execute both simultaneously
+            ai_result, optimal_times = await asyncio.gather(
+                get_ai_captions(),
+                get_ai_times()
             )
 
             # -----------------------------
@@ -139,7 +147,12 @@ async def create_post_from_uploaded_media(
                 caption = ai_result.get("captions", {}).get(p, "")
                 hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
 
-                final_caption = caption or " "
+                # Handle rate limit failures gracefully
+                if not caption:
+                    logger.warning(f"⚠️ No caption generated for {p}, using fallback")
+                    caption = "Check out this content!"
+                
+                final_caption = caption
                 if hashtags:
                     final_caption += "\n\n" + " ".join(hashtags)
 

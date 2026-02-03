@@ -12,7 +12,7 @@ import re
 
 from config import logger
 from groq import Groq
-from services.ai_service import groq_generate_text
+from services.ai_service import groq_generate_text, get_caption_client_sync
 from services.post_generator_service import (
     generate_keywords_post,
     fetch_platform_hashtags,
@@ -122,11 +122,8 @@ def extract_frames_from_video(video_path: str, out_dir: Optional[str] = None, fp
 # 2. TRANSCRIPTION USING GROQ WHISPER (STT)
 # -----------------------------------------------------
 async def get_transcript_groq(audio_path: str) -> str:
-    api_key = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY_VIDEO_CAPTION is not set in environment.")
-
-    client = Groq(api_key=api_key)
+    # Use rotating caption client for transcription
+    client = get_caption_client_sync()
 
     # Groq client is sync in many installs; wrap in thread
     def _blocking_transcribe(path: str) -> str:
@@ -219,11 +216,8 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
       - objects: unique list of objects
       - actions: unique list of actions
     """
-    api_key = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY_VIDEO_CAPTION is not set.")
-
-    client = Groq(api_key=api_key)
+    # Use rotating caption client for frame analysis
+    client = get_caption_client_sync()
 
     visual_captions: List[Tuple[str, str]] = []
     detected_text_list: List[str] = []
@@ -572,22 +566,21 @@ RULES:
         logger.error("Keyword generation failed: " + str(e))
         keywords = ["", "", ""]
 
-    # 8. Platform hashtags
-    platform_hashtags: Dict[str, List[str]] = {}
-    for p in platforms:
+    # 8. Platform hashtags + 9. Captions (PARALLEL)
+    async def get_hashtags_for_platform(p):
         try:
             try:
                 tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
             except TypeError:
                 tags = await fetch_platform_hashtags(client, keywords, p)
-            platform_hashtags[p] = tags or []
+            return (p, tags or [])
         except Exception as e:
             logger.warning(f"fetch_platform_hashtags failed for {p}: {e}")
-            platform_hashtags[p] = []
+            return (p, [])
 
-    # 9. Captions
-    try:
-        creator_context = f"""
+    async def get_captions():
+        try:
+            creator_context = f"""
 You are writing a caption for a SHORT-FORM VIDEO (Reels / TikTok / Shorts).
 
 IMPORTANT:
@@ -605,18 +598,27 @@ VIDEO SIGNALS (for understanding only):
 
 Focus on ONE strong idea or reaction.
 """
+            captions_result = await generate_caption_post(
+                creator_context,
+                keywords,
+                platforms
+            )
+            return captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
+        except Exception as e:
+            logger.error(f"generate_caption_post failed: {e}", exc_info=True)
+            return {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}
 
-        captions_result = await generate_caption_post(
-            creator_context,
-            keywords,
-            platforms
-        )
+    # Run all hashtag tasks + caption task in parallel
+    hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
+    all_results = await asyncio.gather(*hashtag_tasks, get_captions())
 
-
-        captions = captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
-    except Exception as e:
-        logger.error(f"generate_caption_post failed: {e}", exc_info=True)
-        captions = {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}
+    # Extract results
+    platform_hashtags: Dict[str, List[str]] = {}
+    for result in all_results[:-1]:  # All except last (captions)
+        p, tags = result
+        platform_hashtags[p] = tags
+    
+    captions = all_results[-1]  # Last result is captions
 
     # 10. Cleanup
     try:

@@ -134,7 +134,6 @@ TRENDING_POOLS = {
         "#discovercontent", "#videooftheday"
     ],
 
-    # ✅ ADD THIS
     "linkedin": [
         "#leadership", "#careerdevelopment",
         "#professionalgrowth", "#industryinsights",
@@ -358,51 +357,11 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
 # ---------------------------
 # 3) caption generator
 # ---------------------------
-async def generate_caption_post(
-    effective_query: str,
-    seed_keywords: List[str],
-    platforms: List[str],
-) -> Dict[str, Any]:
 
-    captions: Dict[str, str] = {}
-    platform_hashtags: Dict[str, List[str]] = {}
-
-    for p in platforms:
-        p_norm = p.lower().strip()
-        tone = PLATFORM_STYLES.get(p_norm, "Write a clean, engaging caption.")
-
-        # ---------------------------
-        # Hashtags
-        # ---------------------------
-        if p_norm == "instagram":
-            tags = await fetch_platform_hashtags(
-        client=None,
-        seed_keywords=seed_keywords,
-        platform="instagram",
-        effective_query=effective_query
-    )
-
-        else:
-            try:
-                tags = await fetch_platform_hashtags(
-                    None,
-                    seed_keywords,
-                    p_norm,
-                    effective_query
-                )
-            except Exception as e:
-                logger.error(f"Hashtag generation failed for {p_norm}: {e}")
-                tags = []
-
-        platform_hashtags[p_norm] = tags
-
-        
-
-        # ---------------------------
-        # Caption prompt
-        # ---------------------------
-        if p_norm == "instagram":
-            caption_prompt = f"""
+def _build_caption_prompt(p_norm: str, effective_query: str) -> str:
+    """Build the caption prompt for a given platform."""
+    if p_norm == "instagram":
+        return f"""
 Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
 
 STRUCTURE (MANDATORY):
@@ -411,10 +370,10 @@ PARAGRAPH 1 — HOOK
 - 2–3 short lines  
 - Strong curiosity, tension, or emotional pull  
 - Must clearly connect to the video  
-- Designed to stop scrolling and trigger “more”
+- Designed to stop scrolling and trigger "more"
 
 PARAGRAPH 2 — CONTEXT & INSIGHT  
-- Explain what’s happening in the video  
+- Explain what's happening in the video  
 - Add reasoning, meaning, or perspective  
 - Human, conversational tone  
 - Grounded in the actual video content  
@@ -450,14 +409,14 @@ VIDEO CONTEXT:
 Return ONLY the caption text.
 """
 
-        elif p_norm == "threads":
-            caption_prompt = f"""
+    elif p_norm == "threads":
+        return f"""
 Write a Threads caption that STOPS the scroll.
 
 CRITICAL:
 - Do NOT describe the video or image
 - Do NOT summarize what happened
-- Do NOT use first-person language (no “I”, “we”, “my”, “our”)
+- Do NOT use first-person language (no "I", "we", "my", "our")
 - Neutral or polite reactions are NOT allowed
 
 OPENING RULE (MANDATORY):
@@ -491,8 +450,8 @@ Context (for understanding only):
 Return ONLY the caption text.
 """
 
-        elif p_norm == "linkedin":
-            caption_prompt = f"""
+    elif p_norm == "linkedin":
+        return f"""
 Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a company page).
 
 GOAL:
@@ -506,6 +465,7 @@ TONE:
 - Descriptive (not promotional, not reactive)
 
 STRICT RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT sound like TikTok, Instagram, or Threads
 - Do NOT use emojis or hashtags
 - Do NOT write marketing copy or slogans
@@ -546,11 +506,8 @@ Context (for understanding only):
 Return ONLY the caption text.
 """
 
-
-
-
-        elif p_norm == "facebook":
-            caption_prompt = f"""
+    elif p_norm == "facebook":
+        return f"""
 Write a Facebook caption as a casual human reaction.
 
 CRITICAL:
@@ -586,8 +543,9 @@ VALIDATION:
 
 Return ONLY the caption text with line breaks preserved.
 """
-        elif p_norm == "pinterest":
-            caption_prompt = f"""
+
+    elif p_norm == "pinterest":
+        return f"""
 Write a LONG-FORM Pinterest description (800–1000 characters).
 
 STRUCTURE:
@@ -605,8 +563,9 @@ CONTEXT:
 
 Return ONLY the caption text.
 """
-        elif p_norm == "youtube":
-            caption_prompt = f"""
+
+    elif p_norm == "youtube":
+        return f"""
 Write a LONG-FORM YouTube description (800–1000 characters).
 
 STRUCTURE:
@@ -624,8 +583,9 @@ CONTEXT:
 
 Return ONLY the description text.
 """
-        elif p_norm == "tiktok":
-            caption_prompt = f"""
+
+    elif p_norm == "tiktok":
+        return f"""
 Write a LONG-FORM TikTok caption (800–1000 characters).
 
 STRUCTURE (MANDATORY):
@@ -658,9 +618,41 @@ CONTEXT (for understanding only):
 Return ONLY the caption text.
 """
 
-        
-        else:
-            caption_prompt = f"""
+    elif p_norm == "twitter":
+        return f"""
+Write a short, punchy tweet.
+
+RULES:
+- Bold and direct
+- No slang
+- No hashtags in text
+- No emojis
+
+Context:
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
+    elif p_norm == "reddit":
+        return f"""
+Write an informative Reddit caption.
+
+RULES:
+- Discussion-starter style
+- Do NOT summarize the video
+- Sound like a real creator, not a brand
+- No emojis
+- No hashtags inside the text
+
+CONTEXT (for understanding only):
+{effective_query}
+
+Return ONLY the caption text.
+"""
+
+    else:
+        return f"""
 Write a natural social media caption.
 
 RULES:
@@ -675,44 +667,100 @@ Context:
 Return ONLY the caption text.
 """
 
-        # ---------------------------
-        # Generate caption
-        # ---------------------------
-        caption_text = await safe_generate_caption(
-            caption_prompt,
-            platform=p_norm
-)
-        if not caption_text:
-            caption_text = ""
 
-        # 🔒 PLATFORM-SPECIFIC FORMAT GUARD
-        if p_norm == "linkedin":
-            caption_text = enforce_vertical_bullets(caption_text)
-
-        # ---------------------------
-        # Cleaning (SAFE)
-        # ---------------------------
-        caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
-
-        for bad in BANNED_WORDS:
-            caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
-
-        # Preserve paragraphs
-        caption_text = "\n\n".join(
-            [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
+async def _generate_hashtags_for_platform(
+    p_norm: str,
+    seed_keywords: List[str],
+    effective_query: str
+) -> tuple[str, List[str]]:
+    """Generate hashtags for a single platform. Returns (platform, hashtags)."""
+    try:
+        tags = await fetch_platform_hashtags(
+            client=None,
+            seed_keywords=seed_keywords,
+            platform=p_norm,
+            effective_query=effective_query
         )
+    except Exception as e:
+        logger.error(f"Hashtag generation failed for {p_norm}: {e}")
+        tags = []
+    return (p_norm, tags)
 
-        logger.info(
-    f"Caption generated for {p_norm}: {len(caption_text)} characters"
-)
 
-        
-        if not caption_text:
-            caption_text = f"Caption could not be generated for {p_norm}. Please retry."
+async def _generate_caption_for_platform(
+    p_norm: str,
+    effective_query: str
+) -> tuple[str, str]:
+    """Generate caption for a single platform. Returns (platform, caption)."""
+    caption_prompt = _build_caption_prompt(p_norm, effective_query)
+    caption_text = await safe_generate_caption(caption_prompt, platform=p_norm)
+    
+    if not caption_text:
+        caption_text = ""
+
+    # 🔒 PLATFORM-SPECIFIC FORMAT GUARD
+    if p_norm == "linkedin":
+        caption_text = enforce_vertical_bullets(caption_text)
+
+    # ---------------------------
+    # Cleaning (SAFE)
+    # ---------------------------
+    caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
+
+    for bad in BANNED_WORDS:
+        caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
+
+    # Preserve paragraphs
+    caption_text = "\n\n".join(
+        [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
+    )
+
+    logger.info(f"Caption generated for {p_norm}: {len(caption_text)} characters")
+
+    if not caption_text:
+        caption_text = f"Caption could not be generated for {p_norm}. Please retry."
+    
+    return (p_norm, caption_text)
+
+
+async def generate_caption_post(
+    effective_query: str,
+    seed_keywords: List[str],
+    platforms: List[str],
+) -> Dict[str, Any]:
+
+    captions: Dict[str, str] = {}
+    platform_hashtags: Dict[str, List[str]] = {}
+
+    # Normalize platforms
+    normalized_platforms = [p.lower().strip() for p in platforms]
+
+    # Create all tasks for parallel execution
+    hashtag_tasks = [
+        _generate_hashtags_for_platform(p_norm, seed_keywords, effective_query)
+        for p_norm in normalized_platforms
+    ]
+    caption_tasks = [
+        _generate_caption_for_platform(p_norm, effective_query)
+        for p_norm in normalized_platforms
+    ]
+
+    # Run all hashtag and caption tasks in parallel
+    all_results = await asyncio.gather(*hashtag_tasks, *caption_tasks)
+
+    # Split results: first half are hashtags, second half are captions
+    num_platforms = len(normalized_platforms)
+    hashtag_results = all_results[:num_platforms]
+    caption_results = all_results[num_platforms:]
+
+    # Populate dictionaries from results
+    for p_norm, tags in hashtag_results:
+        platform_hashtags[p_norm] = tags
+
+    for p_norm, caption_text in caption_results:
         captions[p_norm] = caption_text
-
 
     return {
         "captions": captions,
         "platform_hashtags": platform_hashtags
-    }   
+    }

@@ -41,6 +41,33 @@ from config import (
     GROQ_API_KEY_VISUALIZE
 )
 from services.file_service import split_text_into_chunks
+import itertools
+
+# Build caption key pool for rotation
+CAPTION_API_KEYS = []
+for i in [None, "_1", "_2", "_3"]:
+    key_name = f"GROQ_API_KEY_CAPTION{i if i else ''}"
+    key_val = os.getenv(key_name)
+    if key_val:
+        CAPTION_API_KEYS.append(key_val)
+if not CAPTION_API_KEYS:
+    from config import BASE_GROQ_KEY
+    CAPTION_API_KEYS = [BASE_GROQ_KEY]
+
+logger.info(f"Caption key pool: {len(CAPTION_API_KEYS)} keys")
+
+# Caption key rotation cycle
+_caption_key_cycle = itertools.cycle(CAPTION_API_KEYS)
+
+def get_caption_client_sync() -> Groq:
+    """
+    Return a sync Groq client using rotating caption API keys.
+    Used for video transcription and frame analysis.
+    """
+    from groq import Groq
+    key = next(_caption_key_cycle)
+    logger.debug(f"Using caption key (sync): ...{key[-8:]}")
+    return Groq(api_key=key, max_retries=0)
 
 
 # ============================================================
@@ -165,43 +192,66 @@ async def rate_limited_groq_call(
 
 
 # ============================================================
-# 🔵 3. DEDICATED CAPTION GENERATOR CLIENT (ADDED)
+# 🔵 3. DEDICATED CAPTION GENERATOR CLIENT (with key rotation)
 # ============================================================
 
 def get_caption_client() -> AsyncGroq:
     """
-    Return an AsyncGroq client that uses the dedicated caption API key.
-    Will raise if the env var is missing to avoid silent failures.
+    Return an AsyncGroq client using rotating caption API keys.
+    Distributes load across multiple keys to avoid rate limits.
+    Disables SDK retry logic so we can rotate keys on 429 errors.
     """
-    key = GROQ_API_KEY_CAPTION
-    if not key:
-        logger.error("GROQ_API_KEY_CAPTION is missing! Caption generation requires this key.")
-        raise Exception("Missing GROQ_API_KEY_CAPTION environment variable.")
-    return AsyncGroq(api_key=key)
+    key = next(_caption_key_cycle)
+    logger.debug(f"Using caption key: ...{key[-8:]}")
+    return AsyncGroq(
+        api_key=key,
+        max_retries=0  # Disable SDK retries, we handle rotation ourselves
+    )
 
 
 async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are a helpful assistant.", **kwargs) -> str:
     """
-    Uses the dedicated caption client to generate text (synchronous non-streaming).
+    Uses rotating caption clients to generate text with rate limit handling.
+    Rotates through different API keys on 429 errors.
     Returns empty string on failure (caller should fallback).
     """
-    try:
-        client_caption = get_caption_client()
-        response = await client_caption.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=kwargs.get("temperature", 0.8),
-            max_completion_tokens=kwargs.get("max_completion_tokens", 300),
-            top_p=kwargs.get("top_p", 0.95),
-            stream=False,
-        )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        logger.error(f"GROQ Caption Error: {e}")
-        return ""
+    max_retries = 4  # Try all 4 keys if needed
+    
+    for attempt in range(max_retries):
+        try:
+            client_caption = get_caption_client()  # Gets next key in rotation
+            response = await client_caption.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=kwargs.get("temperature", 0.8),
+                max_completion_tokens=kwargs.get("max_completion_tokens", 300),
+                top_p=kwargs.get("top_p", 0.95),
+                stream=False,
+            )
+            return response.choices[0].message.content or ""
+            
+        except Exception as e:
+            error_str = str(e)
+            
+            # Check if it's a rate limit error (429)
+            if "429" in error_str or "rate_limit" in error_str.lower():
+                if attempt < max_retries - 1:
+                    logger.warning(f"Rate limit on key {attempt + 1}, rotating to next key...")
+                    # Small delay before trying next key
+                    await asyncio.sleep(0.5)
+                    continue
+                else:
+                    logger.error(f"All {max_retries} API keys exhausted, rate limited")
+                    return ""
+            else:
+                # Non-rate-limit error, log and fail
+                logger.error(f"GROQ Caption Error: {e}")
+                return ""
+    
+    return ""
 
 # ============================================================
 # 🔵 4. EXISTING CORE FUNCTIONS (unchanged except get_groq_client)

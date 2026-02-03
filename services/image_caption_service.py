@@ -84,21 +84,33 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
     except:
         keywords = ["", "", ""]
 
-    # 3. Platform hashtags
-    platform_hashtags = {}
-    for p in platforms:
+    # 3. Platform hashtags + 4. Captions (PARALLEL)
+    async def get_hashtags_for_platform(p):
         try:
             tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
         except:
             tags = []
-        platform_hashtags[p] = tags
+        return (p, tags)
 
-    # 4. Captions
-    try:
-        captions_result = await generate_caption_post(marketing_prompt, keywords, platforms)
-        captions = captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
-    except:
-        captions = {p: caption for p in platforms}
+    async def get_captions():
+        try:
+            captions_result = await generate_caption_post(marketing_prompt, keywords, platforms)
+            return captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
+        except:
+            return {p: caption for p in platforms}
+
+    # Run all hashtag tasks + caption task in parallel
+    import asyncio
+    hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
+    all_results = await asyncio.gather(*hashtag_tasks, get_captions())
+
+    # Extract results
+    platform_hashtags = {}
+    for result in all_results[:-1]:  # All except last (captions)
+        p, tags = result
+        platform_hashtags[p] = tags
+    
+    captions = all_results[-1]  # Last result is captions
 
     return {
         "caption_detected": caption,
