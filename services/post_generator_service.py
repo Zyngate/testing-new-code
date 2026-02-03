@@ -452,43 +452,43 @@ Return ONLY the caption text.
 
         elif p_norm == "threads":
             caption_prompt = f"""
-Write a Threads post as a HUMAN reaction.
+Write a Threads caption that STOPS the scroll.
 
 CRITICAL:
-- DO NOT describe the image or video
-- DO NOT summarize what is happening
-- React as if you just watched this and had an immediate thought
-- Do NOT explain the full context or backstory
-- You MAY imply a consequence, concern, or realization
+- Do NOT describe the video or image
+- Do NOT summarize what happened
+- Do NOT use first-person language (no “I”, “we”, “my”, “our”)
+- Neutral or polite reactions are NOT allowed
 
-STRUCTURE (MANDATORY):
-- MUST be written in 2 or 3 lines
-- Each line must be a complete thought
-- A single-line response is INVALID
+OPENING RULE (MANDATORY):
+- The FIRST line must be eye-catching
+- Use a bold claim, sharp contrast, uncomfortable truth, or provocative question
+- The first line must feel risky or surprising
 
 ENGAGEMENT RULE:
-- Engagement = facts + tension
-- Do not state facts alone
-- Every factual idea must introduce doubt, contrast, risk, or a consequence
-- At least one line must introduce a specific implication or consequence
-- If a sentence sounds neutral, rewrite it internally to add tension
+- Engagement = tension + specificity
+- Introduce doubt, risk, contradiction, or consequence
+- If the caption feels safe or agreeable, rewrite it internally
 
 STYLE:
-- Conversational
-- Reflective or curious
+- Conversational but impersonal
+- Direct
+- Punchy
 - No hashtags
 - No emojis
 
+FORMAT:
+- 2–5 short lines
+- Line breaks required
+- Do NOT write a single-line caption
+
 LENGTH:
-- 120–280 characters total
+- 100–250 characters
 
 Context (for understanding only):
 {effective_query}
 
-VALIDATION:
-- If the caption is only one line, rewrite it into multiple lines before returning.
-
-Return ONLY the caption text with line breaks preserved.
+Return ONLY the caption text.
 """
 
         elif p_norm == "linkedin":
