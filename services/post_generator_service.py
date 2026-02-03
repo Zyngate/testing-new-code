@@ -478,9 +478,10 @@ Return ONLY the caption text with line breaks preserved.
         elif p_norm == "linkedin":
             caption_prompt = f"""
 Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a company page).
+
 GOAL:
 - Write a structured, professional mini-blog post
-- Share a thoughtful reflection relevant to work, leadership, or decision-making
+- Share thoughtful insight relevant to work, leadership, or decision-making
 
 TONE:
 - Professional
@@ -504,19 +505,20 @@ PARAGRAPH 2:
 
 BULLET SECTION (MANDATORY):
 - Write 4–6 bullet points
-- EACH bullet MUST be on its OWN line
-- Use ONE bullet per line only
-- Do NOT combine bullets into a paragraph
-- Do NOT place multiple bullets on the same line
-- Bullets must explain ONE clear idea each
+- EACH bullet MUST be on its OWN LINE
+- EACH bullet MUST start with "• " at the beginning of the line
+- AFTER EVERY bullet, insert a newline
+- NEVER place multiple bullets on the same line
+- NEVER write bullets inline with text
+- ONE idea per bullet only
 
 CLOSING PARAGRAPH:
 - A reflective conclusion connecting the topic to judgment, responsibility, or leadership
 
-FORMAT REQUIREMENTS (VERY IMPORTANT):
+FORMAT RULES (CRITICAL):
 - Use blank lines between paragraphs
-- Each bullet must start on a new line with “• ”
-- Never place bullets inline with text
+- Bullets must appear as a vertical list
+- If bullets appear on the same line, rewrite internally until they are vertical
 
 LENGTH:
 - 500–1,000 characters
@@ -527,6 +529,7 @@ Context (for understanding only):
 
 Return ONLY the caption text.
 """
+
 
 
 
