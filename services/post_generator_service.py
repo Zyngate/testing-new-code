@@ -11,8 +11,7 @@ from services.ai_service import (
     groq_generate_text,
 )
 
-# Use faster model for speed (llama-3.1-8b-instant is 3-4x faster)
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"
 
 async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
     for attempt in range(retries):
