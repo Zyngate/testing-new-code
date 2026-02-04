@@ -17,10 +17,10 @@ from services.time_slot_service import (
 )
 
 # -----------------------------------
-# Concurrency control
+# Concurrency control (optimized to prevent timeouts)
 # -----------------------------------
-VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(3)  # Max 3 concurrent video processes
-API_RATE_LIMIT_SEMAPHORE = asyncio.Semaphore(5)  # Max 5 concurrent API calls
+VIDEO_PROCESS_SEMAPHORE = asyncio.Semaphore(5)  # Max 5 concurrent video processes
+API_RATE_LIMIT_SEMAPHORE = asyncio.Semaphore(8)  # Max 8 concurrent API calls
 
 
 # -----------------------------------

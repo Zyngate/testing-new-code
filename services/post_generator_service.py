@@ -11,7 +11,8 @@ from services.ai_service import (
     groq_generate_text,
 )
 
-MODEL = "llama-3.3-70b-versatile"
+# Use faster model for speed (llama-3.1-8b-instant is 3-4x faster)
+MODEL = "llama-3.1-8b-instant"
 
 async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
     for attempt in range(retries):
@@ -511,6 +512,7 @@ Return ONLY the caption text.
 Write a Facebook caption as a casual human reaction.
 
 CRITICAL:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT describe the video or image
 - Do NOT summarize events
 
@@ -554,6 +556,7 @@ STRUCTURE:
 - Clear CTA (save, reflect, explore)
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT describe the image literally
 - Evoke mood and meaning
 - No hashtags in text
@@ -574,6 +577,7 @@ STRUCTURE:
 - Invite engagement (like, comment, reflect)
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT list scenes
 - Human, engaging tone
 - CTA is mandatory
@@ -606,6 +610,7 @@ PARAGRAPH 3 — CTA
 - End with a direct or thoughtful question
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT describe scenes or actions
 - Do NOT summarize the video
 - Sound like a real creator, not a brand
@@ -623,6 +628,7 @@ Return ONLY the caption text.
 Write a short, punchy tweet.
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Bold and direct
 - No slang
 - No hashtags in text
@@ -639,6 +645,7 @@ Return ONLY the caption text.
 Write an informative Reddit caption.
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Discussion-starter style
 - Do NOT summarize the video
 - Sound like a real creator, not a brand
@@ -656,6 +663,7 @@ Return ONLY the caption text.
 Write a natural social media caption.
 
 RULES:
+- STRICTLY NO first-person language (no I, me, my, we, our)
 - Do NOT describe the media
 - React like a human
 - Be platform-appropriate

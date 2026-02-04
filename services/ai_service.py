@@ -43,9 +43,9 @@ from config import (
 from services.file_service import split_text_into_chunks
 import itertools
 
-# Build caption key pool for rotation
+# Build caption key pool for rotation (10 keys for parallel processing)
 CAPTION_API_KEYS = []
-for i in [None, "_1", "_2", "_3"]:
+for i in [None, "_1", "_2", "_3", "_4", "_5", "_6", "_7", "_8", "_9"]:
     key_name = f"GROQ_API_KEY_CAPTION{i if i else ''}"
     key_val = os.getenv(key_name)
     if key_val:
@@ -67,7 +67,7 @@ def get_caption_client_sync() -> Groq:
     from groq import Groq
     key = next(_caption_key_cycle)
     logger.debug(f"Using caption key (sync): ...{key[-8:]}")
-    return Groq(api_key=key, max_retries=0)
+    return Groq(api_key=key, max_retries=2, timeout=120.0)
 
 
 # ============================================================
@@ -215,7 +215,7 @@ async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are
     Rotates through different API keys on 429 errors.
     Returns empty string on failure (caller should fallback).
     """
-    max_retries = 4  # Try all 4 keys if needed
+    max_retries = 6  # Try multiple keys if needed
     
     for attempt in range(max_retries):
         try:
@@ -230,21 +230,22 @@ async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are
                 max_completion_tokens=kwargs.get("max_completion_tokens", 300),
                 top_p=kwargs.get("top_p", 0.95),
                 stream=False,
+                timeout=60.0,  # Increased timeout
             )
             return response.choices[0].message.content or ""
             
         except Exception as e:
-            error_str = str(e)
+            error_str = str(e).lower()
             
-            # Check if it's a rate limit error (429)
-            if "429" in error_str or "rate_limit" in error_str.lower():
+            # Check if it's a rate limit error (429) or timeout
+            if "429" in str(e) or "rate_limit" in error_str or "timed out" in error_str or "timeout" in error_str:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Rate limit on key {attempt + 1}, rotating to next key...")
-                    # Small delay before trying next key
-                    await asyncio.sleep(0.5)
+                    logger.warning(f"API issue (attempt {attempt + 1}): {str(e)[:50]}... rotating to next key")
+                    # Stagger delay to avoid overwhelming
+                    await asyncio.sleep(1.0 + (attempt * 0.5))
                     continue
                 else:
-                    logger.error(f"All {max_retries} API keys exhausted, rate limited")
+                    logger.error(f"All {max_retries} attempts exhausted")
                     return ""
             else:
                 # Non-rate-limit error, log and fail

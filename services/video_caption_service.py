@@ -433,10 +433,10 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         logger.error("extract_audio_from_video failed: " + str(e))
         raise
 
-    # 2. frames
+    # 2. frames (reduced to 3 for speed)
     frame_paths = []
     try:
-        frame_paths = extract_frames_from_video(video_filepath, fps=1, max_frames=6)
+        frame_paths = extract_frames_from_video(video_filepath, fps=1, max_frames=3)
     except Exception as e:
         logger.warning(f"Frame extraction failed or produced no frames: {e}")
         frame_paths = []

@@ -1,23 +1,25 @@
-import smtplib
-from email.message import EmailMessage
+import time
+import asyncio
+from services.video_caption_service import (
+    extract_audio_from_video,
+    get_transcript_groq
+)
 
-server = "smtpout.secureserver.net"
-port = 465
-username = "info@stelle.world"
-password = "zyngate123"
+VIDEO_PATH = r"C:\Users\DELL\Downloads\nipah.mp4"
 
-msg = EmailMessage()
-msg.set_content("Testing OTP mail from Stelle backend")
-msg["Subject"] = "SMTP Test - Stelle"
-msg["From"] = username
-msg["To"] = "keerthiadapa70@gmail.com"
 
-try:
-    print(f"Connecting to {server}:{port} ...")
-    with smtplib.SMTP_SSL(server, port) as smtp:
-        smtp.login(username, password)
-        print("✅ SMTP login successful!")
-        smtp.send_message(msg)
-        print("✅ Test email sent to keerthiadapa70@gmail.com")
-except Exception as e:
-    print("❌ Error sending email:", e)
+async def run_stt_test():
+    start = time.time()
+
+    audio_path = await extract_audio_from_video(VIDEO_PATH)
+    transcript = await get_transcript_groq(audio_path)
+
+    end = time.time()
+
+    print("====== STT ONLY TEST ======")
+    print(f"Transcript length: {len(transcript)} characters")
+    print(f"STT time: {end - start:.2f} seconds")
+
+
+if __name__ == "__main__":
+    asyncio.run(run_stt_test())
