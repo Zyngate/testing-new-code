@@ -547,23 +547,23 @@ Return ONLY the caption text with line breaks preserved.
 
     elif p_norm == "pinterest":
         return f"""
-Write a LONG-FORM Pinterest description (800–1000 characters).
+Write a SHORT Pinterest caption (100–150 characters max).
 
-STRUCTURE:
-- Inspiring or curiosity-driven hook
-- Aesthetic or thoughtful insight
-- Clear CTA (save, reflect, explore)
+STYLE:
+- Aesthetic, dreamy, inspiring
+- One punchy line + optional short CTA
+- Think mood-board vibes
 
 RULES:
 - STRICTLY NO first-person language (no I, me, my, we, our)
-- Do NOT describe the image literally
-- Evoke mood and meaning
+- Short and sweet - max 2 sentences
+- Evoke emotion, not description
 - No hashtags in text
 
 CONTEXT:
 {effective_query}
 
-Return ONLY the caption text.
+Return ONLY the caption text (under 150 characters).
 """
 
     elif p_norm == "youtube":
