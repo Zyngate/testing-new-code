@@ -50,10 +50,15 @@ async def generate_post(body: GeneratePostRequest):
         raise HTTPException(status_code=500, detail="Caption generation failed.")
 
     return {
-        "keywords": keywords,
-        "captions": results["captions"],
-        "platform_hashtags": results["platform_hashtags"]
-    }
+    "status": "success",
+    "keywords": keywords,
+    "captions": results["captions"],
+    "platform_hashtags": results["platform_hashtags"],
+    "titles": results.get("titles", {
+        "youtube": "",
+        "pinterest": ""
+    })
+}
 
 
 
@@ -143,7 +148,8 @@ async def websocket_generate_post(websocket: WebSocket):
             "message": "Post generated successfully",
             "keywords": keywords,
             "captions": results.get("captions", {}),
-            "platform_hashtags": results.get("platform_hashtags", platform_hashtags)
+            "platform_hashtags": results.get("platform_hashtags", platform_hashtags),
+            "titles": results.get("titles", {})
         })
 
     except WebSocketDisconnect:

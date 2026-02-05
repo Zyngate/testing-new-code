@@ -70,7 +70,8 @@ async def video_caption_endpoint(
         "status": "success",
         "keywords": result.get("keywords", []),
         "captions": result.get("captions", {}),
-        "platform_hashtags": result.get("platform_hashtags", {})
+        "platform_hashtags": result.get("platform_hashtags", {}),
+        "titles": result.get("titles", {})
     }
 )
 

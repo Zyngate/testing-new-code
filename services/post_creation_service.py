@@ -146,6 +146,8 @@ async def create_post_from_uploaded_media(
             for p in platforms:
                 caption = ai_result.get("captions", {}).get(p, "")
                 hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
+                title = ai_result.get("titles", {}).get(p, "")
+                board = ai_result.get("boards", {}).get(p, "")
 
                 # Handle rate limit failures gracefully
                 if not caption:
@@ -204,6 +206,13 @@ async def create_post_from_uploaded_media(
                     "createdAt": now,
                     "updatedAt": now,
                 }
+                
+                # Always include YouTube or Pinterest title, even if empty
+                if p in ("youtube", "pinterest"):
+                    post_doc["title"] = title
+                # Add Pinterest board if available
+                if p == "pinterest" and board:
+                    post_doc["board"] = board
 
                 if not preview_only:
                     await db["scheduledposts"].insert_one(post_doc)
@@ -212,7 +221,7 @@ async def create_post_from_uploaded_media(
                 # ---------------------------------
                 # Response-safe object
                 # ---------------------------------
-                posts.append({
+                response_obj = {
                     "userId": user_id,
                     "mediaUrls": [cloudinary_url],
                     "caption": final_caption,
@@ -224,7 +233,16 @@ async def create_post_from_uploaded_media(
                     "status": "pending",
                     "createdAt": now.isoformat(),
                     "updatedAt": now.isoformat(),
-                })
+                }
+                
+                # Always include YouTube or Pinterest title, even if empty
+                if p in ("youtube", "pinterest"):
+                    response_obj["title"] = title
+                # Add Pinterest board if available
+                if p == "pinterest" and board:
+                    response_obj["board"] = board
+                
+                posts.append(response_obj)
 
                 logger.info(
                     f"{'📝 Preview generated' if preview_only else '✅ Post scheduled'} | "

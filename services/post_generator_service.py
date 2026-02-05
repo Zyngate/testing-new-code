@@ -216,98 +216,75 @@ async def fetch_platform_hashtags(
 
     platform = platform.lower()
 
-    # -------------------------------
-    # 1) TRENDING / DISCOVERY → 4
-    # -------------------------------
+    # 1) EXTREME TRENDING (most viral)
     if platform == "instagram":
-        discovery_tags = random.sample(
-            INSTAGRAM_DISCOVERY_CORE,
-            k=min(2, len(INSTAGRAM_DISCOVERY_CORE))
-        )
-        remaining_pool = [
-            t for t in TRENDING_POOLS["instagram"]
-            if t not in INSTAGRAM_DISCOVERY_CORE
-        ]
-        secondary_trending = random.sample(
-            remaining_pool,
-            k=min(2, len(remaining_pool))
-        )
-        trending_tags = discovery_tags + secondary_trending
+        trending_tag = random.choice(INSTAGRAM_DISCOVERY_CORE)
     else:
-        gen = TRENDING_GENERATORS.get(platform)
-        trending_tags = next(gen) if gen else []
-
-    # -------------------------------
-    # 2) RELEVANT (contextual) → 3
-    # -------------------------------
-    try:
-        if platform == "instagram":
-            relevant_prompt = f"""
-Generate EXACTLY 3 Instagram hashtags that are:
-
-CRITICAL REQUIREMENTS:
-- DIRECTLY relevant to the video topic
-- COMMONLY FOLLOWED by users (not just used)
-- Estimated usage between ~300K and ~5M posts
-- High-discovery but NOT ultra-broad
-- Creator-native hashtags
-
-AVOID:
-- Ultra-broad hashtags (>50M posts)
-- Tiny niche hashtags (<50K posts)
-- Keyword-stuffed or invented hashtags
-
-VIDEO CONTEXT:
-{effective_query}
-
-Output ONLY hashtags.
-"""
+        pool = TRENDING_POOLS.get(platform)
+        if pool:
+            trending_tag = random.choice(pool)
         else:
-            relevant_prompt = f"""
-Generate 3 relevant hashtags commonly used on {platform}.
-
+            try:
+                trending_prompt = f"""
+Generate the single most viral and trending hashtag on {platform} right now for maximum reach (aim for 10M+ views if possible).
 Context:
 {effective_query}
-
-Output ONLY hashtags.
+Rules:
+- Output ONLY one hashtag
+- No explanations
 """
+                trending_text = await groq_generate_text(MODEL, trending_prompt)
+                trending_tag = next((t for t in trending_text.split() if t.startswith("#")), None)
+            except Exception:
+                trending_tag = None
 
-        text = await groq_generate_text(MODEL, relevant_prompt)
-        relevant_tags = [t for t in text.split() if t.startswith("#")][:3]
+    # Always ensure 3 unique hashtags: trending, relevant, broad
+    max_attempts = 3
+    for _ in range(max_attempts):
+        # 2) EXTREME RELEVANT (most contextually relevant, LLM)
+        try:
+            relevant_prompt = f"""
+Generate the single most contextually relevant hashtag for {platform} that directly matches the topic and is highly followed (aim for 10M+ reach if possible).
+Context:
+{effective_query}
+Rules:
+- Output ONLY one hashtag
+- No explanations
+"""
+            relevant_text = await groq_generate_text(MODEL, relevant_prompt)
+            relevant_tag = next((t for t in relevant_text.split() if t.startswith("#")), None)
+        except Exception:
+            relevant_tag = f"#{seed_keywords[0].replace(' ', '')}" if seed_keywords else None
 
-    except Exception:
-        relevant_tags = [f"#{k.replace(' ', '')}" for k in seed_keywords][:3]
-
-    # -------------------------------
-    # 3) BROAD (category-level) → 3
-    # -------------------------------
-    try:
-        broad_prompt = f"""
-Generate 3 broad, category-level hashtags.
-
-They should describe the general domain of the content,
-not specific details.
-
+        # 3) BROAD (category-level, high-level domain, LLM)
+        try:
+            broad_prompt = f"""
+Generate one broad, category-level hashtag for {platform} that describes the general domain of the content and is widely used (aim for 10M+ reach if possible).
 Content:
 {effective_query}
-
 Rules:
-- High-level categories
-- No trending or viral tags
-- Output ONLY hashtags
+- Output ONLY one hashtag
+- No explanations
 """
-        text = await groq_generate_text(MODEL, broad_prompt)
-        broad_tags = [t for t in text.split() if t.startswith("#")][:3]
-    except Exception:
-        broad_tags = []
+            broad_text = await groq_generate_text(MODEL, broad_prompt)
+            broad_tag = next((t for t in broad_text.split() if t.startswith("#")), None)
+        except Exception:
+            broad_tag = None
 
-    # -------------------------------
-    # FINAL MERGE
-    # -------------------------------
-    final_tags = trending_tags + relevant_tags + broad_tags
-
-    # Remove duplicates, preserve order
-    return list(dict.fromkeys(final_tags))
+        # Merge and deduplicate, preserve order
+        tags = [t for t in [trending_tag, relevant_tag, broad_tag] if t]
+        seen = set()
+        final_tags = []
+        for tag in tags:
+            if tag not in seen:
+                final_tags.append(tag)
+                seen.add(tag)
+        if len(final_tags) == 3:
+            return final_tags
+    # If after max_attempts still not 3, pad with generic hashtags
+    while len(final_tags) < 3:
+        final_tags.append(f"#extra{len(final_tags)+1}")
+    return final_tags
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
@@ -411,43 +388,26 @@ Return ONLY the caption text.
 
     elif p_norm == "threads":
         return f"""
-Write a Threads caption that STOPS the scroll.
+Write a Threads caption that is inspirational, professional, and scroll-stopping for marketing, business, or automation topics. For other topics, use humor and sarcasm that fits the actual subject (e.g., nature, art, food, etc.).
 
-CRITICAL:
-- Do NOT describe the video or image
+RULES:
+- STRICTLY NO first-person language (no "I", "we", "my", "our")
+- Do NOT describe the video or image generically
 - Do NOT summarize what happened
-- Do NOT use first-person language (no "I", "we", "my", "our")
-- Neutral or polite reactions are NOT allowed
+- For business/marketing/automation, use an inspirational and professional tone be little sarcastic
+- For non-business topics, use humor and sarcasm that fits the subject
+- No hashtags, no emojis
+- The caption must be a maximum of 1–2 lines (short, punchy)
 
-OPENING RULE (MANDATORY):
-- The FIRST line must be eye-catching
-- Use a bold claim, sharp contrast, uncomfortable truth, or provocative question
-- The first line must feel risky or surprising
-
-ENGAGEMENT RULE:
-- Engagement = tension + specificity
-- Introduce doubt, risk, contradiction, or consequence
-- If the caption feels safe or agreeable, rewrite it internally
-
-STYLE:
-- Conversational but impersonal
-- Direct
-- Punchy
-- No hashtags
-- No emojis
-
-FORMAT:
-- 2–5 short lines
-- Line breaks required
-- Do NOT write a single-line caption
-
-LENGTH:
-- 100–250 characters
+EXAMPLES:
+- For a business post: "Empower your brand to grow with precision. Automation is the new edge."
+- For a nature post: "This beach is so calm, even my notifications took a nap."
+- For a food post: "Calories don’t count if you eat it on vacation, right?"
 
 Context (for understanding only):
 {effective_query}
 
-Return ONLY the caption text.
+Return ONLY the caption text (max 2 lines).
 """
 
     elif p_norm == "linkedin":
@@ -641,19 +601,39 @@ Return ONLY the caption text.
 
     elif p_norm == "reddit":
         return f"""
-Write an informative Reddit caption.
+    Write a Threads caption that is visually eye-catching, unique, and scroll-stopping. For marketing, business, or automation topics, reference specific elements from the image, campaign, or brand (e.g., robotic arm, watering, plant growth, Stelle AI) to make the caption memorable and relevant. For other topics, use humor and sarcasm that fits the actual subject (e.g., nature, art, food, etc.).
 
-RULES:
+    - STRICTLY NO first-person language (no "I", "we", "my", "our")
+    - Do NOT describe the video or image generically
+    - Do NOT summarize what happened
+    - For business/marketing/automation, use an inspirational and professional tone (avoid sarcasm)
+    - For non-business topics, use humor and sarcasm that fits the subject
+    - No hashtags, no emojis
+    - The caption must be a maximum of 1–2 lines (short, punchy)
 - STRICTLY NO first-person language (no I, me, my, we, our)
-- Discussion-starter style
+    - For a business post: "Empower your brand to grow with precision. Automation is the new edge."
+    - For a nature post: "This beach is so calm, even my notifications took a nap."
+    - For a food post: "Calories don’t count if you eat it on vacation, right?"
 - Do NOT summarize the video
-- Sound like a real creator, not a brand
-- No emojis
 - No hashtags inside the text
-
+    RULES:
+    - STRICTLY NO first-person language (no "I", "we", "my", "our")
+    - Do NOT describe the video or image generically
+    - Do NOT summarize what happened
+    - For business/marketing/automation, use an inspirational and professional tone, and always mention a unique visual or brand element
+    - For non-business topics, use humor and sarcasm that fits the subject
+    - No hashtags, no emojis
+    - The caption must be a maximum of 1–2 lines (short, punchy)
 CONTEXT (for understanding only):
+    EXAMPLES:
+    - For a business post: "Robotic precision meets natural growth—Stelle AI waters your brand to life." "Let your content bloom with a little help from AI and steel."
+    - For a nature post: "This beach is so calm, even my notifications took a nap."
+    - For a food post: "Calories don’t count if you eat it on vacation, right?"
 {effective_query}
+    Context (for understanding only):
+    {effective_query}
 
+    Return ONLY the caption text (max 2 lines).
 Return ONLY the caption text.
 """
 
@@ -738,6 +718,8 @@ async def generate_caption_post(
 
     captions: Dict[str, str] = {}
     platform_hashtags: Dict[str, List[str]] = {}
+    # Always start with a fresh titles dict for each call
+    titles: Dict[str, str] = {}
 
     # Normalize platforms
     normalized_platforms = [p.lower().strip() for p in platforms]
@@ -752,13 +734,54 @@ async def generate_caption_post(
         for p_norm in normalized_platforms
     ]
 
-    # Run all hashtag and caption tasks in parallel
-    all_results = await asyncio.gather(*hashtag_tasks, *caption_tasks)
+    # Title generation tasks (YouTube and Pinterest only, platform-specific prompts)
+    async def generate_title(platform: str, query: str) -> tuple[str, str]:
+        if platform == "youtube":
+            prompt = f"""
+Generate a YouTube video title.
+Rules:
+- 40–60 characters
+- Clickable but not clickbait
+- Clear and informative
 
-    # Split results: first half are hashtags, second half are captions
+Context:
+{query}
+
+Return ONLY the title text.
+"""
+        elif platform == "pinterest":
+            prompt = f"""
+Generate a Pinterest pin title.
+Rules:
+- Inspirational
+- Short (3–6 words)
+- Discovery-friendly
+- Not clickbait
+
+Context:
+{query}
+
+Return ONLY the title text.
+"""
+        else:
+            return (platform, "")
+        try:
+            text = await groq_generate_text(MODEL, prompt)
+            title = text.split("\n")[0].replace('"', '').strip()
+            return (platform, title)
+        except Exception:
+            return (platform, "")
+
+    # Only generate title tasks for YouTube and Pinterest
+    title_tasks = [generate_title(p_norm, effective_query) for p_norm in normalized_platforms if p_norm in ("youtube", "pinterest")]
+
+    # Run all hashtag, caption, and title tasks in parallel
+    all_results = await asyncio.gather(*hashtag_tasks, *caption_tasks, *title_tasks)
+
     num_platforms = len(normalized_platforms)
     hashtag_results = all_results[:num_platforms]
-    caption_results = all_results[num_platforms:]
+    caption_results = all_results[num_platforms:2*num_platforms]
+    title_results = all_results[2*num_platforms:]
 
     # Populate dictionaries from results
     for p_norm, tags in hashtag_results:
@@ -767,7 +790,13 @@ async def generate_caption_post(
     for p_norm, caption_text in caption_results:
         captions[p_norm] = caption_text
 
+    for p_norm, title in title_results:
+        # Always include YouTube and Pinterest in the titles dict, even if title is empty
+        if p_norm in ("youtube", "pinterest"):
+            titles[p_norm] = title
+
     return {
         "captions": captions,
-        "platform_hashtags": platform_hashtags
+        "platform_hashtags": platform_hashtags,
+        "titles": titles
     }

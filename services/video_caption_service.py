@@ -612,10 +612,10 @@ Focus on ONE strong idea or reaction.
                 keywords,
                 platforms
             )
-            return captions_result.get("captions") if isinstance(captions_result, dict) else captions_result
+            return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
             logger.error(f"generate_caption_post failed: {e}", exc_info=True)
-            return {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}
+            return {"captions": {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}}
 
     # Run all hashtag tasks + caption task in parallel
     hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
@@ -627,7 +627,10 @@ Focus on ONE strong idea or reaction.
         p, tags = result
         platform_hashtags[p] = tags
     
-    captions = all_results[-1]  # Last result is captions
+    captions_data = all_results[-1]  # Last result is captions dict
+    captions = captions_data.get("captions", {}) if isinstance(captions_data, dict) else captions_data
+    titles = captions_data.get("titles", {}) if isinstance(captions_data, dict) else {}
+    boards = captions_data.get("boards", {}) if isinstance(captions_data, dict) else {}
 
     # 10. Cleanup
     try:
@@ -660,6 +663,8 @@ Focus on ONE strong idea or reaction.
         "keywords": keywords,
         "captions": captions,
         "platform_hashtags": platform_hashtags,
+        "titles": titles,
+        "boards": boards,
     }
 
 
