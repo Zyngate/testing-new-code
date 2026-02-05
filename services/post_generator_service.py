@@ -25,7 +25,13 @@ async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) ->
             )
     return None
 
-
+def is_marketing_campaign(effective_query: str) -> bool:
+    keywords = [
+        "marketing", "automation", "campaign", "saas",
+        "tool", "platform", "ai", "product", "growth", "brand", "business", "entrepreneur", "startup", "content strategy", "social media strategy"
+    ]
+    q = effective_query.lower()
+    return any(k in q for k in keywords)
 class Platforms(str, Enum):
     Instagram = "instagram"
     Facebook = "facebook"
@@ -215,77 +221,107 @@ async def fetch_platform_hashtags(
 ) -> List[str]:
 
     platform = platform.lower()
+    final_tags: List[str] = []
 
-    # 1) EXTREME TRENDING (most viral)
-    if platform == "instagram":
-        trending_tag = random.choice(INSTAGRAM_DISCOVERY_CORE)
-    else:
-        pool = TRENDING_POOLS.get(platform)
-        if pool:
-            trending_tag = random.choice(pool)
+    # --------------------------------------------------
+    # 1️⃣ EXTREME TRENDING (platform-native, high reach)
+    # --------------------------------------------------
+    trending_tag = None
+
+    try:
+        if platform == "instagram":
+            trending_tag = random.choice(INSTAGRAM_DISCOVERY_CORE)
         else:
-            try:
-                trending_prompt = f"""
-Generate the single most viral and trending hashtag on {platform} right now for maximum reach (aim for 10M+ views if possible).
+            pool = TRENDING_POOLS.get(platform, [])
+            if pool:
+                trending_tag = random.choice(pool)
+            else:
+                prompt = f"""
+Generate ONE extremely trending hashtag for {platform} with very high reach.
+Return ONLY one hashtag.
+
 Context:
 {effective_query}
-Rules:
-- Output ONLY one hashtag
-- No explanations
 """
-                trending_text = await groq_generate_text(MODEL, trending_prompt)
-                trending_tag = next((t for t in trending_text.split() if t.startswith("#")), None)
-            except Exception:
-                trending_tag = None
+                text = await groq_generate_text(MODEL, prompt)
+                trending_tag = next(
+                    (t for t in text.replace("\n", " ").split() if t.startswith("#")),
+                    None
+                )
+    except Exception:
+        trending_tag = None
 
-    # Always ensure 3 unique hashtags: trending, relevant, broad
-    max_attempts = 3
-    for _ in range(max_attempts):
-        # 2) EXTREME RELEVANT (most contextually relevant, LLM)
-        try:
-            relevant_prompt = f"""
-Generate the single most contextually relevant hashtag for {platform} that directly matches the topic and is highly followed (aim for 10M+ reach if possible).
+    if trending_tag:
+        final_tags.append(trending_tag)
+
+    # --------------------------------------------------
+    # 2️⃣ RELEVANT (most contextually accurate)
+    # --------------------------------------------------
+    relevant_tag = None
+
+    try:
+        prompt = f"""
+Generate ONE highly relevant hashtag for {platform} that directly matches the content topic.
+Return ONLY one hashtag.
+
 Context:
 {effective_query}
-Rules:
-- Output ONLY one hashtag
-- No explanations
 """
-            relevant_text = await groq_generate_text(MODEL, relevant_prompt)
-            relevant_tag = next((t for t in relevant_text.split() if t.startswith("#")), None)
-        except Exception:
-            relevant_tag = f"#{seed_keywords[0].replace(' ', '')}" if seed_keywords else None
+        text = await groq_generate_text(MODEL, prompt)
+        relevant_tag = next(
+            (t for t in text.replace("\n", " ").split() if t.startswith("#")),
+            None
+        )
+    except Exception:
+        relevant_tag = None
 
-        # 3) BROAD (category-level, high-level domain, LLM)
-        try:
-            broad_prompt = f"""
-Generate one broad, category-level hashtag for {platform} that describes the general domain of the content and is widely used (aim for 10M+ reach if possible).
-Content:
+    if not relevant_tag and seed_keywords:
+        relevant_tag = f"#{seed_keywords[0].replace(' ', '')}"
+
+    if relevant_tag and relevant_tag not in final_tags:
+        final_tags.append(relevant_tag)
+
+    # --------------------------------------------------
+    # 3️⃣ BROAD (category / domain-level)
+    # --------------------------------------------------
+    broad_tag = None
+
+    try:
+        prompt = f"""
+Generate ONE broad, category-level hashtag for {platform} describing the general domain.
+Return ONLY one hashtag.
+
+Context:
 {effective_query}
-Rules:
-- Output ONLY one hashtag
-- No explanations
 """
-            broad_text = await groq_generate_text(MODEL, broad_prompt)
-            broad_tag = next((t for t in broad_text.split() if t.startswith("#")), None)
-        except Exception:
-            broad_tag = None
+        text = await groq_generate_text(MODEL, prompt)
+        broad_tag = next(
+            (t for t in text.replace("\n", " ").split() if t.startswith("#")),
+            None
+        )
+    except Exception:
+        broad_tag = None
 
-        # Merge and deduplicate, preserve order
-        tags = [t for t in [trending_tag, relevant_tag, broad_tag] if t]
-        seen = set()
-        final_tags = []
-        for tag in tags:
-            if tag not in seen:
+    if not broad_tag and len(seed_keywords) > 1:
+        broad_tag = f"#{seed_keywords[1].replace(' ', '')}"
+    elif not broad_tag:
+        broad_tag = "#content"
+
+    if broad_tag and broad_tag not in final_tags:
+        final_tags.append(broad_tag)
+
+    # --------------------------------------------------
+    # 🔒 FINAL SAFETY NET (platform pool, no fake tags)
+    # --------------------------------------------------
+    if len(final_tags) < 3:
+        fallback_pool = TRENDING_POOLS.get(platform, [])
+        random.shuffle(fallback_pool)
+        for tag in fallback_pool:
+            if len(final_tags) < 3 and tag not in final_tags:
                 final_tags.append(tag)
-                seen.add(tag)
-        if len(final_tags) == 3:
-            return final_tags
-    # If after max_attempts still not 3, pad with generic hashtags
-    while len(final_tags) < 3:
-        final_tags.append(f"#extra{len(final_tags)+1}")
-    return final_tags
 
+    # Hard guarantee: exactly 3 hashtags
+    return final_tags[:3]
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
     Enforces:
@@ -335,7 +371,9 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
 # 3) caption generator
 # ---------------------------
 
+
 def _build_caption_prompt(p_norm: str, effective_query: str) -> str:
+    is_campaign = is_marketing_campaign(effective_query)
     """Build the caption prompt for a given platform."""
     if p_norm == "instagram":
         return f"""
@@ -456,6 +494,11 @@ FORMAT RULES (CRITICAL):
 - Bullets must appear as a vertical list
 - If bullets appear on the same line, rewrite internally until they are vertical
 
+If this is a marketing campaign:
+- Frame this as an industry shift, not a product
+- Emphasize outcomes, efficiency, and decision-making
+- Avoid hype; sound credible and strategic
+
 LENGTH:
 - 500–1,000 characters
 - Multi-paragraph output required
@@ -506,24 +549,29 @@ Return ONLY the caption text with line breaks preserved.
 """
 
     elif p_norm == "pinterest":
+        is_campaign = is_marketing_campaign(effective_query)
+        char_limit = 90 if is_campaign else 50
+        campaign_note = "This is a marketing campaign. Focus on future outcomes and brand vision. Avoid tactical language." if is_campaign else ""
         return f"""
-Write a SHORT Pinterest caption (100–150 characters max).
+Write a Pinterest caption (max {char_limit} characters, including spaces).
 
 STYLE:
-- Aesthetic, dreamy, inspiring
-- One punchy line + optional short CTA
-- Think mood-board vibes
+    - Aesthetic, dreamy, inspiring
+    - One punchy line + optional short CTA
+    - Think mood-board vibes
 
 RULES:
-- STRICTLY NO first-person language (no I, me, my, we, our)
-- Short and sweet - max 2 sentences
-- Evoke emotion, not description
-- No hashtags in text
+    - STRICTLY NO first-person language (no I, me, my, we, our)
+    - Short and sweet - max 2 sentences
+    - Evoke emotion, not description
+    - No hashtags in text
+    - Caption must be under {char_limit} characters (including spaces)
+    {campaign_note}
 
 CONTEXT:
 {effective_query}
 
-Return ONLY the caption text (under 150 characters).
+Return ONLY the caption text (under {char_limit} characters).
 """
 
     elif p_norm == "youtube":
@@ -540,6 +588,11 @@ RULES:
 - Do NOT list scenes
 - Human, engaging tone
 - CTA is mandatory
+
+If this is a marketing campaign:
+- Explain the problem BEFORE the product
+- Make the viewer feel late if they ignore this
+- Frame the tool as the natural solution
 
 CONTEXT:
 {effective_query}
@@ -596,44 +649,6 @@ RULES:
 Context:
 {effective_query}
 
-Return ONLY the caption text.
-"""
-
-    elif p_norm == "reddit":
-        return f"""
-    Write a Threads caption that is visually eye-catching, unique, and scroll-stopping. For marketing, business, or automation topics, reference specific elements from the image, campaign, or brand (e.g., robotic arm, watering, plant growth, Stelle AI) to make the caption memorable and relevant. For other topics, use humor and sarcasm that fits the actual subject (e.g., nature, art, food, etc.).
-
-    - STRICTLY NO first-person language (no "I", "we", "my", "our")
-    - Do NOT describe the video or image generically
-    - Do NOT summarize what happened
-    - For business/marketing/automation, use an inspirational and professional tone (avoid sarcasm)
-    - For non-business topics, use humor and sarcasm that fits the subject
-    - No hashtags, no emojis
-    - The caption must be a maximum of 1–2 lines (short, punchy)
-- STRICTLY NO first-person language (no I, me, my, we, our)
-    - For a business post: "Empower your brand to grow with precision. Automation is the new edge."
-    - For a nature post: "This beach is so calm, even my notifications took a nap."
-    - For a food post: "Calories don’t count if you eat it on vacation, right?"
-- Do NOT summarize the video
-- No hashtags inside the text
-    RULES:
-    - STRICTLY NO first-person language (no "I", "we", "my", "our")
-    - Do NOT describe the video or image generically
-    - Do NOT summarize what happened
-    - For business/marketing/automation, use an inspirational and professional tone, and always mention a unique visual or brand element
-    - For non-business topics, use humor and sarcasm that fits the subject
-    - No hashtags, no emojis
-    - The caption must be a maximum of 1–2 lines (short, punchy)
-CONTEXT (for understanding only):
-    EXAMPLES:
-    - For a business post: "Robotic precision meets natural growth—Stelle AI waters your brand to life." "Let your content bloom with a little help from AI and steel."
-    - For a nature post: "This beach is so calm, even my notifications took a nap."
-    - For a food post: "Calories don’t count if you eat it on vacation, right?"
-{effective_query}
-    Context (for understanding only):
-    {effective_query}
-
-    Return ONLY the caption text (max 2 lines).
 Return ONLY the caption text.
 """
 
@@ -727,10 +742,6 @@ async def generate_caption_post(
     # Create all tasks for parallel execution
     hashtag_tasks = [
         _generate_hashtags_for_platform(p_norm, seed_keywords, effective_query)
-        for p_norm in normalized_platforms
-    ]
-    caption_tasks = [
-        _generate_caption_for_platform(p_norm, effective_query)
         for p_norm in normalized_platforms
     ]
 

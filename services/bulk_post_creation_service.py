@@ -199,10 +199,19 @@ async def process_bulk_media_urls(
         Dict with success status, results, and scheduling summary
     """
     num_posts = len(media_urls)
-    platforms_lower = [p.lower() for p in platforms]
+    
+    # Normalize and flatten platforms
+    flat_platforms = []
+    for p in platforms:
+        if isinstance(p, list):
+            flat_platforms.extend(p)
+        else:
+            flat_platforms.append(p)
+    
+    platforms_lower = [p.lower().strip() for p in flat_platforms if p]
     
     logger.info(
-        f"📦 Bulk processing: {num_posts} media × {len(platforms)} platforms | "
+        f"📦 Bulk processing: {num_posts} media × {len(platforms_lower)} platforms | "
         f"Mode: {schedule_mode} | Growth: {growth_mode}"
     )
     
@@ -300,20 +309,22 @@ async def process_bulk_media_urls(
     
     for media_idx, (media_url, caption_result) in enumerate(zip(media_urls, caption_results)):
         for platform_idx, platform in enumerate(platforms_lower):
-            # Get caption and hashtags
             captions_dict = caption_result.get("captions", {})
             hashtags_dict = caption_result.get("platform_hashtags", {})
-            
-            caption = captions_dict.get(platform, "Check out this content!")
+            titles_dict = caption_result.get("titles", {})
+            # Always get a caption for every platform
+            caption = captions_dict.get(platform)
+            if not caption:
+                # Fallback: use Pinterest or YouTube caption if available, else generic
+                fallback_caption = captions_dict.get("pinterest") or captions_dict.get("youtube") or "Check out this content!"
+                caption = fallback_caption
             hashtags = hashtags_dict.get(platform, [])
-            
             final_caption = caption
             if hashtags:
                 final_caption += "\n\n" + " ".join(hashtags)
-            
-            # Get scheduling time
+
+            # Scheduling logic unchanged
             if schedule_mode == "MANUAL" and scheduled_at_manual:
-                # Manual scheduling
                 manual_time = scheduled_at_manual.get(platform)
                 if manual_time:
                     scheduled_time = datetime.fromisoformat(manual_time)
@@ -321,42 +332,40 @@ async def process_bulk_media_urls(
                         scheduled_time = scheduled_time.replace(tzinfo=timezone.utc)
                 else:
                     scheduled_time = now + timedelta(hours=media_idx + 1)
-                
                 reason = "User selected time"
                 data_source = "manual"
             else:
-                # Auto scheduling - use pre-calculated slots
                 platform_slots = time_slots.get(platform, [])
-                
                 if media_idx < len(platform_slots):
                     slot = platform_slots[media_idx]
                     scheduled_time = slot['scheduledAt']
                     reason = slot['reason']
                     data_source = slot.get('dataSource', 'research_data')
                 else:
-                    # Fallback scheduling
                     scheduled_time = now + timedelta(hours=media_idx + 1)
                     reason = "Fallback scheduling - all optimal slots used"
                     data_source = "fallback"
-            
-            # Build response object (postIndex will be assigned after sorting)
-            all_posts.append({
+
+            post_obj = {
                 "userId": user_id,
                 "mediaUrls": [media_url],
                 "caption": final_caption,
                 "platform": PLATFORM_NAME_MAP.get(platform, platform.capitalize()),
                 "mediaType": media_types_list[media_idx],
                 "scheduledAt": scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time,
-                "scheduledAtObj": scheduled_time,  # Keep datetime object for sorting
+                "scheduledAtObj": scheduled_time,
                 "recommendationReason": reason,
                 "timeDataSource": data_source,
                 "status": "pending",
                 "createdAt": now.isoformat(),
                 "updatedAt": now.isoformat(),
-                "postIndex": 0,  # Placeholder, will be assigned after sorting
+                "postIndex": 0,
                 "totalPosts": num_posts,
-            })
-    
+            }
+            # Only add title for Pinterest and YouTube
+            if platform in ("youtube", "pinterest"):
+                post_obj["title"] = titles_dict.get(platform, "")
+            all_posts.append(post_obj)
     # Sort all posts by scheduled time
     all_posts.sort(key=lambda p: p['scheduledAtObj'])
     

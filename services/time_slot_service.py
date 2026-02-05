@@ -307,86 +307,7 @@ DEFAULT_PLATFORM_CONFIG = {
     'description': 'Standard social media timing - mid-morning, lunch, and evening.'
 }
 
-def get_bulk_optimal_times_multi_platform(
-    user_id: str,
-    platforms: List[str],
-    posts_per_platform: Dict[str, int],
-    content_types: Dict[str, str],
-    growth_mode: str = "optimal",
-    start_date: Optional[datetime] = None,
-    tz: str = DEFAULT_TIMEZONE,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Allocate optimal time slots for bulk posts across multiple platforms and days.
-    Distributes posts according to platform frequency limits and spreads them over days.
-    """
-    from datetime import datetime, timedelta
-    import pytz
-    import random
-
-    # Use UTC if no timezone provided
-    tzinfo = pytz.timezone(tz) if tz else pytz.UTC
-    now = datetime.now(tzinfo)
-    if start_date is None:
-        start_date = now
-
-    # Platform config for posts per day
-    from services.bulk_post_creation_service import BULK_POSTING_CONFIG
-
-    # Helper to get next N days (skipping restricted days if needed)
-
-    def get_next_days(platform, n):
-        days = []
-        date = start_date
-        config = BULK_POSTING_CONFIG.get(platform, {})
-        restrict_days = config.get('restrict_days', False)
-        avoid_days = set(config.get('avoid_days', []))
-        while len(days) < n:
-            weekday = date.strftime('%A')
-            if not restrict_days or weekday not in avoid_days:
-                # Always use a new datetime object for each day
-                days.append(date.replace(hour=0, minute=0, second=0, microsecond=0))
-            date += timedelta(days=1)
-        return days
-
-    results = {}
-    for platform in platforms:
-        p = platform.lower()
-        num_posts = posts_per_platform.get(p, 0)
-        config = BULK_POSTING_CONFIG.get(p, {})
-        posts_per_day = config.get('posts_per_day', {}).get(growth_mode, 2)
-        # Get all available hours for the platform
-        peak_hours = config.get('peak_hours', [12, 18])
-        optimal_minutes = config.get('optimal_minutes', [0, 30])
-        # Shuffle to avoid always picking the same slot
-        hours = peak_hours[:]
-        minutes = optimal_minutes[:]
-        random.shuffle(hours)
-        random.shuffle(minutes)
-
-        # Spread posts over days
-        days_needed = (num_posts + posts_per_day - 1) // posts_per_day
-        days = get_next_days(p, days_needed)
-        slots = []
-        post_idx = 0
-        for day_idx, day in enumerate(days):
-            for i in range(posts_per_day):
-                if post_idx >= num_posts:
-                    break
-                # Pick hour/minute in round-robin
-                hour = hours[(post_idx) % len(hours)]
-                minute = minutes[(post_idx) % len(minutes)]
-                # Assign the scheduled_at to the correct day
-                scheduled_at = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                slot = {
-                    "scheduledAt": scheduled_at,
-                    "reason": f"Bulk scheduled for {scheduled_at.strftime('%A')} at {hour:02d}:{minute:02d}",
-                    "dataSource": "bulk_research_data"
-                }
-                slots.append(slot)
-                post_idx += 1
-        results[p] = slots
-    return results
+# Platform-specific minute offsets for multi-platform posting (stagger posts)
 PLATFORM_MINUTE_OFFSET = {
     "instagram": 0,
     "youtube": 7,
@@ -1395,9 +1316,18 @@ class TimeSlotService:
             user_analytics.get("post_count", 0) >= MIN_POSTS_FOR_USER_DATA
         )
         
+        # Seed random with unique value to ensure different results on each call
+        import hashlib
+        import time
+        seed_string = f"{self.user_id}_{platform_lower}_{time.time()}_{num_posts}"
+        seed_value = int(hashlib.md5(seed_string.encode()).hexdigest()[:8], 16)
+        random.seed(seed_value)
+        
         # Get current time ONCE at start - don't refresh during loop
-        # This ensures consistent 30-min-future checks across all posts
+        # Add small jitter (0-5 minutes) to prevent identical times on rapid calls
         now = datetime.now(self.tz)
+        jitter_seconds = random.randint(0, 300)  # 0-5 minutes
+        now = now + timedelta(seconds=jitter_seconds)
         
         scheduled_slots = []
         current_day_offset = 0
@@ -1474,7 +1404,9 @@ class TimeSlotService:
                 minute = self._get_optimal_minute(platform_lower, hour)
                 
                 # Add variation to minutes for bulk posts (avoid same minute)
-                minute_variation = (post_index * 13) % 20 - 10  # -10 to +10 variation
+                # Use larger variation range and add randomness
+                minute_variation = (post_index * 13) % 30 - 15  # -15 to +15 variation
+                minute_variation += random.randint(-5, 5)  # Extra random jitter
                 minute = max(0, min(59, minute + minute_variation))
                 
                 proposed_time = target_date.replace(

@@ -7,6 +7,10 @@ from typing import Dict, Any, List
 from database import db
 from config import logger
 from services.post_creation_service import create_post_from_uploaded_media
+from services.bulk_post_creation_service import (
+    process_bulk_media_urls,
+    get_bulk_scheduling_preview,
+)
 
 
 router = APIRouter(tags=["Posts"])  # Removed prefix - main.py already adds /posts
@@ -171,9 +175,29 @@ async def upload_video_and_schedule(payload: dict):
 @router.post("/upload-bulk")
 async def upload_bulk_posts(payload: dict):
     """
-    Bulk upload:
-    Multiple media URLs → AI → Scheduling (manual/auto)
-    PARALLEL PROCESSING for faster execution
+    Intelligent Bulk Upload with Platform-Optimized Scheduling.
+    
+    Features:
+    - Platform-specific posting frequency (e.g., Instagram 2-3/day, YouTube 1/day)
+    - Automatic time distribution across days based on platform research
+    - Cross-platform conflict avoidance
+    - Content-type aware scheduling
+    
+    Request body:
+    {
+        "userId": str,
+        "mediaUrls": [str],
+        "platform": str | list[str],
+        "scheduleMode": "AUTO" | "MANUAL",
+        "scheduledAt": dict (for MANUAL mode),
+        "growthMode": "conservative" | "optimal" | "aggressive",
+        "contentType": str (optional, e.g., "VIDEO", "SHORT", "IMAGE")
+    }
+    
+    Growth modes:
+    - conservative: Minimum posting frequency (safe)
+    - optimal: Recommended frequency for growth (default)
+    - aggressive: Maximum frequency for rapid growth
     """
 
     user_id = payload.get("userId")
@@ -182,106 +206,144 @@ async def upload_bulk_posts(payload: dict):
 
     schedule_mode = payload.get("scheduleMode", "AUTO")
     scheduled_at = payload.get("scheduledAt", {})
+    growth_mode = payload.get("growthMode", "optimal")
+    content_type = payload.get("contentType")  # Optional: VIDEO, IMAGE, SHORT, etc.
 
     if not user_id or not media_urls or not platform:
         raise HTTPException(
             status_code=400,
-            detail="Missing required fields"
+            detail="Missing required fields: userId, mediaUrls, platform"
         )
 
+    # Normalize platform to list
+    if isinstance(platform, str):
+        platforms = [platform]
+    else:
+        platforms = platform
+
     # 🔒 MAX LIMIT
-    MAX_BULK_UPLOAD = 20
+    MAX_BULK_UPLOAD = 30  # Increased limit for bulk posting
     if len(media_urls) > MAX_BULK_UPLOAD:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum {MAX_BULK_UPLOAD} media items allowed per bulk upload"
-       )
+        )
 
-    import asyncio
+    # Validate growth mode
+    valid_growth_modes = ["conservative", "optimal", "aggressive"]
+    if growth_mode not in valid_growth_modes:
+        growth_mode = "optimal"
 
-    async def process_single_media(media_url: str):
-        try:
-            result = await create_post_from_uploaded_media(
-                user_id=user_id,
-                cloudinary_url=media_url,
-                platform=platform,
-                schedule_mode=schedule_mode,
-                scheduled_at=scheduled_at
-            )
+    try:
+        result = await process_bulk_media_urls(
+            user_id=user_id,
+            media_urls=media_urls,
+            platforms=platforms,
+            schedule_mode=schedule_mode,
+            scheduled_at_manual=scheduled_at,
+            growth_mode=growth_mode,
+            content_type=content_type,
+            preview_only=False,
+        )
 
-            return {
-                "mediaUrl": media_url,
-                "status": "success",
-                "posts": result.get("results", [])
-            }
+        return result
 
-        except Exception as e:
-            logger.error(
-                f"❌ Bulk post failed for {media_url}",
-                exc_info=True
-            )
-            return {
-                "mediaUrl": media_url,
-                "status": "failed",
-                "error": str(e)
-            }
+    except Exception as e:
+        logger.error(f"❌ Bulk upload failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Bulk upload failed: {str(e)}"
+        )
 
-    # Process all media URLs in parallel
-    results = await asyncio.gather(*[process_single_media(url) for url in media_urls])
 
-    return {
-        "success": True,
-        "totalMedia": len(media_urls),
-        "successful": len([r for r in results if r["status"] == "success"]),
-        "failed": len([r for r in results if r["status"] == "failed"]),
-        "results": results
+@router.post("/upload-bulk/schedule-preview")
+async def bulk_schedule_preview(payload: dict):
+    """
+    Preview how bulk posts would be scheduled BEFORE uploading.
+    
+    This shows the time distribution strategy without processing media.
+    Useful for users to see the schedule before committing.
+    
+    Request body:
+    {
+        "userId": str,
+        "numPosts": int,
+        "platforms": list[str],
+        "contentType": str (optional),
+        "growthMode": "conservative" | "optimal" | "aggressive"
     }
+    """
+    user_id = payload.get("userId")
+    num_posts = payload.get("numPosts", 1)
+    platforms = payload.get("platforms", [])
+    content_type = payload.get("contentType", "VIDEO")
+    growth_mode = payload.get("growthMode", "optimal")
+
+    if not user_id or not platforms:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: userId, platforms"
+        )
+
+    try:
+        preview = await get_bulk_scheduling_preview(
+            user_id=user_id,
+            num_posts=num_posts,
+            platforms=platforms,
+            content_type=content_type,
+            growth_mode=growth_mode,
+        )
+        return preview
+
+    except Exception as e:
+        logger.error(f"❌ Schedule preview failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Preview generation failed: {str(e)}"
+        )
 
 @router.post("/upload-bulk-preview")
 async def bulk_preview(payload: dict):
     """
-    Generate AI captions + recommended times
+    Generate AI captions + recommended times for bulk uploads
     WITHOUT saving to DB
-    PARALLEL PROCESSING for faster previews
+    Uses coordinated bulk scheduling to avoid time conflicts and ensure unique times per call
     """
 
     user_id = payload.get("userId")
     media_urls = payload.get("mediaUrls", [])
-    platform = payload.get("platform")
+    platforms = payload.get("platforms", [])
+    
+    # Legacy support for single platform
+    if not platforms and payload.get("platform"):
+        platforms = [payload.get("platform")]
 
-    schedule_mode = payload.get("scheduleMode", "AUTO")
-    scheduled_at = payload.get("scheduledAt", {})
+    growth_mode = payload.get("growthMode", "optimal")
+    content_type = payload.get("contentType")
 
-    if not user_id or not media_urls or not platform:
+    if not user_id or not media_urls or not platforms:
         raise HTTPException(
             status_code=400,
-            detail="Missing required fields"
+            detail="Missing required fields: userId, mediaUrls, and platforms"
         )
 
-    import asyncio
+    # Use bulk scheduling service with preview mode
+    # This ensures coordinated time allocation with all our fixes:
+    # - Platform-specific frequency limits (Instagram 2-3/day, YouTube 3-4/week, etc.)
+    # - Unique time slots on each API call (randomization with seed + jitter)
+    # - Chronological post indices
+    # - Daily and weekly limit enforcement
+    result = await process_bulk_media_urls(
+        user_id=user_id,
+        media_urls=media_urls,
+        platforms=platforms,
+        schedule_mode="AUTO",
+        growth_mode=growth_mode,
+        content_type=content_type,
+        preview_only=True  # Don't save to database
+    )
 
-    async def preview_single_media(media_url: str):
-        result = await create_post_from_uploaded_media(
-            user_id=user_id,
-            cloudinary_url=media_url,
-            platform=platform,
-            schedule_mode=schedule_mode,
-            scheduled_at=scheduled_at,
-            preview_only=True,   # 👈 KEY
-        )
-
-        return {
-            "mediaUrl": media_url,
-            "results": result.get("results", [])
-        }
-
-    # Process all previews in parallel
-    previews = await asyncio.gather(*[preview_single_media(url) for url in media_urls])
-
-    return {
-        "success": True,
-        "preview": previews
-    }
+    return result
 
 @router.post("/bulk-confirm")
 async def bulk_confirm(payload: dict):

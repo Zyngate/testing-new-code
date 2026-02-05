@@ -249,7 +249,7 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
             ]
 
             response = client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                model="meta-llama/llama-4-maverick-17b-128e-instruct",
                 messages=[{"role": "user", "content": prompt_content}],
                 response_format={"type": "json_object"},
                 temperature=0.2,
