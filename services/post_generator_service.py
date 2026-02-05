@@ -416,12 +416,12 @@ Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a co
 
 GOAL:
 - Write a structured, professional mini-blog post
-- Share thoughtful insight relevant to work, leadership, or decision-making
+- Share thoughtful insight relevant to work, industry, or professional growth (not always about leadership)
 
 TONE:
 - Professional
+- Insightful
 - Calm
-- Reflective
 - Descriptive (not promotional, not reactive)
 
 STRICT RULES:
@@ -437,7 +437,7 @@ PARAGRAPH 1:
 - Professional framing and context (2–3 lines)
 
 PARAGRAPH 2:
-- Why this topic matters from a professional or decision-making perspective (1–2 lines)
+- Why this topic matters from a professional or industry perspective (1–2 lines)
 
 BULLET SECTION (MANDATORY):
 - Write 4–6 bullet points
@@ -449,7 +449,7 @@ BULLET SECTION (MANDATORY):
 - ONE idea per bullet only
 
 CLOSING PARAGRAPH:
-- A reflective conclusion connecting the topic to judgment, responsibility, or leadership
+- A reflective conclusion connecting the topic to professional growth, industry trends, or practical takeaways (not always leadership)
 
 FORMAT RULES (CRITICAL):
 - Use blank lines between paragraphs
@@ -735,31 +735,41 @@ async def generate_caption_post(
     ]
 
     # Title generation tasks (YouTube and Pinterest only, platform-specific prompts)
-    async def generate_title(platform: str, query: str) -> tuple[str, str]:
+    async def generate_title(platform: str, query: str, caption: str = "") -> tuple[str, str]:
         if platform == "youtube":
             prompt = f"""
-Generate a YouTube video title.
+Generate a UNIQUE YouTube video title that is curiosity-driven, highly clickable, and trend-aware. Do NOT repeat or paraphrase the video description or caption. Use a different angle, hook, or question. Make it stand out in search and recommendations.
+
 Rules:
 - 40–60 characters
 - Clickable but not clickbait
-- Clear and informative
+- Use curiosity, action, or emotional hooks
+- Avoid repeating or paraphrasing the main description/caption
+- Make it feel native to YouTube trends
 
 Context:
 {query}
+
+Caption (for reference, do NOT copy):
+{caption}
 
 Return ONLY the title text.
 """
         elif platform == "pinterest":
             prompt = f"""
-Generate a Pinterest pin title.
+Generate a UNIQUE Pinterest pin title that is inspirational, visual, and mood-board friendly. Do NOT repeat or paraphrase the pin description or caption. Use a different visual or emotional angle. Make it stand out for discovery and inspiration.
+
 Rules:
-- Inspirational
 - Short (3–6 words)
-- Discovery-friendly
-- Not clickbait
+- Inspirational, visual, or aspirational
+- Avoid repeating or paraphrasing the main description/caption
+- Make it feel native to Pinterest trends
 
 Context:
 {query}
+
+Caption (for reference, do NOT copy):
+{caption}
 
 Return ONLY the title text.
 """
@@ -772,23 +782,27 @@ Return ONLY the title text.
         except Exception:
             return (platform, "")
 
-    # Only generate title tasks for YouTube and Pinterest
-    title_tasks = [generate_title(p_norm, effective_query) for p_norm in normalized_platforms if p_norm in ("youtube", "pinterest")]
+    # Only generate title tasks for YouTube and Pinterest, passing the generated caption for uniqueness
+    # Wait for captions to be generated first
+    caption_results = await asyncio.gather(*[
+        _generate_caption_for_platform(p_norm, effective_query)
+        for p_norm in normalized_platforms
+    ])
+    captions = {p_norm: caption_text for p_norm, caption_text in caption_results}
 
-    # Run all hashtag, caption, and title tasks in parallel
-    all_results = await asyncio.gather(*hashtag_tasks, *caption_tasks, *title_tasks)
+    title_tasks = [
+        generate_title(p_norm, effective_query, captions.get(p_norm, ""))
+        for p_norm in normalized_platforms if p_norm in ("youtube", "pinterest")
+    ]
 
-    num_platforms = len(normalized_platforms)
-    hashtag_results = all_results[:num_platforms]
-    caption_results = all_results[num_platforms:2*num_platforms]
-    title_results = all_results[2*num_platforms:]
+    # Run hashtag and title tasks in parallel (captions already generated above)
+    hashtag_results, title_results = await asyncio.gather(
+        asyncio.gather(*hashtag_tasks),
+        asyncio.gather(*title_tasks)
+    )
 
-    # Populate dictionaries from results
     for p_norm, tags in hashtag_results:
         platform_hashtags[p_norm] = tags
-
-    for p_norm, caption_text in caption_results:
-        captions[p_norm] = caption_text
 
     for p_norm, title in title_results:
         # Always include YouTube and Pinterest in the titles dict, even if title is empty
