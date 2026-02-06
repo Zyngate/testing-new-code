@@ -275,9 +275,8 @@ def execute_task(task: Dict):
             "_id": task["_id"],
             "status": {"$ne": "running"},
             "$or": [
-      {"retrieved": False},
-      {"retrieved": {"$exists": False}}
-  ]
+    {"retrieved": {"$ne": True}}
+]
 },
         {"$set": {"status": "running", "last_run_at": datetime.now(timezone.utc)}}
     )

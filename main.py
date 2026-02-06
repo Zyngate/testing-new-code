@@ -202,11 +202,9 @@ async def startup():
 
     # 🚫 DO NOT run schedulers on web service
     if os.getenv("ENABLE_SCHEDULERS") == "true":
-        asyncio.create_task(notification_sender_loop())
+        start_task_scheduler()
         asyncio.create_task(daily_checkin_scheduler())
         asyncio.create_task(proactive_checkin_scheduler())
-        start_task_scheduler()
-
 # -------------------------
 #   ROOT ENDPOINT
 # -------------------------
