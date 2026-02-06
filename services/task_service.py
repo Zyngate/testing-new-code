@@ -271,7 +271,14 @@ def execute_task(task: Dict):
         return
 
     locked = tasks_col.find_one_and_update(
-        {"_id": task["_id"], "retrieved": False, "status": {"$ne": "running"}},
+        {
+            "_id": task["_id"],
+            "status": {"$ne": "running"},
+            "$or": [
+      {"retrieved": False},
+      {"retrieved": {"$exists": False}}
+  ]
+},
         {"$set": {"status": "running", "last_run_at": datetime.now(timezone.utc)}}
     )
 
