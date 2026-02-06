@@ -550,7 +550,7 @@ Return ONLY the caption text with line breaks preserved.
 
     elif p_norm == "pinterest":
         is_campaign = is_marketing_campaign(effective_query)
-        char_limit = 90 if is_campaign else 50
+        char_limit = 120 if is_campaign else 60
         campaign_note = "This is a marketing campaign. Focus on future outcomes and brand vision. Avoid tactical language." if is_campaign else ""
         return f"""
 Write a Pinterest caption (max {char_limit} characters, including spaces).
@@ -562,7 +562,7 @@ STYLE:
 
 RULES:
     - STRICTLY NO first-person language (no I, me, my, we, our)
-    - Short and sweet - max 2 sentences
+    - max 2 sentences
     - Evoke emotion, not description
     - No hashtags in text
     - Caption must be under {char_limit} characters (including spaces)
