@@ -34,24 +34,37 @@ def ask_stelle(prompt: str) -> str:
 
     payload = {
         "model": "llama-3.1-8b-instant",
-        "temperature": 0.2,
-        "top_p": 0.9,
-        "max_tokens": 1800,
+        "temperature": 0.4,
+        "top_p": 0.95,
+        "max_tokens": 2000,
         "messages": [
-            {
-                "role": "system",
-                "content": "You are a task execution engine that completes tasks fully and decisively."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "system", "content": "You are a professional content generator."},
+            {"role": "user", "content": prompt}
         ]
     }
 
-    response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+    response = requests.post(
+        GROQ_API_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    logger.info(f"GROQ status: {response.status_code}")
+    logger.info(f"GROQ raw response: {response.text}")
+
     response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+    data = response.json()
+
+    if "choices" not in data or not data["choices"]:
+        raise RuntimeError("GROQ returned no choices")
+
+    content = data["choices"][0]["message"].get("content", "").strip()
+
+    if not content:
+        raise RuntimeError("GROQ returned empty content")
+
+    return content
 
 
 def ask_stelle_normalizer(prompt: str) -> str:
@@ -199,7 +212,8 @@ def calculate_next_run(
     days: Optional[List[str]],
     date: Optional[int] = None
 ) -> Optional[datetime]:
-
+    if frequency in (None, "once"):
+        return None
     now = datetime.now(timezone.utc)
     scheduled_dt = ensure_utc(scheduled_dt)
 
@@ -239,13 +253,13 @@ def calculate_next_run(
 
     return None
 
-
 # -------------------------------------------------------------------
 # Core Task Execution
 # -------------------------------------------------------------------
 def execute_task(task: Dict):
+    task["scheduled_datetime"] = ensure_utc(task["scheduled_datetime"])
     # 🔐 State safety check (PAUSE / RESUME SUPPORT)
-    if task.get("status") != "scheduled":
+    if task.get("status", "scheduled") != "scheduled":
         logger.info(
             f"Task {task.get('_id')} skipped due to state: {task.get('status')}"
         )
@@ -304,14 +318,22 @@ FINAL INSTRUCTION:
 Return ONLY the final content.
 """
 
-        result = ask_stelle(executor_prompt)
+        logger.info(f"[TaskService] Executor prompt:\n{executor_prompt}")
+        result = None
+        attempts = 0
+        while attempts < 3:
+            try:
+                result = ask_stelle(executor_prompt)
+                logger.info(f"[TaskService] ask_stelle result (attempt {attempts+1}):\n{result}")
+                if len(result.split()) >= 300:
+                    break
+            except Exception as e:
+                logger.warning(f"Generation attempt {attempts+1} failed: {e}")
+            attempts += 1
+            time.sleep(3)
 
-        if len(result.split()) < 500:
-            logger.warning("Short output detected. Retrying once.")
-            result = ask_stelle(
-                executor_prompt
-                + "\n\nIMPORTANT: Expand the content significantly with more depth and examples."
-            )
+        if not result or len(result.strip()) == 0:
+            raise RuntimeError("Empty content – aborting task")
 
         output_col.insert_one({
             "task_id": task["_id"],

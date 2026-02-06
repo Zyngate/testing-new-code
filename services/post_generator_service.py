@@ -550,30 +550,35 @@ Return ONLY the caption text with line breaks preserved.
 
     elif p_norm == "pinterest":
         is_campaign = is_marketing_campaign(effective_query)
-        char_limit = 120 if is_campaign else 60
-        campaign_note = "This is a marketing campaign. Focus on future outcomes and brand vision. Avoid tactical language." if is_campaign else ""
         return f"""
-Write a Pinterest caption (max {char_limit} characters, including spaces).
+Write a Pinterest pin description designed for discovery and inspiration.
 
 STYLE:
-    - Aesthetic, dreamy, inspiring
-    - One punchy line + optional short CTA
-    - Think mood-board vibes
+- Aesthetic and inspiring
+- Clear, specific, and visual
+- Feels like an idea worth saving
+
+STRUCTURE:
+- 2–3 short sentences
+- Sentence 1: visual or emotional hook
+- Sentence 2–3: what this idea offers or why it matters
 
 RULES:
-    - STRICTLY NO first-person language (no I, me, my, we, our)
-    - max 2 sentences
-    - Evoke emotion, not description
-    - No hashtags in text
-    - Caption must be under {char_limit} characters (including spaces)
-    {campaign_note}
+- STRICTLY NO first-person language (no I, me, my, we, our)
+- Do NOT sound like a quote
+- Do NOT be vague or generic
+- No hashtags in text
+- No emojis
+- Avoid poetic filler without meaning
+
+LENGTH:
+- 100–180 characters (ideal for Pinterest)
 
 CONTEXT:
 {effective_query}
 
-Return ONLY the caption text (under {char_limit} characters).
+Return ONLY the caption text.
 """
-
     elif p_norm == "youtube":
         return f"""
 Write a LONG-FORM YouTube description (800–1000 characters).

@@ -18,7 +18,9 @@ task = {
     "scheduled_datetime": datetime.now(),  # run immediately
     "frequency": None,                     # one-time task
     "days": [],
-    "retrieved": False
+    "retrieved": False,
+    "status": "scheduled",
+    "run_count": 0
 }
 
 tasks_col.insert_one(task)
