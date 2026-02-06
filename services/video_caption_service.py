@@ -29,6 +29,21 @@ SUMMARIZE_MODEL = "llama-3.3-70b-versatile" # used only for text-compression if 
 TEMP_DIR = Path(os.getenv("TEMP", "/tmp")) / "stelle_video"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
+def video_has_audio(video_path: str) -> bool:
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "json",
+        video_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        data = json.loads(proc.stdout or "{}")
+        return bool(data.get("streams"))
+    except Exception:
+        return False
 
 # Utility: run shell command
 def run_cmd(cmd: str) -> Tuple[int, str, str]:
@@ -40,20 +55,30 @@ def run_cmd(cmd: str) -> Tuple[int, str, str]:
 # -----------------------------------------------------
 # 1. EXTRACT AUDIO (FFmpeg)
 # -----------------------------------------------------
-async def extract_audio_from_video(video_path: str, out_audio: Optional[str] = None) -> str:
+async def extract_audio_from_video(video_path: str, out_audio: Optional[str] = None) -> Optional[str]:
+    if not video_has_audio(video_path):
+        logger.info("No audio stream detected. Skipping audio extraction.")
+        return None
+
     if out_audio is None:
         out_audio = str(TEMP_DIR / f"{uuid.uuid4().hex}.wav")
 
     video_quoted = shlex.quote(video_path)
     audio_quoted = shlex.quote(out_audio)
 
-    # create 16k mono WAV (LINEAR16) which works well with STT
-    cmd = f'ffmpeg -y -i {video_quoted} -vn -ac 1 -ar 16000 -sample_fmt s16 {audio_quoted} -hide_banner -loglevel error'
+    cmd = (
+        f'ffmpeg -y -i {video_quoted} '
+        f'-vn -ac 1 -ar 16000 -sample_fmt s16 {audio_quoted} '
+        f'-hide_banner -loglevel error'
+    )
+
     logger.info(f"Running ffmpeg to extract audio: {cmd}")
-    returncode, out, err = await asyncio.to_thread(run_cmd, cmd)
+    returncode, _, err = await asyncio.to_thread(run_cmd, cmd)
+
     if returncode != 0:
-        logger.error(f"ffmpeg failed extracting audio: {err.strip()}")
-        raise RuntimeError("Audio extraction failed. Ensure ffmpeg is installed and video file exists.")
+        logger.warning(f"Audio extraction failed (non-fatal): {err.strip()}")
+        return None
+
     return out_audio
 
 async def identify_person(transcript: str, ocr_text: str, visual_summary: str) -> str:
@@ -442,9 +467,14 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
             return []
 
     audio_path, frame_paths = await asyncio.gather(
-        extract_audio_task(),
-        extract_frames_task()
-    )
+    extract_audio_task(),
+    extract_frames_task(),
+    return_exceptions=True
+)
+
+    if isinstance(audio_path, Exception):
+        logger.warning("Audio extraction errored — continuing without audio")
+        audio_path = None
 
     # 3 & 4. STT + Visual analysis IN PARALLEL (saves ~5-10 sec per video)
     async def transcribe_task():
