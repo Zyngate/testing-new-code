@@ -37,6 +37,7 @@ weekly_plans_collection = db["weekly_plans"]
 calendar_events_collection = db["calendar_events"]
 user_profiles_collection = db["user_profiles"]
 user_post_analytics_collection = db["user_post_analytics"]  # For caching user post analytics
+video_analysis_cache_collection = db["video_analysis_cache"]  # Cache for video vision/STT analysis
 
 # ----------------------------------------------------------------------
 # --- Synchronous MongoDB Setup (Lazy & Robust Initialization) ---

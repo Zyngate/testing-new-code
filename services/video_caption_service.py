@@ -18,6 +18,8 @@ from services.post_generator_service import (
     fetch_platform_hashtags,
     generate_caption_post,
 )
+from services.video_cache_utils import compute_video_hash
+from services.video_cache_repo import get_cached_video_analysis, save_video_analysis
 
 # LLM / Vision model names
 VISION_MODEL = "llava-v1.5-7b"  # change if you prefer another Groq vision model
@@ -451,117 +453,166 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
     if platforms and isinstance(platforms[0], list):
         platforms = platforms[0]
 
-    # 1 & 2. Extract audio + frames IN PARALLEL (saves ~3-5 sec per video)
-    async def extract_audio_task():
-        try:
-            return await extract_audio_from_video(video_filepath)
-        except Exception as e:
-            logger.error("extract_audio_from_video failed: " + str(e))
-            raise
-
-    async def extract_frames_task():
-        try:
-            return await asyncio.to_thread(extract_frames_from_video, video_filepath, None, 1, 6)
-        except Exception as e:
-            logger.warning(f"Frame extraction failed: {e}")
-            return []
-
-    audio_path, frame_paths = await asyncio.gather(
-    extract_audio_task(),
-    extract_frames_task(),
-    return_exceptions=True
-)
-
-    if isinstance(audio_path, Exception):
-        logger.warning("Audio extraction errored — continuing without audio")
-        audio_path = None
-
-    # 3 & 4. STT + Visual analysis IN PARALLEL (saves ~5-10 sec per video)
-    async def transcribe_task():
-        try:
-            return await get_transcript_groq(audio_path)
-        except Exception as e:
-            logger.warning(f"Transcription failed: {e}")
-            return ""
-
-    async def visual_task():
-        try:
-            return await analyze_frames_with_groq(frame_paths)
-        except Exception as e:
-            logger.warning(f"Visual analysis failed: {e}")
-            return {"visual_captions": [], "visual_summary": ""}
-
-    transcript, visual_result = await asyncio.gather(
-        transcribe_task(),
-        visual_task()
-    )
-
-    visual_summary = visual_result.get("visual_summary", "")
-    visual_captions = visual_result.get("visual_captions", [])
-    detected_texts = visual_result.get("detected_text", [])
-    # ---- OCR COMBINATION (DEFINE ONCE) ----
-    raw_ocr_text = "\n".join([t for t in detected_texts if t]).strip()
-    ocr_text_combined = clean_ocr_text(raw_ocr_text)
-    ocr_text_combined = await normalize_ocr_spelling(ocr_text_combined)
-
     # -----------------------------------------------------
-    # 6. MERGE SIGNALS (TRANSCRIPT-FIRST, VISUAL-SAFE)
+    # CACHE CHECK: Skip Vision + STT if already analyzed
     # -----------------------------------------------------
-
-    cleaned_transcript = clean_transcript_for_caption(transcript)
-    merge_parts = []
-    # 🧠 CASE 1: PEOPLE ARE TALKING → TRANSCRIPT DOMINATES
-    if cleaned_transcript and len(cleaned_transcript.split()) > 20:
-        merge_parts.append(
-        "This video contains a real spoken conversation. "
-        "Base understanding primarily on what is being said."
-        )
-        merge_parts.append(f"Conversation:\n{cleaned_transcript}")
-
-        if ocr_text_combined:
-            merge_parts.append(f"On-screen text:\n{ocr_text_combined}")
-
-        if visual_summary:
-            merge_parts.append(f"Visual context (secondary): {visual_summary}")
-
-# 🎵 CASE 2: NO REAL SPEECH → VISUAL MODE
+    video_hash = compute_video_hash(video_filepath)
+    cached = await get_cached_video_analysis(video_hash)
+    
+    if cached:
+        logger.info("✅ Using CACHED video analysis - skipping Vision + STT")
+        transcript = cached["transcript"]
+        visual_summary = cached["visual_summary"]
+        visual_captions = cached["visual_captions"]
+        detected_texts = cached["detected_texts"]
+        ocr_text_combined = cached["ocr_text_combined"]
+        detected_person = cached["detected_person"]
+        marketing_prompt = cached["marketing_prompt"]
+        objects_detected = cached.get("objects", [])
+        actions_detected = cached.get("actions", [])
     else:
-        if visual_summary:
-            merge_parts.append(f"Scene: {visual_summary}")
+        logger.info("🔄 No cache found - running Vision + STT pipeline")
         
-        if visual_captions:
-            frame_caps = "; ".join([cap for _, cap in visual_captions if cap][:5])
-            merge_parts.append(f"Visual details: {frame_caps}")
+        # 1 & 2. Extract audio + frames IN PARALLEL (saves ~3-5 sec per video)
+        async def extract_audio_task():
+            try:
+                return await extract_audio_from_video(video_filepath)
+            except Exception as e:
+                logger.error("extract_audio_from_video failed: " + str(e))
+                raise
 
-        if ocr_text_combined:
-            merge_parts.append(f"On-screen text: {ocr_text_combined}")
+        async def extract_frames_task():
+            try:
+                return await asyncio.to_thread(extract_frames_from_video, video_filepath, None, 1, 3)  # Reduced to 3 frames
+            except Exception as e:
+                logger.warning(f"Frame extraction failed: {e}")
+                return []
 
-    marketing_prompt = "\n".join(merge_parts)
+        audio_path, frame_paths = await asyncio.gather(
+            extract_audio_task(),
+            extract_frames_task(),
+            return_exceptions=True
+        )
 
+        if isinstance(audio_path, Exception):
+            logger.warning("Audio extraction errored — continuing without audio")
+            audio_path = None
 
-    # -----------------------------------------------------
-    # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
-    # -----------------------------------------------------
+        # 3 & 4. STT + Visual analysis IN PARALLEL (saves ~5-10 sec per video)
+        async def transcribe_task():
+            try:
+                return await get_transcript_groq(audio_path)
+            except Exception as e:
+                logger.warning(f"Transcription failed: {e}")
+                return ""
 
-    identified_person = await identify_person_from_frames(
-        visual_captions=visual_captions,
-        ocr_texts=detected_texts,
-        transcript=transcript
-    )
+        async def visual_task():
+            try:
+                return await analyze_frames_with_groq(frame_paths)
+            except Exception as e:
+                logger.warning(f"Visual analysis failed: {e}")
+                return {"visual_captions": [], "visual_summary": ""}
 
-    detected_person = (
-        identified_person
-        if identified_person and identified_person.lower() != "unknown"
-       else None
-    )
+        transcript, visual_result = await asyncio.gather(
+            transcribe_task(),
+            visual_task()
+        )
 
+        visual_summary = visual_result.get("visual_summary", "")
+        visual_captions = visual_result.get("visual_captions", [])
+        detected_texts = visual_result.get("detected_text", [])
+        objects_detected = visual_result.get("objects", [])
+        actions_detected = visual_result.get("actions", [])
+        
+        # ---- OCR COMBINATION (DEFINE ONCE) ----
+        raw_ocr_text = "\n".join([t for t in detected_texts if t]).strip()
+        ocr_text_combined = clean_ocr_text(raw_ocr_text)
+        ocr_text_combined = await normalize_ocr_spelling(ocr_text_combined)
 
+        # -----------------------------------------------------
+        # 6. MERGE SIGNALS (TRANSCRIPT-FIRST, VISUAL-SAFE)
+        # -----------------------------------------------------
 
-    if detected_person:
-        marketing_prompt = (
-        f"Context: The video includes {detected_person}.\n\n"
-        + marketing_prompt
-    )
+        cleaned_transcript = clean_transcript_for_caption(transcript)
+        merge_parts = []
+        # 🧠 CASE 1: PEOPLE ARE TALKING → TRANSCRIPT DOMINATES
+        if cleaned_transcript and len(cleaned_transcript.split()) > 20:
+            merge_parts.append(
+            "This video contains a real spoken conversation. "
+            "Base understanding primarily on what is being said."
+            )
+            merge_parts.append(f"Conversation:\n{cleaned_transcript}")
+
+            if ocr_text_combined:
+                merge_parts.append(f"On-screen text:\n{ocr_text_combined}")
+
+            if visual_summary:
+                merge_parts.append(f"Visual context (secondary): {visual_summary}")
+
+        # 🎵 CASE 2: NO REAL SPEECH → VISUAL MODE
+        else:
+            if visual_summary:
+                merge_parts.append(f"Scene: {visual_summary}")
+            
+            if visual_captions:
+                frame_caps = "; ".join([cap for _, cap in visual_captions if cap][:5])
+                merge_parts.append(f"Visual details: {frame_caps}")
+
+            if ocr_text_combined:
+                merge_parts.append(f"On-screen text: {ocr_text_combined}")
+
+        marketing_prompt = "\n".join(merge_parts)
+
+        # -----------------------------------------------------
+        # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
+        # -----------------------------------------------------
+
+        identified_person = await identify_person_from_frames(
+            visual_captions=visual_captions,
+            ocr_texts=detected_texts,
+            transcript=transcript
+        )
+
+        detected_person = (
+            identified_person
+            if identified_person and identified_person.lower() != "unknown"
+           else None
+        )
+
+        if detected_person:
+            marketing_prompt = (
+            f"Context: The video includes {detected_person}.\n\n"
+            + marketing_prompt
+        )
+
+        # -----------------------------------------------------
+        # SAVE TO CACHE (Vision + STT results only)
+        # -----------------------------------------------------
+        await save_video_analysis(video_hash, {
+            "transcript": transcript,
+            "visual_summary": visual_summary,
+            "visual_captions": visual_captions,
+            "detected_texts": detected_texts,
+            "ocr_text_combined": ocr_text_combined,
+            "detected_person": detected_person,
+            "marketing_prompt": marketing_prompt,
+            "objects": objects_detected,
+            "actions": actions_detected,
+        })
+        
+        # Cleanup temp files
+        try:
+            if audio_path and os.path.exists(audio_path):
+                os.remove(audio_path)
+        except Exception:
+            pass
+        try:
+            if frame_paths:
+                for fp in frame_paths:
+                    if os.path.exists(fp):
+                        os.remove(fp)
+        except Exception:
+            pass
 
     # -----------------------------------------------------
     # BUILD STRONG VIDEO EVIDENCE FOR CAPTION GENERATION
@@ -661,27 +712,6 @@ Focus on ONE strong idea or reaction.
     captions = captions_data.get("captions", {}) if isinstance(captions_data, dict) else captions_data
     titles = captions_data.get("titles", {}) if isinstance(captions_data, dict) else {}
     boards = captions_data.get("boards", {}) if isinstance(captions_data, dict) else {}
-
-    # 10. Cleanup
-    try:
-        if audio_path and os.path.exists(audio_path):
-            os.remove(audio_path)
-    except Exception:
-        pass
-    try:
-        if frame_paths:
-            frames_dir = os.path.dirname(frame_paths[0])
-            for f in glob.glob(os.path.join(frames_dir, "*")):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
-            try:
-                os.rmdir(frames_dir)
-            except Exception:
-                pass
-    except Exception:
-        pass
 
     return {
         "detected_person": detected_person,
