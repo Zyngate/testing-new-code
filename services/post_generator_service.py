@@ -524,17 +524,18 @@ Return ONLY the caption.
 
     elif p_norm == "linkedin":
         return f"""
-Write a LinkedIn post intended to be published from a PERSONAL PROFILE (not a company page).
+Write a direct, no-nonsense LinkedIn post.
 
 GOAL:
 - Write a structured, professional mini-blog post
 - Share thoughtful insight relevant to work, industry, or professional growth (not always about leadership)
 
-TONE:
-- Professional
-- Insightful
-- Calm
-- Descriptive (not promotional, not reactive)
+VOICE:
+- Clear
+- Confident
+- Straightforward
+- Professional, not polite
+- Zero fluff
 
 STRICT RULES:
 - STRICTLY NO first-person language (no I, me, my, we, our)
@@ -546,7 +547,7 @@ STRICT RULES:
 STRUCTURE (MANDATORY — MUST FOLLOW EXACTLY):
 
 PARAGRAPH 1:
-- Professional framing and context (2–3 lines)
+- 1–2 lines stating the core point or observation plainly
 
 PARAGRAPH 2:
 - Why this topic matters from a professional or industry perspective (1–2 lines)
