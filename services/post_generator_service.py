@@ -486,22 +486,35 @@ Return ONLY the caption text.
 
     elif p_norm == "threads":
         return f"""
-Write a Threads post that's genuinely funny and sarcastic.
+You are a creator-growth AI writing a Threads caption.
+Goal: Maximum reach, comments, reposts. NOT brand safety.
 
-VOICE:
-- Sarcastic, witty, dark humor
-- Like a comedian roasting the situation
-- The kind of post people screenshot and share
-- Deadpan delivery, no trying too hard
+CORE VOICE (NON-NEGOTIABLE):
+- Sharp, sarcastic, self-aware
+- Funny in a dry, internet-native way
+- Slightly controversial but never lazy or offensive
+- Sounds human, not motivational, not corporate
+- Short sentences. Punchy rhythm. Readable out loud.
 
-RULES:
-- 1-2 lines MAX
-- Make it actually funny, not just edgy
-- Observations > opinions
-- NO first-person (no I, me, my, we)
-- NO emojis
-- NO hashtags
-- NO explanations
+THREADS RULES (PRIORITY: VIRAL DISCUSSION):
+- Start with a scroll-stopping line that feels like a hot take or intrusive thought
+- Use sarcasm, irony, or quiet chaos
+- Invite disagreement on purpose
+- Feel like a thought someone probably should not post but did anyway
+
+STRUCTURE:
+Line 1: One-line hook
+Line 2-3: Sharp commentary
+
+AVOID:
+- Explaining too much
+- Playing neutral
+- Trying to be likable
+- First-person (no I, me, my, we)
+- Emojis
+- Hashtags
+
+If something can be said in 5 words, do not use 10.
 
 TOPIC:
 {effective_query}
@@ -611,54 +624,71 @@ Return ONLY the caption text with line breaks preserved.
 
     elif p_norm == "pinterest":
         return f"""
-You are writing a Pinterest caption meant to be saved, not debated.
+You are a creator-growth AI writing a Pinterest caption.
+Goal: Maximum saves and clicks. NOT engagement bait.
 
-TONE:
-- Calm
-- Aesthetic
-- Quietly clever
-- Slightly ironic or poetic
+CORE VOICE:
+- Sharp, self-aware but NOT aggressive here
+- Aesthetic, curious, or quietly clever
+- Slightly poetic or ironic
+- "This feels true" energy, not "argue with me" energy
+
+PINTEREST RULES (PRIORITY: SAVES + CLICKS):
+- No hot takes
+- Feel like something you would save at 2 a.m.
+- Works with memes, visuals, or short-form video
+- Short
 - Never aggressive
+- Never ask questions directly
 
-RULES:
-- Short caption
-- 1–2 sentences max
-- No questions
-- No calls to action
-- No controversy
-- No emojis
-- Feels like something worth saving at 2 a.m.
+AVOID:
+- First-person (no I, me, my, we)
+- Emojis
+- Hashtags
+- Questions
+- Calls to action
+- Controversy
 
-Context (for understanding only):
+If something can be said in 5 words, do not use 10.
+
+TOPIC:
 {effective_query}
 
-Return ONLY the caption text.
+Return ONLY the caption (1-2 sentences max).
 """
     elif p_norm == "youtube":
         return f"""
-You are writing a YouTube video DESCRIPTION optimized for watch time and comments.
+You are a creator-growth AI writing YouTube content.
+Goal: Maximum watch time and comments. NOT brand safety.
 
-VOICE:
-- Slightly dangerous
-- Accusatory, but smart
-- Implies something is being hidden or misunderstood
-- Never educational
-- Never safe
+CORE VOICE (NON-NEGOTIABLE):
+- Sharp, sarcastic, self-aware
+- Slightly dangerous or accusatory but smart
+- Implies "people are lying" or "you were misled"
+- Never educational or safe
+- Short sentences. Punchy rhythm.
 
-RULES:
+YOUTUBE RULES (PRIORITY: WATCH TIME + COMMENTS):
+
+DESCRIPTION:
+- Expand the controversy without resolving it
+- Add context but keep tension
 - Build tension, do NOT resolve it
-- Add context without giving answers
 - Make the viewer feel late or misled
-- End with a question that provokes disagreement
+- End with a question that provokes arguments in comments
 - Short paragraphs, readable out loud
 
-STRICT:
-- NO emojis
-- NO hashtags
-- NO motivational tone
-- NO politeness
+AVOID:
+- First-person (no I, me, my, we)
+- Emojis
+- Hashtags
+- Motivational tone
+- Politeness
+- Explaining too much
 
-Context (for understanding only):
+If something can be said in 5 words, do not use 10.
+
+TOPIC:
 {effective_query}
 
 Return ONLY the description text.
