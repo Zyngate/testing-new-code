@@ -13,6 +13,18 @@ from services.ai_service import (
 
 MODEL = "llama-3.3-70b-versatile"
 
+HASHTAG_LIMITS = {
+    "instagram": 10,
+    "linkedin": 10,
+    "facebook": 10,
+    "pinterest": 10,
+    "tiktok": 10,
+    "youtube": 10,
+    "threads": 10,
+    "twitter": 10,
+    "reddit": 10,
+}
+
 async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
     for attempt in range(retries):
         try:
@@ -84,60 +96,61 @@ BANNED_WORDS = [
     "delulu"
 ]
 
+# High-reach discovery tags for algorithm boost
 INSTAGRAM_DISCOVERY_CORE = [
-    "#fyp", "#explore", "#viral", "#foryou"
+    "#fyp", "#explore", "#reels", "#foryou", "#explorepage", "#trending"
 ]
 
 
+# Algorithm-optimized hashtag pools for maximum reach
 TRENDING_POOLS = {
 
     "instagram": [
-        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
-        "#reels", "#instareels", "#reelsinstagram", "#reelsoftheday",
-        "#explore", "#explorepage", "#viral", "#trending",
-        "#instadaily", "#instagood", "#creatorlife",
-        "#reelsdaily", "#viralreels", "#discover",
-        "#watchthis", "#shortformvideo", "#digitalcreator",
-        "#reeltrend", "#socialreels"
+        "#fyp", "#foryou", "#foryoupage", "#reels",
+        "#instareels", "#explorepage", "#explore",
+        "#trending", "#reelsoftheday", "#instagood",
+        "#reelsviral", "#trendingreels", "#instadaily",
+        "#reelstrending", "#instaviral", "#reelsofinstagram",
+        "#discoverypage", "#viralreels", "#instagramreels",
+        "#reelitfeelit", "#reelslovers"
     ],
 
     "tiktok": [
-        "#fyp", "#foryou", "#foryoupage", "#fypvideo",
-        "#viralvideo", "#tiktoktrend", "#trending",
-        "#watchthis", "#discover", "#trendingsound",
-        "#creatorcontent", "#videocreator",
-        "#dailyvideo", "#shortvideo",
-        "#tiktokcommunity", "#fypviral"
+        "#fyp", "#foryou", "#foryoupage", "#xyzbca",
+        "#viral", "#tiktokviral", "#trending",
+        "#tiktoktrending", "#fypシ", "#fypviral",
+        "#trendingsound", "#viralvideo", "#tiktokcommunity",
+        "#tiktokfamous", "#duet", "#stitch",
+        "#parati", "#xuhuong"
     ],
 
     "youtube": [
-        "#shorts", "#youtubeshorts", "#viralshorts",
-        "#watchnow", "#mustwatch", "#trendingnow",
-        "#contentcreator", "#videocontent",
-        "#discover", "#recommended",
-        "#subscribe", "#newvideo"
+        "#shorts", "#youtubeshorts", "#shortsvideo",
+        "#shortsyoutube", "#shortsfeed", "#trending",
+        "#viralshorts", "#shortsviral", "#ytshorts",
+        "#subscribe", "#youtube", "#shortsforyou",
+        "#shortsclip", "#shortsdaily"
     ],
 
     "threads": [
-        "#threadsapp", "#threadscommunity",
-        "#trendingnow", "#dailythoughts",
-        "#conversationstarter", "#creatorvoices",
-        "#digitalculture", "#modernlife",
-        "#discoverthreads", "#threadtalk"
+        "#threads", "#threadsapp", "#threadscommunity",
+        "#trending", "#threadsviral", "#threadspost",
+        "#meta", "#threadsdaily", "#threadstalk",
+        "#threadsupdate"
     ],
 
     "pinterest": [
-        "#pinterestinspo", "#pinterestideas",
-        "#aestheticinspo", "#creativeideas",
-        "#moodboard", "#visualinspo",
-        "#designinspiration", "#discoverideas"
+        "#pinterest", "#pinterestinspired", "#pinterestideas",
+        "#aesthetic", "#inspo", "#moodboard",
+        "#pinterestfinds", "#pinterestworthy",
+        "#aestheticpinterest", "#pinit"
     ],
 
     "facebook": [
-        "#watchthis", "#mustsee", "#viralcontent",
-        "#socialmedia", "#onlinecontent",
-        "#communitypost", "#shareworthy",
-        "#discovercontent", "#videooftheday"
+        "#facebookreels", "#fbreels", "#reels",
+        "#facebookviral", "#facebookwatch", "#fbvideo",
+        "#facebookvideo", "#trending", "#viral",
+        "#facebookcommunity"
     ],
 
     "linkedin": [
@@ -311,17 +324,64 @@ Context:
         final_tags.append(broad_tag)
 
     # --------------------------------------------------
-    # 🔒 FINAL SAFETY NET (platform pool, no fake tags)
+    # 4️⃣ BUILD 4 : 3 : 3 HASHTAG BUCKETS
     # --------------------------------------------------
-    if len(final_tags) < 3:
-        fallback_pool = TRENDING_POOLS.get(platform, [])
-        random.shuffle(fallback_pool)
-        for tag in fallback_pool:
-            if len(final_tags) < 3 and tag not in final_tags:
+
+    trending_tags = []
+    relevant_tags = []
+    broad_tags = []
+
+    # ---- 4 Trending ----
+    if platform == "instagram":
+        core_pool = INSTAGRAM_DISCOVERY_CORE[:]
+        random.shuffle(core_pool)
+        for tag in core_pool:
+            if len(trending_tags) >= 2:
+                break
+            if tag not in trending_tags:
+                trending_tags.append(tag)
+
+    # 2 from Instagram TRENDING_POOLS
+        insta_pool = TRENDING_POOLS.get("instagram", [])[:]
+        random.shuffle(insta_pool)
+        for tag in insta_pool:
+            if len(trending_tags) >= 4:
+                break
+            if tag not in trending_tags:
+                trending_tags.append(tag)
+
+    else:
+        pool = TRENDING_POOLS.get(platform, [])[:]
+        random.shuffle(pool)
+        for tag in pool:
+            if len(trending_tags) >= 4:
+                break
+            if tag not in trending_tags:
+                trending_tags.append(tag)
+
+    # ---- 3 Relevant ----
+    for kw in seed_keywords:
+        tag = f"#{kw.replace(' ', '')}"
+        if tag not in relevant_tags:
+            relevant_tags.append(tag)
+        if len(relevant_tags) >= 3:
+            break
+
+    # ---- 3 Broad ----
+    while len(broad_tags) < 3:
+        broad_tags.append("#content")
+
+    # ---- MERGE + DEDUPE (Order: relevant → broad → trending for 10M+ reach) ----
+    final_tags = []
+    for group in (relevant_tags, broad_tags, trending_tags):
+        for tag in group:
+            if tag not in final_tags:
                 final_tags.append(tag)
 
-    # Hard guarantee: exactly 3 hashtags
-    return final_tags[:3]
+    # ---- PLATFORM LIMIT ----
+    limit = HASHTAG_LIMITS.get(platform, 10)
+    return final_tags[:limit]
+
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
     Enforces:
@@ -426,26 +486,33 @@ Return ONLY the caption text.
 
     elif p_norm == "threads":
         return f"""
-Write a Threads caption that is inspirational, professional, and scroll-stopping for marketing, business, or automation topics. For other topics, use humor and sarcasm that fits the actual subject (e.g., nature, art, food, etc.).
+You are writing a Threads caption designed for growth, not politeness.
+
+VOICE (NON-NEGOTIABLE):
+- Sharp
+- Sarcastic
+- Self-aware
+- Dry, internet-native humor
+- Slightly controversial, never lazy or offensive
+- Sounds like a real thought someone debated posting
 
 RULES:
-- STRICTLY NO first-person language (no "I", "we", "my", "our")
-- Do NOT describe the video or image generically
-- Do NOT summarize what happened
-- For business/marketing/automation, use an inspirational and professional tone be little sarcastic
-- For non-business topics, use humor and sarcasm that fits the subject
-- No hashtags, no emojis
-- The caption must be a maximum of 1–2 lines (short, punchy)
+- Start with a scroll-stopping hot take or intrusive thought
+- Invite disagreement on purpose
+- Do NOT explain yourself
+- Do NOT play neutral
+- Do NOT try to be likable
+- Short sentences only
 
-EXAMPLES:
-- For a business post: "Empower your brand to grow with precision. Automation is the new edge."
-- For a nature post: "This beach is so calm, even my notifications took a nap."
-- For a food post: "Calories don’t count if you eat it on vacation, right?"
+STRUCTURE (MANDATORY):
+Line 1: One-line hook
+Line 2: Sharp commentary
+Line 3: Sharp commentary
 
 Context (for understanding only):
 {effective_query}
 
-Return ONLY the caption text (max 2 lines).
+Return ONLY the caption text.
 """
 
     elif p_norm == "linkedin":
@@ -549,57 +616,55 @@ Return ONLY the caption text with line breaks preserved.
 """
 
     elif p_norm == "pinterest":
-        is_campaign = is_marketing_campaign(effective_query)
         return f"""
-Write a Pinterest pin description designed for discovery and inspiration.
+You are writing a Pinterest caption meant to be saved, not debated.
 
-STYLE:
-- Aesthetic and inspiring
-- Clear, specific, and visual
-- Feels like an idea worth saving
-
-STRUCTURE:
-- 2–3 short sentences
-- Sentence 1: visual or emotional hook
-- Sentence 2–3: what this idea offers or why it matters
+TONE:
+- Calm
+- Aesthetic
+- Quietly clever
+- Slightly ironic or poetic
+- Never aggressive
 
 RULES:
-- STRICTLY NO first-person language (no I, me, my, we, our)
-- Do NOT sound like a quote
-- Do NOT be vague or generic
-- No hashtags in text
+- Short caption
+- 1–2 sentences max
+- No questions
+- No calls to action
+- No controversy
 - No emojis
-- Avoid poetic filler without meaning
+- Feels like something worth saving at 2 a.m.
 
-LENGTH:
-- 100–180 characters (ideal for Pinterest)
-
-CONTEXT:
+Context (for understanding only):
 {effective_query}
 
 Return ONLY the caption text.
 """
     elif p_norm == "youtube":
         return f"""
-Write a LONG-FORM YouTube description (800–1000 characters).
+You are writing a YouTube video DESCRIPTION optimized for watch time and comments.
 
-STRUCTURE:
-- Hook that builds curiosity
-- Explain why this video matters
-- Invite engagement (like, comment, reflect)
+VOICE:
+- Slightly dangerous
+- Accusatory, but smart
+- Implies something is being hidden or misunderstood
+- Never educational
+- Never safe
 
 RULES:
-- STRICTLY NO first-person language (no I, me, my, we, our)
-- Do NOT list scenes
-- Human, engaging tone
-- CTA is mandatory
+- Build tension, do NOT resolve it
+- Add context without giving answers
+- Make the viewer feel late or misled
+- End with a question that provokes disagreement
+- Short paragraphs, readable out loud
 
-If this is a marketing campaign:
-- Explain the problem BEFORE the product
-- Make the viewer feel late if they ignore this
-- Frame the tool as the natural solution
+STRICT:
+- NO emojis
+- NO hashtags
+- NO motivational tone
+- NO politeness
 
-CONTEXT:
+Context (for understanding only):
 {effective_query}
 
 Return ONLY the description text.

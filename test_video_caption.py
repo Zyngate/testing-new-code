@@ -2,7 +2,7 @@ import asyncio
 from services.video_caption_service import caption_from_video_file
 
 async def run_test():
-    video_path = r"C:\Users\DELL\Downloads\manage social media.mp4"
+    video_path = r"C:\Users\DELL\Downloads\WhatsApp Video 2026-02-01 at 2.27.19 PM.mp4"
 
     platforms = ["instagram", "linkedin", "youtube","Tiktok","Threads"]
 

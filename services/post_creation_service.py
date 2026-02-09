@@ -149,6 +149,17 @@ async def create_post_from_uploaded_media(
                 title = ai_result.get("titles", {}).get(p, "")
                 board = ai_result.get("boards", {}).get(p, "")
 
+                # Select only 3 hashtags in order: relevant → broad → trending
+                # Structure from generator: [0-2] relevant, [3-5] broad, [6-9] trending
+                selected_hashtags = []
+                if len(hashtags) > 0:
+                    selected_hashtags.append(hashtags[0])  # Most relevant
+                if len(hashtags) > 3:
+                    selected_hashtags.append(hashtags[3])  # Broad
+                if len(hashtags) > 6:
+                    selected_hashtags.append(hashtags[6])  # Most trending (viral)
+                hashtags = selected_hashtags
+
                 # Handle rate limit failures gracefully
                 if not caption:
                     logger.warning(f"⚠️ No caption generated for {p}, using fallback")
