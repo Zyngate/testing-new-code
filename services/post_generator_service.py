@@ -524,61 +524,53 @@ Return ONLY the caption.
 
     elif p_norm == "linkedin":
         return f"""
-Write a direct, no-nonsense LinkedIn post.
+Write a direct, blunt LinkedIn post.
 
-GOAL:
-- Write a structured, professional mini-blog post
-- Share thoughtful insight relevant to work, industry, or professional growth (not always about leadership)
+This is NOT an article.
+This is NOT educational.
+This is NOT motivational.
 
 VOICE:
 - Clear
-- Confident
-- Straightforward
-- Professional, not polite
+- Assertive
+- Matter-of-fact
+- Professional, but blunt
 - Zero fluff
 
-STRICT RULES:
-- STRICTLY NO first-person language (no I, me, my, we, our)
-- Do NOT sound like TikTok, Instagram, or Threads
-- Do NOT use emojis or hashtags
-- Do NOT write marketing copy or slogans
-- Do NOT describe the video or visuals
+HARD RULES (NON-NEGOTIABLE):
+- NO definitions (e.g. “X is important because…”)
+- NO generic statements (“Effective communication is key…”)
+- NO motivational language
+- NO reflective summaries
+- NO hashtags
+- NO emojis
+- NO first-person language (no I, we, my, our)
+- NO questions
 
-STRUCTURE (MANDATORY — MUST FOLLOW EXACTLY):
+STRUCTURE (MUST FOLLOW EXACTLY):
 
-PARAGRAPH 1:
-- 1–2 lines stating the core point or observation plainly
+OPENING:
+- 1–2 short lines stating a concrete, opinionated claim
+- It must sound like a conclusion, not an introduction
 
-PARAGRAPH 2:
-- Why this topic matters from a professional or industry perspective (1–2 lines)
+BULLETS:
+- 4–6 bullets
+- Each bullet must state a specific consequence, pattern, or mistake
+- Each bullet must be actionable or observable
+- No repeating ideas
+- No filler language
+- Each bullet starts with "• " on its own line
 
-BULLET SECTION (MANDATORY):
-- Write 4–6 bullet points
-- EACH bullet MUST be on its OWN LINE
-- EACH bullet MUST start with "• " at the beginning of the line
-- AFTER EVERY bullet, insert a newline
-- NEVER place multiple bullets on the same line
-- NEVER write bullets inline with text
-- ONE idea per bullet only
+CLOSING:
+- ONE short line stating a professional implication
+- No reflection, no inspiration, no CTA
 
-CLOSING PARAGRAPH:
-- A reflective conclusion connecting the topic to professional growth, industry trends, or practical takeaways (not always leadership)
+SELF-CHECK BEFORE FINAL ANSWER:
+- If the opening could appear in a textbook → rewrite
+- If any line sounds motivational → rewrite
+- If it feels safe → rewrite
 
-FORMAT RULES (CRITICAL):
-- Use blank lines between paragraphs
-- Bullets must appear as a vertical list
-- If bullets appear on the same line, rewrite internally until they are vertical
-
-If this is a marketing campaign:
-- Frame this as an industry shift, not a product
-- Emphasize outcomes, efficiency, and decision-making
-- Avoid hype; sound credible and strategic
-
-LENGTH:
-- 500–1,000 characters
-- Multi-paragraph output required
-
-Context (for understanding only):
+Context:
 {effective_query}
 
 Return ONLY the caption text.
