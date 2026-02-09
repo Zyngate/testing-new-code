@@ -98,7 +98,7 @@ BANNED_WORDS = [
 
 # High-reach discovery tags for algorithm boost
 INSTAGRAM_DISCOVERY_CORE = [
-    "#fyp", "#explore", "#reels", "#foryou", "#explorepage", "#trending"
+    "#fyp", "#explore", "#reels", "#foryou", "#explorepage"
 ]
 
 

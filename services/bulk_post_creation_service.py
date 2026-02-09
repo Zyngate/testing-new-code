@@ -10,6 +10,7 @@ Intelligent bulk posting with:
 
 import tempfile
 import os
+import random
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
@@ -23,6 +24,7 @@ from config import logger, GROQ_API_KEY_CAPTION
 from services.post_creation_service import detect_media_type
 from services.video_caption_service import caption_from_video_file
 from services.image_caption_service import caption_from_image_file
+from services.post_generator_service import INSTAGRAM_DISCOVERY_CORE
 from services.time_slot_service import (
     get_bulk_optimal_times_for_platform,
     get_bulk_optimal_times_multi_platform,
@@ -319,6 +321,21 @@ async def process_bulk_media_urls(
                 fallback_caption = captions_dict.get("pinterest") or captions_dict.get("youtube") or "Check out this content!"
                 caption = fallback_caption
             hashtags = hashtags_dict.get(platform, [])
+            
+            # Select only 3 hashtags in order: relevant → broad → trending
+            # Structure from generator: [0-2] relevant, [3-5] broad, [6-9] trending
+            selected_hashtags = []
+            if len(hashtags) > 0:
+                selected_hashtags.append(hashtags[0])  # Most relevant
+            if len(hashtags) > 3:
+                selected_hashtags.append(hashtags[3])  # Broad
+            # For Instagram: use INSTAGRAM_DISCOVERY_CORE for trending
+            if platform == "instagram":
+                selected_hashtags.append(random.choice(INSTAGRAM_DISCOVERY_CORE))
+            elif len(hashtags) > 6:
+                selected_hashtags.append(hashtags[6])  # Most trending (viral)
+            hashtags = selected_hashtags
+            
             final_caption = caption
             if hashtags:
                 final_caption += "\n\n" + " ".join(hashtags)
