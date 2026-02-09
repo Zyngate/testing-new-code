@@ -486,33 +486,27 @@ Return ONLY the caption text.
 
     elif p_norm == "threads":
         return f"""
-You are writing a Threads caption designed for growth, not politeness.
+Write a Threads post that's genuinely funny and sarcastic.
 
-VOICE (NON-NEGOTIABLE):
-- Sharp
-- Sarcastic
-- Self-aware
-- Dry, internet-native humor
-- Slightly controversial, never lazy or offensive
-- Sounds like a real thought someone debated posting
+VOICE:
+- Sarcastic, witty, dark humor
+- Like a comedian roasting the situation
+- The kind of post people screenshot and share
+- Deadpan delivery, no trying too hard
 
 RULES:
-- Start with a scroll-stopping hot take or intrusive thought
-- Invite disagreement on purpose
-- Do NOT explain yourself
-- Do NOT play neutral
-- Do NOT try to be likable
-- Short sentences only
+- 1-2 lines MAX
+- Make it actually funny, not just edgy
+- Observations > opinions
+- NO first-person (no I, me, my, we)
+- NO emojis
+- NO hashtags
+- NO explanations
 
-STRUCTURE (MANDATORY):
-Line 1: One-line hook
-Line 2: Sharp commentary
-Line 3: Sharp commentary
-
-Context (for understanding only):
+TOPIC:
 {effective_query}
 
-Return ONLY the caption text.
+Return ONLY the caption.
 """
 
     elif p_norm == "linkedin":
