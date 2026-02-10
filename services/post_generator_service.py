@@ -324,63 +324,36 @@ Context:
         final_tags.append(broad_tag)
 
     # --------------------------------------------------
-    # 4️⃣ BUILD 4 : 3 : 3 HASHTAG BUCKETS
+    # 4️⃣ FINAL: Return exactly 3 hashtags
+    #    Order: relevant → broad → trending
     # --------------------------------------------------
-
-    trending_tags = []
-    relevant_tags = []
-    broad_tags = []
-
-    # ---- 4 Trending ----
-    if platform == "instagram":
-        core_pool = INSTAGRAM_DISCOVERY_CORE[:]
-        random.shuffle(core_pool)
-        for tag in core_pool:
-            if len(trending_tags) >= 2:
+    ordered_tags = []
+    
+    # 1. Relevant first
+    if relevant_tag:
+        ordered_tags.append(relevant_tag)
+    
+    # 2. Broad second
+    if broad_tag and broad_tag not in ordered_tags:
+        ordered_tags.append(broad_tag)
+    
+    # 3. Trending third (Instagram uses DISCOVERY_CORE, others use pool)
+    if trending_tag and trending_tag not in ordered_tags:
+        ordered_tags.append(trending_tag)
+    
+    # Fallback if any slot is empty
+    while len(ordered_tags) < 3:
+        pool = TRENDING_POOLS.get(platform, [])
+        if pool:
+            fallback = random.choice(pool)
+            if fallback not in ordered_tags:
+                ordered_tags.append(fallback)
+            else:
                 break
-            if tag not in trending_tags:
-                trending_tags.append(tag)
-
-    # 2 from Instagram TRENDING_POOLS
-        insta_pool = TRENDING_POOLS.get("instagram", [])[:]
-        random.shuffle(insta_pool)
-        for tag in insta_pool:
-            if len(trending_tags) >= 4:
-                break
-            if tag not in trending_tags:
-                trending_tags.append(tag)
-
-    else:
-        pool = TRENDING_POOLS.get(platform, [])[:]
-        random.shuffle(pool)
-        for tag in pool:
-            if len(trending_tags) >= 4:
-                break
-            if tag not in trending_tags:
-                trending_tags.append(tag)
-
-    # ---- 3 Relevant ----
-    for kw in seed_keywords:
-        tag = f"#{kw.replace(' ', '')}"
-        if tag not in relevant_tags:
-            relevant_tags.append(tag)
-        if len(relevant_tags) >= 3:
+        else:
             break
-
-    # ---- 3 Broad ----
-    while len(broad_tags) < 3:
-        broad_tags.append("#content")
-
-    # ---- MERGE + DEDUPE (Order: relevant → broad → trending for 10M+ reach) ----
-    final_tags = []
-    for group in (relevant_tags, broad_tags, trending_tags):
-        for tag in group:
-            if tag not in final_tags:
-                final_tags.append(tag)
-
-    # ---- PLATFORM LIMIT ----
-    limit = HASHTAG_LIMITS.get(platform, 10)
-    return final_tags[:limit]
+    
+    return ordered_tags[:3]
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
