@@ -226,11 +226,13 @@ TRENDING_GENERATORS = {
     for platform, tags in TRENDING_POOLS.items()
 }
 
+
 async def fetch_platform_hashtags(
     client: AsyncGroq,
     seed_keywords: List[str],
     platform: str,
-    effective_query: str
+    effective_query: str,
+    autoposting: bool = False
 ) -> List[str]:
 
     platform = platform.lower()
@@ -324,36 +326,47 @@ Context:
         final_tags.append(broad_tag)
 
     # --------------------------------------------------
-    # 4️⃣ FINAL: Return exactly 3 hashtags
-    #    Order: relevant → broad → trending
-    # --------------------------------------------------
+    # 4️⃣ FINAL: Return hashtags
+    #    autoposting=True: exactly 3 (relevant, broad, trending)
+    #    autoposting=False: up to 10 (relevant, broad, trending, plus more if available)
     ordered_tags = []
-    
     # 1. Relevant first
     if relevant_tag:
         ordered_tags.append(relevant_tag)
-    
     # 2. Broad second
     if broad_tag and broad_tag not in ordered_tags:
         ordered_tags.append(broad_tag)
-    
     # 3. Trending third (Instagram uses DISCOVERY_CORE, others use pool)
     if trending_tag and trending_tag not in ordered_tags:
         ordered_tags.append(trending_tag)
-    
-    # Fallback if any slot is empty
-    while len(ordered_tags) < 3:
-        pool = TRENDING_POOLS.get(platform, [])
-        if pool:
-            fallback = random.choice(pool)
-            if fallback not in ordered_tags:
-                ordered_tags.append(fallback)
+    # Fallbacks for autoposting (3 only)
+    if autoposting:
+        while len(ordered_tags) < 3:
+            pool = TRENDING_POOLS.get(platform, [])
+            if pool:
+                fallback = random.choice(pool)
+                if fallback not in ordered_tags:
+                    ordered_tags.append(fallback)
+                else:
+                    break
             else:
                 break
+        return ordered_tags[:3]
+    # For non-autoposting, add more hashtags (up to 10, unique)
+    extra_tags = set(final_tags) - set(ordered_tags)
+    for tag in extra_tags:
+        if len(ordered_tags) >= 10:
+            break
+        ordered_tags.append(tag)
+    # If still less than 10, fill from pool
+    pool = TRENDING_POOLS.get(platform, [])
+    while len(ordered_tags) < 10 and pool:
+        fallback = random.choice(pool)
+        if fallback not in ordered_tags:
+            ordered_tags.append(fallback)
         else:
             break
-    
-    return ordered_tags[:3]
+    return ordered_tags[:10]
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """

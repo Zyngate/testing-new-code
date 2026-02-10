@@ -160,21 +160,8 @@ async def create_post_from_uploaded_media(
                     logger.warning(f"⚠️ No caption generated for {p}, using fallback")
                     caption = "Check out this content!"
                 
-                # Select only 3 hashtags: relevant → broad → trending
-                # Structure from AI: [0-2] relevant, [3-5] broad, [6-9] trending
-                selected_hashtags = []
-                if len(hashtags) > 0:
-                    selected_hashtags.append(hashtags[0])  # Most relevant
-                if len(hashtags) > 3:
-                    selected_hashtags.append(hashtags[3])  # Broad
-                
-                # For Instagram: use INSTAGRAM_DISCOVERY_CORE for trending, other platforms use AI-generated
-                if p == "instagram":
-                    selected_hashtags.append(random.choice(INSTAGRAM_DISCOVERY_CORE))  # Instagram trending
-                elif len(hashtags) > 6:
-                    selected_hashtags.append(hashtags[6])  # Most trending for other platforms
-                
-                hashtags = selected_hashtags
+                # For autoposting, always use only 3 hashtags (already handled by fetch_platform_hashtags with autoposting=True)
+                # No further filtering needed
                 
                 final_caption = caption
                 if hashtags:

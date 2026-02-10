@@ -291,6 +291,7 @@ async def process_bulk_media_urls(
                         result = await caption_from_video_file(
                             video_filepath=local_path,
                             platforms=platforms_lower,
+                            autoposting=True
                         )
                     else:
                         client = Groq(api_key=GROQ_API_KEY_CAPTION)
@@ -298,6 +299,7 @@ async def process_bulk_media_urls(
                             image_filepath=local_path,
                             platforms=platforms_lower,
                             client=client,
+                            autoposting=True
                         )
                     return result
                 finally:

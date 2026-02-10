@@ -127,7 +127,7 @@ async def websocket_generate_post(websocket: WebSocket):
         platform_hashtags = {}
         for p in platforms:
             try:
-                platform_hashtags[p] = await fetch_platform_hashtags(None, keywords, p, query)
+                platform_hashtags[p] = await fetch_platform_hashtags(None, keywords, p, query, autoposting=False)
             except Exception as inner_e:
                 logger.error(f"Hashtag error for {p}: {inner_e}")
                 platform_hashtags[p] = []

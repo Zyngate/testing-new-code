@@ -64,7 +64,7 @@ async def analyze_image_with_groq(image_path: str) -> Dict[str, Any]:
         "scene": parsed.get("scene", "")
     }
 
-async def caption_from_image_file(image_filepath: str, platforms: List[str], client: Optional[Groq]):
+async def caption_from_image_file(image_filepath: str, platforms: List[str], client: Optional[Groq], autoposting: bool = False):
     # 1. Visual analysis
     visual = await analyze_image_with_groq(image_filepath)
 
@@ -87,7 +87,7 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
     # 3. Platform hashtags + 4. Captions (PARALLEL)
     async def get_hashtags_for_platform(p):
         try:
-            tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
+            tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt, autoposting=autoposting)
         except:
             tags = []
         return (p, tags)

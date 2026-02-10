@@ -448,7 +448,7 @@ def clean_transcript_for_caption(transcript: str) -> str:
 # -----------------------------------------------------
 # 5. MAIN PIPELINE (Groq STT + Vision) - OPTIMIZED FOR SPEED
 # -----------------------------------------------------
-async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None) -> Dict[str, Any]:
+async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None, autoposting: bool = False) -> Dict[str, Any]:
     # 🔒 Defensive fix: flatten platforms if nested
     if platforms and isinstance(platforms[0], list):
         platforms = platforms[0]
@@ -660,9 +660,9 @@ RULES:
     async def get_hashtags_for_platform(p):
         try:
             try:
-                tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt)
+                tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt, autoposting=autoposting)
             except TypeError:
-                tags = await fetch_platform_hashtags(client, keywords, p)
+                tags = await fetch_platform_hashtags(client, keywords, p, autoposting=autoposting)
             return (p, tags or [])
         except Exception as e:
             logger.warning(f"fetch_platform_hashtags failed for {p}: {e}")
