@@ -2,6 +2,7 @@ import tempfile
 import os
 import requests
 import asyncio
+import random
 from datetime import datetime, timedelta, timezone
 
 from groq import Groq
@@ -10,6 +11,7 @@ from database import db
 from config import logger, GROQ_API_KEY_CAPTION
 from services.image_caption_service import caption_from_image_file
 from services.video_caption_service import caption_from_video_file
+from services.post_generator_service import INSTAGRAM_DISCOVERY_CORE
 from services.time_slot_service import (
     get_optimal_times_for_platforms,
     auto_refresh_analytics_for_user,
@@ -157,6 +159,22 @@ async def create_post_from_uploaded_media(
                 if not caption:
                     logger.warning(f"⚠️ No caption generated for {p}, using fallback")
                     caption = "Check out this content!"
+                
+                # Select only 3 hashtags: relevant → broad → trending
+                # Structure from AI: [0-2] relevant, [3-5] broad, [6-9] trending
+                selected_hashtags = []
+                if len(hashtags) > 0:
+                    selected_hashtags.append(hashtags[0])  # Most relevant
+                if len(hashtags) > 3:
+                    selected_hashtags.append(hashtags[3])  # Broad
+                
+                # For Instagram: use INSTAGRAM_DISCOVERY_CORE for trending, other platforms use AI-generated
+                if p == "instagram":
+                    selected_hashtags.append(random.choice(INSTAGRAM_DISCOVERY_CORE))  # Instagram trending
+                elif len(hashtags) > 6:
+                    selected_hashtags.append(hashtags[6])  # Most trending for other platforms
+                
+                hashtags = selected_hashtags
                 
                 final_caption = caption
                 if hashtags:
