@@ -381,23 +381,26 @@ async def process_bulk_media_urls(
                 "updatedAt": now.isoformat(),
                 "postIndex": 0,
                 "totalPosts": num_posts,
+                "mediaIndex": media_idx,
             }
             # Only add title for Pinterest and YouTube
             if platform in ("youtube", "pinterest"):
                 post_obj["title"] = titles_dict.get(platform, "")
             all_posts.append(post_obj)
-    # Sort all posts by scheduled time
-    all_posts.sort(key=lambda p: p['scheduledAtObj'])
+    # Sort by media (video) index first to keep all platforms for the same video grouped together,
+    # then by platform within each group
+    all_posts.sort(key=lambda p: (p['mediaIndex'], p['platform']))
     
-    # Reassign postIndex based on chronological order per platform
+    # Reassign postIndex based on media (video) group order
     platform_counters = {p: 0 for p in platforms_lower}
     for post in all_posts:
         platform_key = post['platform'].lower()
         platform_counters[platform_key] += 1
         post['postIndex'] = platform_counters[platform_key]
         
-        # Remove the datetime object from response (no longer needed)
+        # Remove internal fields from response (no longer needed)
         scheduled_time_obj = post.pop('scheduledAtObj')
+        post.pop('mediaIndex', None)
         
         # NOW build and insert database document with correct index
         if not preview_only:
