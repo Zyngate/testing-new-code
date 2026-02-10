@@ -28,7 +28,7 @@ HASHTAG_LIMITS = {
 async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
     for attempt in range(retries):
         try:
-            text = await groq_generate_text(MODEL, prompt)
+            text = await groq_generate_text(MODEL, prompt, max_completion_tokens=800)
             if text and text.strip():
                 return text.strip()
         except Exception as e:

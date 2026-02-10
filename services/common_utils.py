@@ -3,9 +3,10 @@ import re
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from config import logger
+from database import db
 
 def get_current_datetime() -> str:
     """Returns the current formatted datetime string."""
@@ -68,3 +69,30 @@ def convert_object_ids(document: Dict[str, Any]) -> Dict[str, Any]:
 # Temporary storage for WebSocket research IDs (not persistent)
 websocket_queries: Dict[str, str] = {}
 deepsearch_queries: Dict[str, Dict[str, Any]] = {}
+
+async def get_user_timezone_from_db(user_id: str) -> Optional[str]:
+    """
+    Fetch user's timezone from the database.
+    
+    Args:
+        user_id: The user's ID
+        
+    Returns:
+        User's timezone string if found, None otherwise
+    """
+    try:
+        users_collection = db["users"]
+        user = await users_collection.find_one({"_id": user_id})
+        
+        if user and "timezone" in user:
+            return user["timezone"]
+        
+        # Fallback - check if timezone is stored in a different field
+        if user and "user_timezone" in user:
+            return user["user_timezone"]
+            
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error fetching user timezone for {user_id}: {e}")
+        return None

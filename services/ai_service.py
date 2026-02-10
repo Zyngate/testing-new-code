@@ -227,7 +227,7 @@ async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are
                     {"role": "user", "content": prompt}
                 ],
                 temperature=kwargs.get("temperature", 0.8),
-                max_completion_tokens=kwargs.get("max_completion_tokens", 300),
+                max_completion_tokens=kwargs.get("max_completion_tokens", 700),
                 top_p=kwargs.get("top_p", 0.95),
                 stream=False,
                 timeout=60.0,  # Increased timeout

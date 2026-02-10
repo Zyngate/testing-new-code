@@ -330,3 +330,46 @@ def toggle_task_state(task_id: str):
         "status": message,
         "new_state": update["status"]
     }
+
+
+@router.delete("/{task_id}")
+def delete_task(task_id: str):
+    """
+    Delete a task permanently.
+    
+    - Running tasks cannot be deleted (wait for completion or pause first)
+    - All other states (scheduled, paused, completed) can be deleted
+    """
+    tasks_col, _ = get_or_init_sync_collections()
+
+    try:
+        task_oid = ObjectId(task_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+
+    task = tasks_col.find_one({"_id": task_oid})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    current_status = task.get("status", "scheduled")
+
+    # Protect running tasks
+    if current_status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail="Task is currently running. Wait for completion or pause first."
+        )
+
+    # Delete the task
+    result = tasks_col.delete_one({"_id": task_oid})
+
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=500, detail="Failed to delete task")
+
+    logger.info(f"🗑️ Task deleted: {task_id} (was {current_status})")
+
+    return {
+        "success": True,
+        "message": "Task deleted successfully",
+        "task_id": task_id
+    }

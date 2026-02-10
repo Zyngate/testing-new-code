@@ -35,6 +35,7 @@ class SaveAnalyticsRequest(BaseModel):
 class GetOptimalTimesRequest(BaseModel):
     userId: str
     platforms: List[str]
+    timezone: Optional[str] = None  # User's timezone (e.g., 'Asia/Kolkata'); auto-fetched from DB if not provided
 
 @router.post("/analyze", response_model=dict)
 async def analyze_recommendation(request: RecommendationRequest):
@@ -73,8 +74,8 @@ async def get_optimal_times_endpoint(request: GetOptimalTimesRequest):
     Returns timezone-aware times with minute-level precision for maximum engagement.
     """
     try:
-        # Get user's timezone if available
-        user_timezone = getattr(request, 'timezone', None)
+        # Get user's timezone (from request or auto-fetched from DB)
+        user_timezone = request.timezone
         
         result = await get_optimal_times_for_platforms(
             user_id=request.userId,

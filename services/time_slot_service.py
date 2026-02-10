@@ -39,6 +39,11 @@ DATA_STALE_AFTER_HOURS = 24
 # Default timezone if user doesn't have one set
 DEFAULT_TIMEZONE = "UTC"
 
+# Minimum and maximum posting hours (in user's local timezone)
+# Prevents scheduling at times when people are sleeping (before 8 AM or after 11 PM)
+MINIMUM_POSTING_HOUR = 8   # 8:00 AM - earliest allowed posting time
+MAXIMUM_POSTING_HOUR = 23  # 11:00 PM - latest allowed posting time
+
 # Conflict window in minutes - posts scheduled within this window are considered conflicts
 CONFLICT_WINDOW_MINUTES = 45
 
@@ -87,44 +92,46 @@ PLATFORM_PEAK_HOURS = {
         'description': 'Best at 8 AM commute, 11 AM break, 6-8 PM evening scroll.'
     },
     'youtube': {
-        # YouTube: Long-form content - users watch during afternoon/evening leisure time
+        # YouTube Shorts-focused: Short-form vertical video - similar pattern to TikTok/Reels
+        # Shorts peak during commute, lunch breaks, and evening scroll sessions
+        # Different from traditional long-form YouTube which peaks afternoon/evening
         'day_wise_hours': {
-            'Monday': [12, 14, 15, 17, 18, 19],
-            'Tuesday': [12, 14, 15, 17, 18, 19],
-            'Wednesday': [12, 14, 15, 17, 18, 19, 20],
-            'Thursday': [14, 15, 16, 17, 18, 19, 20],
-            'Friday': [14, 15, 16, 17, 18, 19, 20, 21],
-            'Saturday': [10, 11, 12, 14, 15, 19, 20, 21],
-            'Sunday': [10, 11, 12, 14, 17, 18, 19, 20]
+            'Monday': [8, 9, 12, 13, 17, 18, 19, 20, 21],
+            'Tuesday': [8, 9, 12, 13, 17, 18, 19, 20, 21],
+            'Wednesday': [8, 9, 12, 13, 15, 17, 18, 19, 20, 21],
+            'Thursday': [8, 9, 12, 13, 17, 18, 19, 20, 21],
+            'Friday': [8, 9, 12, 13, 17, 18, 19, 20, 21, 22],
+            'Saturday': [9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22],
+            'Sunday': [9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21]
         },
-        'peak_hours': [12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
-        'best_hours': [14, 15, 17, 20],
-        'weekend_hours': [10, 11, 12, 14, 15, 19, 20, 21],
-        'weekday_hours': [12, 14, 15, 16, 17, 18, 19, 20],
-        'optimal_minutes': [0, 15, 30],
-        'prime_minutes': [0, 15, 45],
+        'peak_hours': [8, 9, 12, 13, 17, 18, 19, 20, 21, 22],
+        'best_hours': [9, 12, 18, 20],  # Morning commute, lunch, evening prime, night scroll
+        'weekend_hours': [9, 10, 11, 12, 14, 15, 17, 18, 19, 20, 21, 22],
+        'weekday_hours': [8, 9, 12, 13, 17, 18, 19, 20, 21],
+        'optimal_minutes': [0, 15, 30, 45],
+        'prime_minutes': [0, 15, 30, 45],
         'restrict_days': False,
         'engagement_multiplier': {
-            'Monday': 0.9, 'Tuesday': 0.95, 'Wednesday': 1.0,
-            'Thursday': 1.1, 'Friday': 1.15, 'Saturday': 1.2, 'Sunday': 1.1
+            'Monday': 0.95, 'Tuesday': 1.05, 'Wednesday': 1.1,
+            'Thursday': 1.1, 'Friday': 1.15, 'Saturday': 1.2, 'Sunday': 1.05
         },
-        'description': 'Post 2-3 PM weekdays (before evening viewers). Weekend mornings great for binge-watching.'
+        'description': 'Shorts: Morning commute (8-9 AM), lunch (12-1 PM), evening scroll (6-9 PM). Weekend mornings strong.'
     },
     'tiktok': {
         # TikTok: Short-form, addictive - users check frequently, evening/night peak
         'day_wise_hours': {
-            'Monday': [7, 8, 12, 19, 20, 21, 22],
-            'Tuesday': [6, 7, 12, 19, 20, 21, 22],
-            'Wednesday': [7, 12, 15, 19, 20, 21],
-            'Thursday': [7, 12, 15, 19, 20, 21, 22],
-            'Friday': [7, 12, 15, 19, 20, 21, 22, 23],
-            'Saturday': [9, 10, 11, 12, 15, 19, 20, 21, 22, 23],
+            'Monday': [8, 9, 12, 19, 20, 21, 22],
+            'Tuesday': [8, 9, 12, 19, 20, 21, 22],
+            'Wednesday': [8, 12, 15, 19, 20, 21],
+            'Thursday': [8, 12, 15, 19, 20, 21, 22],
+            'Friday': [8, 12, 15, 19, 20, 21, 22],
+            'Saturday': [9, 10, 11, 12, 15, 19, 20, 21, 22],
             'Sunday': [9, 10, 11, 12, 15, 19, 20, 21, 22]
         },
-        'peak_hours': [6, 7, 8, 10, 12, 15, 19, 20, 21, 22, 23],
-        'best_hours': [7, 12, 19, 21],
+        'peak_hours': [8, 9, 10, 12, 15, 19, 20, 21, 22],
+        'best_hours': [9, 12, 19, 21],
         'weekend_hours': [9, 10, 11, 12, 15, 19, 20, 21, 22, 23],
-        'weekday_hours': [6, 7, 8, 12, 15, 19, 20, 21, 22],
+        'weekday_hours': [8, 9, 12, 15, 19, 20, 21, 22],
         'optimal_minutes': [0, 17, 33, 47],
         'prime_minutes': [3, 18, 33, 48],
         'restrict_days': False,
@@ -132,7 +139,7 @@ PLATFORM_PEAK_HOURS = {
             'Monday': 0.95, 'Tuesday': 1.1, 'Wednesday': 1.0,
             'Thursday': 1.1, 'Friday': 1.15, 'Saturday': 1.1, 'Sunday': 0.95
         },
-        'description': 'Early AM (6-7), lunch break (12), prime time (7-9 PM), late night (10-11 PM).'
+        'description': 'Morning (8-9 AM), lunch break (12), prime time (7-9 PM), late evening (10 PM).'
     },
     'facebook': {
         # Facebook: Broad demographics - morning news, lunch scroll, evening family time
@@ -357,37 +364,38 @@ BULK_POSTING_CONFIG = {
         'algorithm_notes': '2-3 posts/day minimum. Reels boost visibility. Consistency is key.',
     },
     'youtube': {
-        # YouTube 2024-2025 Research:
+        # YouTube Shorts-focused 2024-2025 Research:
         # - Shorts: 1-3 per day (algorithm rewards daily shorts heavily)
+        # - Shorts behave like TikTok/Reels - high frequency = more impressions
+        # - Daily Shorts consistency is the #1 growth factor
+        # - Best to post 2-3 Shorts per day at different peak windows
         # - Long-form: 3-4 per week MAX (quality over quantity)
-        # - Best to post Shorts daily, long-form 2-3x/week
-        # User requirement: 3-4 videos per week for long-form
         'posts_per_day': {
             'min': 1,
-            'optimal': 1,    # For mixed content
-            'max': 3,        # For shorts-heavy
+            'optimal': 2,     # 2 Shorts/day is the sweet spot
+            'max': 3,         # 3 Shorts/day for aggressive growth
             'aggressive_growth': 4,
         },
         'posts_per_week': {
-            'min': 3,
-            'optimal': 4,    # 3-4 videos per week
-            'max': 7,
+            'min': 7,         # At least daily
+            'optimal': 14,    # 2/day
+            'max': 21,        # 3/day
         },
         'content_type_frequency': {
-            'SHORT': {'per_day': 3, 'per_week': 21},      # Shorts can be frequent
-            'VIDEO': {'per_day': 1, 'per_week': 4},       # Long-form: 3-4/week
-            'LONG': {'per_day': 1, 'per_week': 4},        # Same as VIDEO
-            'IMAGE': {'per_day': 1, 'per_week': 4},       # Community posts
+            'SHORT': {'per_day': 3, 'per_week': 21},      # Shorts: high frequency
+            'VIDEO': {'per_day': 2, 'per_week': 14},      # Treat as Shorts by default
+            'LONG': {'per_day': 1, 'per_week': 4},        # Long-form: 3-4/week
+            'IMAGE': {'per_day': 1, 'per_week': 7},       # Community posts
         },
-        'min_hours_between_posts': 4,
-        'optimal_hours_between_posts': 24,  # Long-form: 1/day max
-        'spread_strategy': 'across_days',   # Spread across week
+        'min_hours_between_posts': 3,       # Shorts: 3h minimum gap
+        'optimal_hours_between_posts': 4,   # Shorts: space across the day
+        'spread_strategy': 'within_day',    # Multiple Shorts per day
         'content_type_min_hours': {
-            'SHORT': 3,     # Shorts can be closer
-            'VIDEO': 24,    # Long-form: 1 per day
-            'LONG': 48,     # Full-length: every 2 days
+            'SHORT': 3,     # Shorts: 3h gap for algorithm propagation
+            'VIDEO': 3,     # Treat as Shorts
+            'LONG': 24,     # Full-length: every 24h
         },
-        'algorithm_notes': '3-4 long-form videos/week. Shorts daily boosts channel. Upload 48h before peak.',
+        'algorithm_notes': 'YouTube Shorts: 2-3/day for growth. Morning + lunch + evening windows. Consistency is key.',
     },
     'tiktok': {
         # TikTok 2024-2025 Research:
@@ -567,16 +575,156 @@ DEFAULT_BULK_CONFIG = {
 }
 
 
+async def get_user_timezone_from_db(user_id: str) -> str:
+    """
+    Fetch the user's timezone from the database.
+    Checks both 'user_id' and '_id' fields, and both 'time_zone' and 'timezone' fields.
+    Also handles ObjectId conversion for _id lookups.
+    
+    Returns:
+        User's timezone string (e.g., 'America/New_York', 'Asia/Kolkata') or DEFAULT_TIMEZONE
+    """
+    try:
+        from bson import ObjectId
+        users_collection = db["users"]
+        
+        # Try finding by user_id field first (primary lookup - string match)
+        user = await users_collection.find_one({"user_id": user_id})
+        
+        # Fallback: try finding by _id as string
+        if not user:
+            user = await users_collection.find_one({"_id": user_id})
+        
+        # Fallback: try finding by _id as ObjectId
+        if not user:
+            try:
+                user = await users_collection.find_one({"_id": ObjectId(user_id)})
+            except Exception:
+                pass
+        
+        if user:
+            # Check all possible timezone field names
+            tz = (
+                user.get("time_zone") or 
+                user.get("timezone") or 
+                user.get("timeZone") or
+                user.get("settings", {}).get("timezone") or
+                user.get("settings", {}).get("time_zone") or
+                user.get("preferences", {}).get("timezone") or
+                user.get("preferences", {}).get("time_zone")
+            )
+            if tz:
+                # Handle common timezone abbreviations
+                tz_abbreviation_map = {
+                    # Indian / South Asian
+                    "IST": "Asia/Kolkata",
+                    "PKT": "Asia/Karachi",
+                    "NPT": "Asia/Kathmandu",
+                    "BST": "Asia/Dhaka",  # Bangladesh Standard Time
+                    "SLT": "Asia/Colombo",
+                    
+                    # East Asian
+                    "JST": "Asia/Tokyo",
+                    "KST": "Asia/Seoul",
+                    "CST_ASIA": "Asia/Shanghai",
+                    "HKT": "Asia/Hong_Kong",
+                    "SGT": "Asia/Singapore",
+                    "PHT": "Asia/Manila",
+                    "WIB": "Asia/Jakarta",
+                    "ICT": "Asia/Bangkok",
+                    "MMT": "Asia/Yangon",
+                    
+                    # Australia / Pacific
+                    "AEST": "Australia/Sydney",
+                    "AEDT": "Australia/Sydney",
+                    "ACST": "Australia/Adelaide",
+                    "AWST": "Australia/Perth",
+                    "NZST": "Pacific/Auckland",
+                    "NZDT": "Pacific/Auckland",
+                    
+                    # Americas
+                    "EST": "America/New_York",
+                    "EDT": "America/New_York",
+                    "CST": "America/Chicago",
+                    "CDT": "America/Chicago",
+                    "MST": "America/Denver",
+                    "MDT": "America/Denver",
+                    "PST": "America/Los_Angeles",
+                    "PDT": "America/Los_Angeles",
+                    "AST": "America/Halifax",
+                    "NST": "America/St_Johns",
+                    "BRT": "America/Sao_Paulo",
+                    "ART": "America/Argentina/Buenos_Aires",
+                    "COT": "America/Bogota",
+                    "PET": "America/Lima",
+                    "CLT": "America/Santiago",
+                    "VET": "America/Caracas",
+                    "ECT": "America/Guayaquil",
+                    "BOT": "America/La_Paz",
+                    
+                    # Europe
+                    "GMT": "Europe/London",
+                    "UTC": "UTC",
+                    "WET": "Europe/Lisbon",
+                    "CET": "Europe/Berlin",
+                    "CEST": "Europe/Berlin",
+                    "EET": "Europe/Helsinki",
+                    "EEST": "Europe/Helsinki",
+                    "MSK": "Europe/Moscow",
+                    "TRT": "Europe/Istanbul",
+                    
+                    # Africa
+                    "EAT": "Africa/Nairobi",
+                    "CAT": "Africa/Harare",
+                    "WAT": "Africa/Lagos",
+                    "SAST": "Africa/Johannesburg",
+                    "EAT": "Africa/Nairobi",
+                    
+                    # Middle East
+                    "GST": "Asia/Dubai",
+                    "IRST": "Asia/Tehran",
+                    "AST_ARAB": "Asia/Riyadh",
+                }
+                
+                # Convert abbreviation to full timezone name if needed
+                tz_upper = tz.strip().upper()
+                if tz_upper in tz_abbreviation_map:
+                    resolved = tz_abbreviation_map[tz_upper]
+                    logger.info(f"✅ Resolved timezone abbreviation '{tz}' → '{resolved}'")
+                    tz = resolved
+                
+                # Validate it's a real timezone
+                try:
+                    pytz.timezone(tz)
+                    logger.info(f"✅ Found user timezone from DB: {tz}")
+                    return tz
+                except Exception:
+                    # Try case-insensitive match against all pytz timezones
+                    tz_lower = tz.strip().lower()
+                    for pytz_tz in pytz.all_timezones:
+                        if pytz_tz.lower() == tz_lower:
+                            logger.info(f"✅ Found user timezone via case-insensitive match: {pytz_tz}")
+                            return pytz_tz
+                    logger.warning(f"Invalid timezone '{tz}' in DB for user {user_id}, using {DEFAULT_TIMEZONE}")
+        
+        logger.info(f"No timezone found in DB for user {user_id}, using {DEFAULT_TIMEZONE}")
+        return DEFAULT_TIMEZONE
+    except Exception as e:
+        logger.warning(f"Could not fetch user timezone from DB: {e}")
+        return DEFAULT_TIMEZONE
+
+
 class TimeSlotService:
     """
     Service to determine optimal posting times based on user data or research.
     
     Features:
     - Platform-specific peak hours with minute-level precision
-    - Timezone-aware scheduling
+    - Timezone-aware scheduling (uses user's selected timezone)
     - Avoids recent post times to prevent repetition
     - Day-of-week optimization
     - Engagement multiplier based on platform research
+    - Prevents scheduling during sleeping hours (before 8 AM / after 11 PM)
     """
     
     def __init__(self, user_id: str, user_timezone: str = None):
@@ -591,6 +739,27 @@ class TimeSlotService:
             logger.warning(f"Invalid timezone '{self.user_timezone}', falling back to UTC")
             self.tz = pytz.UTC
             self.user_timezone = "UTC"
+    
+    def _is_valid_posting_hour(self, hour: int) -> bool:
+        """
+        Check if the hour is within acceptable posting hours.
+        Prevents scheduling at times when people are sleeping.
+        
+        Valid hours: 8 AM (8) to 11 PM (23) in user's local timezone.
+        """
+        return MINIMUM_POSTING_HOUR <= hour <= MAXIMUM_POSTING_HOUR
+    
+    def _filter_valid_hours(self, hours: list) -> list:
+        """
+        Filter out hours that fall outside acceptable posting times.
+        Returns only hours between MINIMUM_POSTING_HOUR and MAXIMUM_POSTING_HOUR.
+        """
+        filtered = [h for h in hours if self._is_valid_posting_hour(h)]
+        if not filtered:
+            # If all hours were filtered, return safe defaults
+            logger.warning(f"All hours filtered out, using safe defaults (9, 12, 17, 19)")
+            return [9, 12, 17, 19]
+        return filtered
     
     async def get_optimal_time_for_platform(
         self,
@@ -770,6 +939,11 @@ class TimeSlotService:
         # ============================================================
         for slot in weighted_today_slots:
             hour = slot.get("hour", 12)
+            
+            # Skip sleeping hours (before 8 AM / after 11 PM)
+            if not self._is_valid_posting_hour(hour):
+                continue
+            
             minute = self._get_optimal_minute(platform, hour)
             
             proposed_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -819,6 +993,9 @@ class TimeSlotService:
                 today_hours = platform_config.get('weekend_hours', platform_config.get('best_hours', [12]))
             else:
                 today_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
+        
+        # Filter out sleeping hours (before 8 AM / after 11 PM)
+        today_hours = self._filter_valid_hours(today_hours)
         
         best_hours = set(platform_config.get('best_hours', []))
         sorted_hours = sorted(today_hours, key=lambda h: (h not in best_hours, h))
@@ -904,6 +1081,9 @@ class TimeSlotService:
             else:
                 today_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
         
+        # Filter out sleeping hours (before 8 AM / after 11 PM)
+        today_hours = self._filter_valid_hours(today_hours)
+        
         # Sort hours by best engagement (best_hours first)
         best_hours = set(platform_config.get('best_hours', []))
         sorted_hours = sorted(today_hours, key=lambda h: (h not in best_hours, h))
@@ -984,6 +1164,9 @@ class TimeSlotService:
             else:
                 tomorrow_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
         
+        # Filter out sleeping hours (before 8 AM / after 11 PM)
+        tomorrow_hours = self._filter_valid_hours(tomorrow_hours)
+        
         best_hours = set(platform_config.get('best_hours', []))
         sorted_hours = sorted(tomorrow_hours, key=lambda h: (h not in best_hours, h))
         
@@ -1052,6 +1235,9 @@ class TimeSlotService:
                 if not target_hours:
                     target_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
                 
+                # Filter out sleeping hours (before 8 AM / after 11 PM)
+                target_hours = self._filter_valid_hours(target_hours)
+                
                 sorted_hours = sorted(target_hours, key=lambda h: (h not in best_hours, h))
                 day_multiplier = platform_config.get('engagement_multiplier', {}).get(target_day, 1.0)
                 
@@ -1099,9 +1285,19 @@ class TimeSlotService:
         platform: str,
         now: datetime
     ) -> Tuple[datetime, str, str, Dict[str, Any]]:
-        """Get a fallback time when no optimal slots are available."""
+        """Get a fallback time when no optimal slots are available.
+        Ensures fallback time is within valid posting hours."""
         fallback_minute = PLATFORM_MINUTE_OFFSET.get(platform, 0)
         fallback_time = (now + timedelta(hours=1)).replace(minute=fallback_minute, second=0, microsecond=0)
+        
+        # Ensure fallback time is within valid posting hours
+        if fallback_time.hour < MINIMUM_POSTING_HOUR:
+            # Too early - schedule for 9 AM today
+            fallback_time = fallback_time.replace(hour=9, minute=fallback_minute)
+        elif fallback_time.hour > MAXIMUM_POSTING_HOUR:
+            # Too late - schedule for 9 AM tomorrow
+            fallback_time = (fallback_time + timedelta(days=1)).replace(hour=9, minute=fallback_minute, second=0, microsecond=0)
+        
         fallback_time_utc = fallback_time.astimezone(timezone.utc)
         
         metadata = {
@@ -1213,7 +1409,8 @@ class TimeSlotService:
         num_posts: int,
         content_type: str = "VIDEO",
         avoid_times: List[datetime] = None,
-        growth_mode: str = "optimal"  # 'conservative', 'optimal', 'aggressive'
+        growth_mode: str = "optimal",  # 'conservative', 'optimal', 'aggressive'
+        start_date: datetime = None,
     ) -> List[Dict[str, Any]]:
         """
         Get optimal time slots for multiple posts on a single platform.
@@ -1323,9 +1520,30 @@ class TimeSlotService:
         seed_value = int(hashlib.md5(seed_string.encode()).hexdigest()[:8], 16)
         random.seed(seed_value)
         
-        # Get current time ONCE at start - don't refresh during loop
+        # Use startDate if provided, otherwise use current time
+        # startDate allows scheduling from a future date
+        if start_date:
+            # Treat startDate as a CALENDAR DATE in user's timezone
+            # e.g. "2026-02-15" means Feb 15 in user's local timezone, NOT UTC
+            if hasattr(start_date, 'date'):
+                target_calendar_date = start_date.date()
+            else:
+                target_calendar_date = start_date
+            
+            # Create datetime at MINIMUM_POSTING_HOUR on that date in user's timezone
+            now = self.tz.localize(
+                datetime(
+                    target_calendar_date.year,
+                    target_calendar_date.month,
+                    target_calendar_date.day,
+                    MINIMUM_POSTING_HOUR, 0, 0
+                )
+            )
+            logger.info(f"📅 Using custom start date: {now.strftime('%Y-%m-%d %H:%M %Z')} for {platform}")
+        else:
+            # Get current time ONCE at start - don't refresh during loop
+            now = datetime.now(self.tz)
         # Add small jitter (0-5 minutes) to prevent identical times on rapid calls
-        now = datetime.now(self.tz)
         jitter_seconds = random.randint(0, 300)  # 0-5 minutes
         now = now + timedelta(seconds=jitter_seconds)
         
@@ -1333,6 +1551,7 @@ class TimeSlotService:
         current_day_offset = 0
         posts_scheduled_today = 0
         last_scheduled_time = None
+        previously_used_hours = set()  # Track hours used across ALL days to add variety
         
         for post_index in range(num_posts):
             # Use the same 'now' for all posts - don't refresh each iteration
@@ -1361,6 +1580,9 @@ class TimeSlotService:
                     day_hours = platform_config.get('weekday_hours', 
                                 platform_config.get('best_hours', [12]))
             
+            # Filter out sleeping hours (before 8 AM / after 11 PM)
+            day_hours = self._filter_valid_hours(day_hours)
+            
             # Shuffle hours with weighted randomization for variety
             best_hours = set(platform_config.get('best_hours', []))
             day_multiplier = platform_config.get('engagement_multiplier', {}).get(target_day, 1.0)
@@ -1373,6 +1595,11 @@ class TimeSlotService:
                 
                 # Add randomness to avoid always picking same hour
                 variation = random.uniform(0.8, 1.2)
+                
+                # PENALIZE hours that were already used on previous days
+                # This ensures variety across different days
+                if hour in previously_used_hours:
+                    base_score *= 0.3  # Strong penalty for reused hours
                 
                 # If using user data, check if this hour has good engagement
                 if use_user_data:
@@ -1404,9 +1631,9 @@ class TimeSlotService:
                 minute = self._get_optimal_minute(platform_lower, hour)
                 
                 # Add variation to minutes for bulk posts (avoid same minute)
-                # Use larger variation range and add randomness
-                minute_variation = (post_index * 13) % 30 - 15  # -15 to +15 variation
-                minute_variation += random.randint(-5, 5)  # Extra random jitter
+                # Use post_index, day_offset, AND random jitter for maximum variety
+                minute_variation = (post_index * 13 + current_day_offset * 17) % 30 - 15  # -15 to +15 variation
+                minute_variation += random.randint(-7, 7)  # Extra random jitter
                 minute = max(0, min(59, minute + minute_variation))
                 
                 proposed_time = target_date.replace(
@@ -1429,6 +1656,7 @@ class TimeSlotService:
                     
                     data_source = "user_data" if use_user_data else "research_data"
                     
+                    actual_now = datetime.now(self.tz)
                     reason = self._build_bulk_reason(
                         post_index=post_index + 1,
                         total_posts=num_posts,
@@ -1438,7 +1666,7 @@ class TimeSlotService:
                         day_multiplier=day_multiplier,
                         content_type=content_type,
                         use_user_data=use_user_data,
-                        is_today=(current_day_offset == 0)
+                        is_today=(target_date.date() == actual_now.date())
                     )
                     
                     slot_info = {
@@ -1464,6 +1692,7 @@ class TimeSlotService:
                     last_scheduled_time = proposed_time
                     slot_found = True
                     posts_scheduled_today += 1
+                    previously_used_hours.add(hour)  # Track used hours for variety
                     
                     # Check if we've hit the daily limit AFTER successful scheduling
                     # For fractional limits (e.g., 0.57/day), advance by calculated days
@@ -1519,6 +1748,42 @@ class TimeSlotService:
         
         return 0
     
+    def _get_timezone_display_name(self) -> str:
+        """
+        Get a user-friendly timezone display name.
+        e.g. 'America/Denver' -> 'MST', 'Asia/Kolkata' -> 'IST', 'Africa/Nairobi' -> 'EAT'
+        """
+        # Reverse map: full timezone name -> abbreviation
+        tz_display_map = {
+            "Asia/Kolkata": "IST",
+            "America/New_York": "EST",
+            "America/Chicago": "CST",
+            "America/Denver": "MST",
+            "America/Los_Angeles": "PST",
+            "Europe/London": "GMT",
+            "Europe/Berlin": "CET",
+            "Asia/Tokyo": "JST",
+            "Australia/Sydney": "AEST",
+            "Asia/Singapore": "SGT",
+            "Asia/Seoul": "KST",
+            "Asia/Hong_Kong": "HKT",
+            "Asia/Karachi": "PKT",
+            "Pacific/Auckland": "NZST",
+            "Africa/Nairobi": "EAT",
+            "Africa/Lagos": "WAT",
+            "Africa/Johannesburg": "SAST",
+            "Asia/Dubai": "GST",
+            "Asia/Shanghai": "CST",
+            "America/Sao_Paulo": "BRT",
+            "Asia/Dhaka": "BST",
+            "Asia/Bangkok": "ICT",
+            "Europe/Moscow": "MSK",
+            "Europe/Istanbul": "TRT",
+            "Asia/Manila": "PHT",
+            "Asia/Jakarta": "WIB",
+        }
+        return tz_display_map.get(self.user_timezone, self.user_timezone)
+
     def _build_bulk_reason(
         self,
         post_index: int,
@@ -1533,7 +1798,8 @@ class TimeSlotService:
     ) -> str:
         """Build a descriptive reason for bulk post scheduling."""
         platform_name = PLATFORM_NAME_MAP.get(platform, platform.capitalize())
-        day_text = f"today ({target_day})" if is_today else target_day
+        day_text = f"today ({target_day})" if is_today else f"{target_day}"
+        tz_display = self._get_timezone_display_name()
         
         source_text = (
             f"based on your {target_day} engagement history"
@@ -1542,7 +1808,7 @@ class TimeSlotService:
         )
         
         return (
-            f"Post {post_index}/{total_posts} scheduled for {day_text} at {formatted_time} ({self.user_timezone}) - "
+            f"Post {post_index}/{total_posts} scheduled for {day_text} at {formatted_time} ({tz_display}) - "
             f"{source_text}. "
             f"{target_day}'s engagement: {day_multiplier:.2f}x average. "
             f"Content: {content_type}."
@@ -1585,6 +1851,9 @@ class TimeSlotService:
                 else:
                     day_hours = platform_config.get('weekday_hours', [12])
             
+            # Filter out sleeping hours (before 8 AM / after 11 PM)
+            day_hours = self._filter_valid_hours(day_hours)
+            
             best_hours = set(platform_config.get('best_hours', []))
             day_multiplier = platform_config.get('engagement_multiplier', {}).get(target_day, 1.0)
             
@@ -1596,7 +1865,8 @@ class TimeSlotService:
             
             for hour in sorted_hours:
                 minute = self._get_optimal_minute(platform, hour)
-                minute += ((post_index * 7) % 15)  # Add variation
+                minute += ((post_index * 7 + day_offset * 11) % 20)  # Add day+index variation
+                minute += random.randint(-5, 5)  # Extra jitter
                 minute = max(0, min(59, minute))
                 
                 proposed_time = target_date.replace(
@@ -1668,6 +1938,8 @@ async def get_bulk_optimal_times_for_platform(
     Returns:
         List of scheduling info for each post
     """
+    if not user_timezone:
+        user_timezone = await get_user_timezone_from_db(user_id)
     user_timezone = user_timezone or DEFAULT_TIMEZONE
     service = TimeSlotService(user_id, user_timezone)
     
@@ -1685,7 +1957,8 @@ async def get_bulk_optimal_times_multi_platform(
     posts_per_platform: Dict[str, int],
     content_types: Dict[str, str] = None,
     user_timezone: str = None,
-    growth_mode: str = "optimal"
+    growth_mode: str = "optimal",
+    start_date: datetime = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Get optimal times for bulk posts across multiple platforms.
@@ -1715,6 +1988,8 @@ async def get_bulk_optimal_times_multi_platform(
             growth_mode="optimal"
         )
     """
+    if not user_timezone:
+        user_timezone = await get_user_timezone_from_db(user_id)
     user_timezone = user_timezone or DEFAULT_TIMEZONE
     service = TimeSlotService(user_id, user_timezone)
     content_types = content_types or {}
@@ -1751,7 +2026,8 @@ async def get_bulk_optimal_times_multi_platform(
             num_posts=num_posts,
             content_type=content_type,
             avoid_times=all_scheduled_times,
-            growth_mode=growth_mode
+            growth_mode=growth_mode,
+            start_date=start_date,
         )
         
         # Add these times to avoid list for next platform
@@ -1982,13 +2258,7 @@ async def get_optimal_times_for_platforms(
     """
     # Try to get user's timezone from database if not provided
     if not user_timezone:
-        try:
-            users_collection = db["users"]
-            user = await users_collection.find_one({"_id": user_id})
-            if user:
-                user_timezone = user.get("timezone") or user.get("settings", {}).get("timezone")
-        except Exception as e:
-            logger.warning(f"Could not fetch user timezone: {e}")
+        user_timezone = await get_user_timezone_from_db(user_id)
     
     user_timezone = user_timezone or DEFAULT_TIMEZONE
     
@@ -2073,6 +2343,8 @@ async def get_single_optimal_time(
     Returns:
         Dict with scheduling info and metadata
     """
+    if not user_timezone:
+        user_timezone = await get_user_timezone_from_db(user_id)
     user_timezone = user_timezone or DEFAULT_TIMEZONE
     service = TimeSlotService(user_id, user_timezone)
     

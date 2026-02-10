@@ -10,7 +10,6 @@ Intelligent bulk posting with:
 
 import tempfile
 import os
-import random
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
@@ -24,7 +23,7 @@ from config import logger, GROQ_API_KEY_CAPTION
 from services.post_creation_service import detect_media_type
 from services.video_caption_service import caption_from_video_file
 from services.image_caption_service import caption_from_image_file
-from services.post_generator_service import INSTAGRAM_DISCOVERY_CORE
+from services.common_utils import get_user_timezone_from_db
 from services.time_slot_service import (
     get_bulk_optimal_times_for_platform,
     get_bulk_optimal_times_multi_platform,
@@ -115,6 +114,9 @@ async def process_bulk_videos(
     
     logger.info(f"📦 Bulk processing: {num_videos} videos × {num_platforms} platforms = {total_posts} posts")
     
+    # Fetch user timezone for proper scheduling
+    user_tz = await get_user_timezone_from_db(user_id)
+    
     # Step 1: Upload all videos in parallel
     upload_tasks = [upload_to_cloudinary(video) for video in videos]
     cloudinary_urls = await asyncio.gather(*upload_tasks)
@@ -177,6 +179,7 @@ async def process_bulk_media_urls(
     growth_mode: str = "optimal",
     content_type: str = None,
     preview_only: bool = False,
+    start_date: datetime = None,
 ) -> Dict[str, Any]:
     """
     Process multiple media URLs for bulk posting with intelligent time allocation.
@@ -244,14 +247,21 @@ async def process_bulk_media_urls(
     if schedule_mode == "AUTO":
         # Calculate posts per platform
         posts_per_platform = {p: num_posts for p in platforms_lower}
-        platform_content_types = {p: dominant_content_type for p in platforms_lower}
+        platform_content_types = {}
+        for p in platforms_lower:
+            # Use SHORT content type for YouTube (optimized for Shorts)
+            if p.lower() == "youtube":
+                platform_content_types[p] = "SHORT"
+            else:
+                platform_content_types[p] = dominant_content_type
         
         time_slots = await get_bulk_optimal_times_multi_platform(
             user_id=user_id,
             platforms=platforms_lower,
             posts_per_platform=posts_per_platform,
             content_types=platform_content_types,
-            growth_mode=growth_mode
+            growth_mode=growth_mode,
+            start_date=start_date
         )
         
         logger.info(f"📅 Allocated time slots for {len(time_slots)} platforms")
@@ -322,20 +332,6 @@ async def process_bulk_media_urls(
                 caption = fallback_caption
             hashtags = hashtags_dict.get(platform, [])
             
-            # Select only 3 hashtags in order: relevant → broad → trending
-            # Structure from generator: [0-2] relevant, [3-5] broad, [6-9] trending
-            selected_hashtags = []
-            if len(hashtags) > 0:
-                selected_hashtags.append(hashtags[0])  # Most relevant
-            if len(hashtags) > 3:
-                selected_hashtags.append(hashtags[3])  # Broad
-            # For Instagram: use INSTAGRAM_DISCOVERY_CORE for trending
-            if platform == "instagram":
-                selected_hashtags.append(random.choice(INSTAGRAM_DISCOVERY_CORE))
-            elif len(hashtags) > 6:
-                selected_hashtags.append(hashtags[6])  # Most trending (viral)
-            hashtags = selected_hashtags
-            
             final_caption = caption
             if hashtags:
                 final_caption += "\n\n" + " ".join(hashtags)
@@ -358,10 +354,14 @@ async def process_bulk_media_urls(
                     scheduled_time = slot['scheduledAt']
                     reason = slot['reason']
                     data_source = slot.get('dataSource', 'research_data')
+                    local_time = slot.get('localTime')
+                    user_timezone = slot.get('timezone', 'UTC')
                 else:
                     scheduled_time = now + timedelta(hours=media_idx + 1)
                     reason = "Fallback scheduling - all optimal slots used"
                     data_source = "fallback"
+                    local_time = scheduled_time.isoformat()
+                    user_timezone = 'UTC'
 
             post_obj = {
                 "userId": user_id,
@@ -369,7 +369,10 @@ async def process_bulk_media_urls(
                 "caption": final_caption,
                 "platform": PLATFORM_NAME_MAP.get(platform, platform.capitalize()),
                 "mediaType": media_types_list[media_idx],
-                "scheduledAt": scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time,
+                "scheduledAt": local_time if 'local_time' in locals() else (scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time),
+                "scheduledAtUTC": scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time,
+                "localTime": local_time if 'local_time' in locals() else (scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time),
+                "timezone": user_timezone if 'user_timezone' in locals() else 'UTC',
                 "scheduledAtObj": scheduled_time,
                 "recommendationReason": reason,
                 "timeDataSource": data_source,
@@ -434,6 +437,7 @@ async def process_bulk_media_urls(
         "results": all_posts,
         "summary": summary,
         "previewOnly": preview_only,
+        "startDate": start_date.isoformat() if start_date else None,
     }
 
 
@@ -458,7 +462,8 @@ def _build_scheduling_summary(
         if platform_posts:
             times = []
             for p in platform_posts:
-                t = p['scheduledAt']
+                # Use localTime for proper day grouping in user's timezone
+                t = p.get('localTime', p['scheduledAt'])
                 if isinstance(t, str):
                     t = datetime.fromisoformat(t.replace('Z', '+00:00'))
                 times.append(t)
@@ -504,6 +509,7 @@ async def get_bulk_scheduling_preview(
     platforms: List[str],
     content_type: str = "VIDEO",
     growth_mode: str = "optimal",
+    start_date: datetime = None,
 ) -> Dict[str, Any]:
     """
     Get a preview of how bulk posts would be scheduled.
@@ -522,6 +528,9 @@ async def get_bulk_scheduling_preview(
     """
     platforms_lower = [p.lower() for p in platforms]
     
+    # Fetch user timezone for proper scheduling
+    user_timezone = await get_user_timezone_from_db(user_id)
+    
     posts_per_platform = {p: num_posts for p in platforms_lower}
     content_types = {p: content_type for p in platforms_lower}
     
@@ -530,7 +539,8 @@ async def get_bulk_scheduling_preview(
         platforms=platforms_lower,
         posts_per_platform=posts_per_platform,
         content_types=content_types,
-        growth_mode=growth_mode
+        growth_mode=growth_mode,
+        start_date=start_date
     )
     
     preview = {
@@ -538,6 +548,7 @@ async def get_bulk_scheduling_preview(
         "postsPerPlatform": num_posts,
         "platforms": [],
         "growthMode": growth_mode,
+        "user_timezone": user_timezone,
     }
     
     for platform in platforms_lower:

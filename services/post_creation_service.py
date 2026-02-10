@@ -1,6 +1,5 @@
 import tempfile
 import os
-import random
 import requests
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -11,10 +10,10 @@ from database import db
 from config import logger, GROQ_API_KEY_CAPTION
 from services.image_caption_service import caption_from_image_file
 from services.video_caption_service import caption_from_video_file
-from services.post_generator_service import INSTAGRAM_DISCOVERY_CORE
 from services.time_slot_service import (
     get_optimal_times_for_platforms,
     auto_refresh_analytics_for_user,
+    get_user_timezone_from_db,
     PLATFORM_NAME_MAP,
 )
 
@@ -131,9 +130,12 @@ async def create_post_from_uploaded_media(
                         )
 
             async def get_ai_times():
+                # Fetch user's timezone for accurate time scheduling
+                user_tz = await get_user_timezone_from_db(user_id)
                 return await get_optimal_times_for_platforms(
                     user_id,
                     platforms,
+                    user_timezone=user_tz,
                 )
 
             # Execute both simultaneously
@@ -150,20 +152,6 @@ async def create_post_from_uploaded_media(
                 hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
                 title = ai_result.get("titles", {}).get(p, "")
                 board = ai_result.get("boards", {}).get(p, "")
-
-                # Select only 3 hashtags in order: relevant → broad → trending
-                # Structure from generator: [0-2] relevant, [3-5] broad, [6-9] trending
-                selected_hashtags = []
-                if len(hashtags) > 0:
-                    selected_hashtags.append(hashtags[0])  # Most relevant
-                if len(hashtags) > 3:
-                    selected_hashtags.append(hashtags[3])  # Broad
-                # For Instagram: use INSTAGRAM_DISCOVERY_CORE for trending
-                if p == "instagram":
-                    selected_hashtags.append(random.choice(INSTAGRAM_DISCOVERY_CORE))
-                elif len(hashtags) > 6:
-                    selected_hashtags.append(hashtags[6])  # Most trending (viral)
-                hashtags = selected_hashtags
 
                 # Handle rate limit failures gracefully
                 if not caption:

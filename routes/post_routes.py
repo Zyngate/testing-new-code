@@ -177,6 +177,10 @@ async def upload_bulk_posts(payload: dict):
     """
     Intelligent Bulk Upload with Platform-Optimized Scheduling.
     
+    **ORDER MATTERS**: The first URL in mediaUrls gets the earliest time slot,
+    second URL gets the next slot, and so on. Reorder your URLs before calling
+    to control which video posts first.
+    
     Features:
     - Platform-specific posting frequency (e.g., Instagram 2-3/day, YouTube 1/day)
     - Automatic time distribution across days based on platform research
@@ -186,7 +190,7 @@ async def upload_bulk_posts(payload: dict):
     Request body:
     {
         "userId": str,
-        "mediaUrls": [str],
+        "mediaUrls": [str],  // ORDER = posting order (first = earliest time)
         "platform": str | list[str],
         "scheduleMode": "AUTO" | "MANUAL",
         "scheduledAt": dict (for MANUAL mode),
@@ -305,21 +309,36 @@ async def bulk_schedule_preview(payload: dict):
 @router.post("/upload-bulk-preview")
 async def bulk_preview(payload: dict):
     """
-    Generate AI captions + recommended times for bulk uploads
-    WITHOUT saving to DB
-    Uses coordinated bulk scheduling to avoid time conflicts and ensure unique times per call
+    Bulk Preview - Generate AI captions + recommended times WITHOUT saving to DB.
+    
+    **ORDER MATTERS**: First URL in mediaUrls gets the earliest time slot.
+    Reorder your URLs before calling to control posting sequence.
+    
+    Request:
+    {
+        "userId": "...",
+        "mediaUrls": ["first_to_post.mp4", "second.mp4", "third.mp4"],
+        "platforms": ["instagram", "tiktok"],
+        "growthMode": "optimal",  // conservative | optimal | aggressive
+        "startDate": "2026-02-15"  // optional
+    }
     """
 
     user_id = payload.get("userId")
     media_urls = payload.get("mediaUrls", [])
     platforms = payload.get("platforms", [])
     
-    # Legacy support for single platform
+    # Legacy support for single platform (string or list)
     if not platforms and payload.get("platform"):
-        platforms = [payload.get("platform")]
+        platform_val = payload.get("platform")
+        if isinstance(platform_val, list):
+            platforms = platform_val  # Already a list, don't wrap again
+        else:
+            platforms = [platform_val]  # Single string, wrap in list
 
     growth_mode = payload.get("growthMode", "optimal")
     content_type = payload.get("contentType")
+    start_date_str = payload.get("startDate")  # e.g. "2026-02-15" or "2026-02-15T10:00:00"
 
     if not user_id or not media_urls or not platforms:
         raise HTTPException(
@@ -327,12 +346,27 @@ async def bulk_preview(payload: dict):
             detail="Missing required fields: userId, mediaUrls, and platforms"
         )
 
+    # Parse startDate if provided
+    start_date = None
+    if start_date_str:
+        try:
+            start_date = datetime.fromisoformat(start_date_str)
+            # If no timezone info, treat as UTC
+            if start_date.tzinfo is None:
+                start_date = start_date.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid startDate format: '{start_date_str}'. Use ISO format like '2026-02-15' or '2026-02-15T10:00:00'"
+            )
+
     # Use bulk scheduling service with preview mode
     # This ensures coordinated time allocation with all our fixes:
     # - Platform-specific frequency limits (Instagram 2-3/day, YouTube 3-4/week, etc.)
     # - Unique time slots on each API call (randomization with seed + jitter)
     # - Chronological post indices
     # - Daily and weekly limit enforcement
+    # - Optional startDate to begin scheduling from a future date
     result = await process_bulk_media_urls(
         user_id=user_id,
         media_urls=media_urls,
@@ -340,7 +374,8 @@ async def bulk_preview(payload: dict):
         schedule_mode="AUTO",
         growth_mode=growth_mode,
         content_type=content_type,
-        preview_only=True  # Don't save to database
+        preview_only=True,  # Don't save to database
+        start_date=start_date,
     )
 
     return result
@@ -348,8 +383,24 @@ async def bulk_preview(payload: dict):
 @router.post("/bulk-confirm")
 async def bulk_confirm(payload: dict):
     """
-    Final approval step.
-    Saves user-edited posts directly to scheduler.
+    Bulk Confirm - Save user-approved posts to scheduler.
+    
+    After preview, user can edit captions/times, then call this to save.
+    Order in approvedPosts = order saved.
+    
+    Request:
+    {
+        "userId": "...",
+        "approvedPosts": [
+            {
+                "mediaUrl": "...",
+                "caption": "edited caption",
+                "platform": "instagram",
+                "mediaType": "VIDEO",
+                "scheduledAt": "2026-02-15T14:00:00Z"
+            }
+        ]
+    }
     """
 
     user_id = payload.get("userId")
@@ -366,9 +417,14 @@ async def bulk_confirm(payload: dict):
 
     for post in approved_posts:
         try:
-            scheduled_at = datetime.fromisoformat(post["scheduledAt"])
+            # scheduledAt may be local time (e.g., 2026-02-16T20:14:00-07:00)
+            # or scheduledAtUTC if frontend sends it. Convert to UTC for DB storage.
+            scheduled_at_raw = post.get("scheduledAtUTC") or post["scheduledAt"]
+            scheduled_at = datetime.fromisoformat(scheduled_at_raw)
             if scheduled_at.tzinfo is None:
                 scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+            # Always store in UTC in the database
+            scheduled_at_utc = scheduled_at.astimezone(timezone.utc)
 
             post_doc = {
                 "userId": user_id,
@@ -376,7 +432,7 @@ async def bulk_confirm(payload: dict):
                 "caption": post.get("caption", ""),
                 "platform": post["platform"],
                 "mediaType": post["mediaType"],
-                "scheduledAt": scheduled_at,
+                "scheduledAt": scheduled_at_utc,
                 "status": "pending",
                 "createdAt": now,
                 "updatedAt": now,
@@ -398,4 +454,3 @@ async def bulk_confirm(payload: dict):
         "success": True,
         "scheduledCount": len(saved_posts)
     }
-
