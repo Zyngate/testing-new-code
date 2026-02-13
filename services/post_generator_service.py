@@ -38,12 +38,23 @@ async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) ->
     return None
 
 def is_marketing_campaign(effective_query: str) -> bool:
+    """
+    Detect if content is marketing/business-related.
+    Requires 2+ keyword matches for stricter classification.
+    
+    Marketing = professional funny tone
+    Non-marketing = brutally sarcastic tone
+    """
     keywords = [
         "marketing", "automation", "campaign", "saas",
-        "tool", "platform", "ai", "product", "growth", "brand", "business", "entrepreneur", "startup", "content strategy", "social media strategy"
+        "tool", "platform", "ai", "product", "growth", 
+        "brand", "business", "entrepreneur", "startup", 
+        "content strategy", "social media strategy", "software",
+        "app", "service", "solution"
     ]
     q = effective_query.lower()
-    return any(k in q for k in keywords)
+    matches = sum(1 for k in keywords if k in q)
+    return matches >= 2  # Require 2+ keywords for marketing classification
 class Platforms(str, Enum):
     Instagram = "instagram"
     Facebook = "facebook"
@@ -450,8 +461,10 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
 
 
 def _build_caption_prompt(p_norm: str, effective_query: str) -> str:
-    is_campaign = is_marketing_campaign(effective_query)
     """Build the caption prompt for a given platform."""
+    # Detect if this is a marketing campaign (affects Threads tone)
+    is_campaign = is_marketing_campaign(effective_query)
+    
     if p_norm == "instagram":
         return f"""
 Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
@@ -502,93 +515,79 @@ Return ONLY the caption text.
 """
 
     elif p_norm == "threads":
-        # Marketing content gets a funny, clever tone while staying professional
-        if is_campaign:
-            return f"""
-You are a witty brand copywriter writing a Threads caption for a marketing/business post.
-Goal: Make people laugh, nod, and engage — while subtly promoting the brand.
+        return f"""
+You are writing a Threads caption. The tone DEPENDS on the content type.
 
-CORE VOICE:
-- Funny and clever
-- Self-aware humor (like the brand doesn't take itself too seriously)
-- Relatable observations about work, business, or life
-- Confident but never arrogant
-- Human, warm, approachable
+STEP 1: READ THE TOPIC AND DETERMINE CONTENT TYPE
+Topic: {effective_query}
 
-HUMOR STYLE:
-- Dry wit and observational comedy
-- "So true it hurts" energy
-- Light self-deprecation about the industry (not the product)
-- Unexpected twists on common thoughts
-- NO cringe, NO tryhard, NO dad jokes
+STEP 2: CHECK FOR MARKETING/BUSINESS KEYWORDS
+Does the topic contain 2+ of these keywords?
+- marketing, automation, campaign, saas, tool, platform, product, business, startup, brand, software, app, service, solution, entrepreneur, content strategy, social media strategy
 
-THREADS RULES (PRIORITY: LAUGHS + SHARES):
-- Start with a funny observation or relatable truth
-- The humor should make the brand seem human and likeable
-- People should want to tag a friend or repost
-- Feel like a clever friend who happens to work in marketing
+If YES (2+ keywords) → USE TONE A (promotional)
+If NO (0-1 keywords) → USE TONE B (sarcastic)
 
-STRUCTURE:
-Line 1: Punchy, funny hook
-Line 2-3: Clever follow-up that lands the joke or adds insight
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TONE A: PROMOTIONAL (for marketing/business content)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-EXAMPLES OF GOOD ENERGY:
-- "Automating your content so you can finally touch grass. Revolutionary."
-- "Built an AI that writes better than most marketing teams. HR is concerned."
-- "Content creation at 3am hits different. That's why automation exists."
+Goal: Make automation/product look SMART and DESIRABLE
 
-AVOID:
-- Being offensive or mean
-- Cringe humor or forced jokes
-- First-person (no I, me, my, we)
-- Emojis
-- Hashtags
-- Being preachy or salesy
-- Hype words (game-changer, revolutionary, etc.)
+MESSAGE:
+✅ Automation = POWERFUL and EFFICIENT
+✅ Using it = YOU ARE SMART
+✅ Manual work = OLD/SLOW (mock the process, not the person)
 
-TOPIC:
-{effective_query}
+RULES:
+- Maximum 20 words
+- Make the product sound DESIRABLE
+- Make customers sound SMART for using it
+- NEVER use: "still needs", "apparently", "trying to", "outsourcing", "can't manage"
 
-Return ONLY the caption.
-"""
-        else:
-            return f"""
-You are writing a BRUTALLY sarcastic Threads caption.
-Goal: Maximum sarcasm. Make people wheeze-laugh and spam repost.
+EXAMPLES:
+✅ "Manual post scheduling: Because who needs sleep or sanity."
+✅ "Automation does in 10 seconds what used to take 4 hours."
+✅ "Smart brands automate. Everyone else copies and pastes until midnight."
+
+FORBIDDEN:
+❌ "Apparently still needs automation." (sounds incomplete)
+❌ "Still can't manage social media." (mocks customer)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TONE B: SARCASTIC (for non-marketing content)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Goal: Mock the absurd SITUATION, not the subject itself
 
 VOICE:
-- DRIPPING with sarcasm
-- Deadpan savage energy
-- Eye-roll in text form
-- "Said it so no one else has to" energy
-- Passive-aggressive perfection
+- Deadpan and exhausted
+- "Of course this happened" energy
+- Mock humanity's inability to solve/explain things
 
-SARCASM RULES:
-- MAXIMUM 1-2 lines total
-- Every word should ooze sarcasm
-- Sound annoyed, unbothered, and brutally honest
-- Mock the situation without being cruel to people
-- Channel "Oh wow, what a surprise, who could have seen this coming"
+RULES:
+- MAXIMUM 15 words
+- Mock the mystery/debate, NOT the thing itself
+- Sound tired and unimpressed
 
-EXAMPLES OF PEAK SARCASM:
-- "Wow. Shocking. Never saw that coming. Except everyone did."
-- "Cool. Cool cool cool. Love that for us. Really."
-- "Oh good, another thing to add to the list of things that aged poorly."
-- "Groundbreaking. Revolutionary. Never been done before. Except always."
-- "What a time to be alive. Said no one. Ever."
-- "Pretending to be surprised at this point feels like a full-time job."
+EXAMPLES:
+✅ "Built centuries ago. Still arguing about it in 2026. Very productive."
+✅ "Ancient structure. Zero clue who made it. Humans peaked then forgot everything."
+✅ "Science: We figured it out. Also science: Actually no we didn't."
 
-AVOID:
-- Being actually mean to specific people
-- First-person (no I, me, my, we)
-- Emojis
-- Hashtags
-- Anything longer than 2 lines
+FORBIDDEN:
+❌ "Great, another mystery." (generic sarcasm)
+❌ "Someone's hobby." (dismissive of subject)
 
-TOPIC:
-{effective_query}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Return ONLY the caption (1-2 lines, MAXIMUM sarcasm).
+FINAL CHECK BEFORE RESPONDING:
+1. Did you count the keywords correctly?
+2. Are you using the right tone for the content type?
+3. If promotional: Does the product sound powerful (not broken)?
+4. If sarcastic: Are you mocking the situation (not the subject)?
+
+Return ONLY the caption.
 """
 
     elif p_norm == "linkedin":
@@ -859,6 +858,22 @@ async def _generate_caption_for_platform(
     # 🔒 PLATFORM-SPECIFIC FORMAT GUARD
     if p_norm == "linkedin":
         caption_text = enforce_vertical_bullets(caption_text)
+    
+    # 🔒 THREADS SARCASTIC ENFORCEMENT: Ultra-short for non-marketing
+    if p_norm == "threads":
+        is_campaign = is_marketing_campaign(effective_query)
+        if not is_campaign:
+            # Force EXTREME brevity for sarcastic non-marketing content
+            # Max 120 characters OR 15 words (whichever is hit first)
+            words = caption_text.split()
+            if len(words) > 15:
+                caption_text = ' '.join(words[:15])  # Hard cut to 15 words
+            
+            if len(caption_text) > 120:
+                caption_text = caption_text[:120].rsplit(' ', 1)[0]  # Cut at last complete word
+            
+            if not caption_text.strip():
+                caption_text = "Well, this happened."
 
     # ---------------------------
     # Cleaning (SAFE)
