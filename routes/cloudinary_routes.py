@@ -11,18 +11,29 @@ MAX_MEDIA_UPLOAD = 20
 MAX_CONCURRENT_UPLOADS = 5
 
 
+UPLOAD_TIMEOUT_SECONDS = 120  # 2 min per file (videos can be large)
+
+
 async def _upload_single_file(file_content: bytes, filename: str, semaphore: asyncio.Semaphore) -> dict:
-    """Upload a single file to Cloudinary in a thread (non-blocking), with concurrency control."""
+    """Upload a single file to Cloudinary in a thread (non-blocking), with concurrency control and timeout."""
     async with semaphore:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: cloudinary.uploader.upload(
-                file_content,
-                resource_type="auto",
-                folder="scheduler_media"
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: cloudinary.uploader.upload(
+                        file_content,
+                        resource_type="auto",
+                        folder="scheduler_media",
+                        eager_async=True,  # Don't wait for video transcoding
+                        eager_notification_url=None  # Skip webhook
+                    )
+                ),
+                timeout=UPLOAD_TIMEOUT_SECONDS
             )
-        )
+        except asyncio.TimeoutError:
+            raise TimeoutError(f"Upload timed out after {UPLOAD_TIMEOUT_SECONDS}s: {filename}")
         return {
             "originalName": filename,
             "public_id": result["public_id"],
