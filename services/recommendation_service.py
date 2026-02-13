@@ -69,8 +69,10 @@ PLATFORM_PEAK_HOURS = {
         'peak_hours': [6, 7, 9, 10, 14, 15, 16],  # Pre-peak hours (2-3h before traffic peaks)
         'best_hours': [6, 7, 10, 14],  # Proven best pre-peak times
         'posts_per_week': 14,  # 2 posts daily minimum for growth
-        'avoid_hours': [17, 18, 19, 20, 21],  # NEVER post during high traffic
-        'description': 'PRE-PEAK: Post 2-3 hours before traffic peaks. Best at 6-7 AM (before morning rush), 9-10 AM (before lunch peak), 2-4 PM (before evening peak). NEVER post at 5-9 PM - Meta needs time to distribute.'
+        'avoid_hours': [17, 18, 19, 20, 21, 22, 23],  # NEVER post at 5 PM or later
+        'max_posting_hour': 16,    # Latest allowed hour (4 PM)
+        'max_posting_minute': 45,  # Hard cutoff at 4:45 PM
+        'description': 'PRE-PEAK: Post 2-3 hours before traffic peaks. Best at 6-7 AM (before morning rush), 9-10 AM (before lunch peak), 2-4 PM (before evening peak). NEVER post after 4:45 PM - Meta needs time to distribute.'
     },
     'twitter': {
         'peak_hours': [8, 9, 10, 12, 13, 17, 18],  # Business hours
