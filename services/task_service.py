@@ -121,6 +121,94 @@ CONTENT DEPTH REQUIREMENTS:
 - No filler, no repetition, no padding
 """
 
+# -------------------------------------------------------------------
+# Marketing Campaign Detection & Prompt
+# -------------------------------------------------------------------
+
+_CAMPAIGN_KEYWORDS = [
+    "marketing", "campaign", "brand", "product", "saas",
+    "launch", "growth", "startup", "business", "entrepreneur",
+    "automation", "tool", "platform", "landing page", "website",
+    "blog", "content strategy", "social media strategy",
+    "promotion", "advertise", "branding", "funnel",
+    "lead", "conversion", "sales", "audience",
+]
+
+
+def _is_marketing_task(description: str, normalized: str) -> bool:
+    """Detect if a task is a marketing/campaign content request."""
+    combined = f"{description} {normalized}".lower()
+    return sum(1 for kw in _CAMPAIGN_KEYWORDS if kw in combined) >= 2
+
+
+MARKETING_CAMPAIGN_PROMPT = """
+You are an ELITE marketing content writer producing a FULL, PUBLISH-READY blog post.
+
+CONTENT REQUIREMENTS (NON-NEGOTIABLE):
+- Minimum 1,000 words. Aim for 1,200–1,500 words.
+- The blog must feel like it was written by a senior content marketer, not an AI.
+- Write in a confident, persuasive, human tone.
+- Every section must add NEW value — no filler, no fluff, no repetition.
+
+STRUCTURE (MUST FOLLOW):
+
+1. HEADLINE
+   - Compelling, benefit-driven, clickable
+   - Should make someone WANT to read the full post
+
+2. HOOK (opening paragraph)
+   - Start with a bold claim, surprising stat, or relatable pain point
+   - Establish WHY this matters in 2–3 sentences
+   - Pull the reader in immediately
+
+3. THE PROBLEM / PAIN POINT
+   - Describe the specific challenge the target audience faces
+   - Use concrete examples, not vague statements
+   - Make the reader feel understood
+
+4. THE SOLUTION / CORE VALUE PROPOSITION
+   - Present the product/service/strategy as the answer
+   - If a website or link is mentioned, weave it in naturally (not just "click here")
+   - Focus on BENEFITS over features
+   - Use specific outcomes: numbers, time saved, efficiency gained
+
+5. HOW IT WORKS / KEY FEATURES (3–5 subsections)
+   - Each feature gets its own mini-section with a subheading
+   - For each: explain what it does, why it matters, and the outcome
+   - Use bullet points where appropriate for scannability
+   - Include real-world use cases or scenarios
+
+6. SOCIAL PROOF / CREDIBILITY
+   - Mention traction, users, results, or industry recognition
+   - If not provided, frame as "teams using this approach have seen..."
+   - Build trust without sounding desperate
+
+7. CALL TO ACTION
+   - Clear, specific, and compelling
+   - Tell the reader exactly what to do next
+   - If a URL was provided, include it here naturally
+
+8. CLOSING PARAGRAPH
+   - Reinforce the key takeaway
+   - End with forward momentum — make the reader feel they're missing out if they don't act
+
+STYLE RULES:
+- Use short paragraphs (2–4 sentences max)
+- Mix sentence lengths for rhythm
+- Use subheadings (##) for every section
+- Bold key phrases for scannability
+- NO generic corporate speak ("leverage", "synergy", "cutting-edge")
+- NO AI giveaways ("In today's fast-paced world...", "In conclusion...")
+- Write like a human marketer who actually cares about the product
+- If a URL/website is mentioned in the task, reference it naturally in the solution and CTA sections
+
+FORMATTING:
+- Use Markdown formatting
+- Subheadings with ##
+- Bullet points where they add clarity
+- Bold for emphasis on key benefits
+"""
+
 
 def normalize_prompt(user_prompt: str) -> str:
     improver_prompt = f"""
@@ -282,7 +370,27 @@ def execute_task(task: Dict):
             {"$set": {"run_count": run_count}}
         )
 
-        executor_prompt = f"""
+        # Select prompt based on content type
+        is_campaign = _is_marketing_task(user_description, normalized_prompt)
+
+        if is_campaign:
+            executor_prompt = f"""
+{EXECUTION_CONTRACT}
+
+{MARKETING_CAMPAIGN_PROMPT}
+
+USER TASK GOAL:
+{normalized_prompt}
+
+EXECUTION NUMBER:
+{run_count}
+
+FINAL INSTRUCTION:
+Return ONLY the final blog post content. No preamble. No meta-commentary.
+Minimum 1,000 words.
+"""
+        else:
+            executor_prompt = f"""
 {EXECUTION_CONTRACT}
 
 {DEPTH_AND_SIZE_RULES}
@@ -300,12 +408,17 @@ Return ONLY the final content.
         logger.info(f"[TaskService] Executor prompt:\n{executor_prompt}")
         result = None
         attempts = 0
+        min_words = 500 if is_campaign else 300
         while attempts < 3:
             try:
                 result = ask_stelle(executor_prompt)
                 logger.info(f"[TaskService] ask_stelle result (attempt {attempts+1}):\n{result}")
-                if len(result.split()) >= 300:
+                if len(result.split()) >= min_words:
                     break
+                else:
+                    logger.warning(
+                        f"Content too short ({len(result.split())} words, need {min_words}). Retrying..."
+                    )
             except Exception as e:
                 logger.warning(f"Generation attempt {attempts+1} failed: {e}")
             attempts += 1
@@ -376,7 +489,7 @@ def scheduler_loop():
             logger.exception("Scheduler loop error")
 
         time.sleep(SCHEDULER_POLL_INTERVAL)
-
+##AS
 
 def start_task_scheduler():
     thread = threading.Thread(target=scheduler_loop, daemon=True)

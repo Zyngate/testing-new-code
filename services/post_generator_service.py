@@ -101,6 +101,14 @@ INSTAGRAM_DISCOVERY_CORE = [
     "#fyp", "#explore", "#reels", "#foryou", "#explorepage"
 ]
 
+# Broad-tag blacklist: discovery/algorithmic boost tags that should NOT be used
+# as the 'broad/category' tag. We prefer category-level tags for the broad slot.
+BROAD_BLACKLIST = {
+    "#explore", "#explorepage", "#discoverypage",
+    "#fyp", "#foryou", "#foryoupage", "#reels",
+    "#trending", "#viral",
+}
+
 
 # Algorithm-optimized hashtag pools for maximum reach
 TRENDING_POOLS = {
@@ -297,38 +305,72 @@ Context:
         final_tags.append(relevant_tag)
 
     # --------------------------------------------------
-    # 3️⃣ BROAD (category / domain-level)
+    # 3️⃣ BROAD (category / domain-level, 30K+ posts, content-related)
     # --------------------------------------------------
     broad_tag = None
 
     try:
-        prompt = f"""
-Generate ONE broad, category-level hashtag for {platform} describing the general domain.
-Return ONLY one hashtag.
+        prompt = f"""You are a social media hashtag expert. Generate ONE broad, category-level hashtag for {platform}.
 
-Context:
+CRITICAL REQUIREMENTS:
+- The hashtag MUST be directly related to the video/content topic
+- The hashtag MUST be a real, widely-used category tag with at least 30,000 posts on {platform}
+- Think of the broad CATEGORY or NICHE the content belongs to
+- Examples of good broad tags: #photography, #digitalmarketing, #fitness, #foodie, #entrepreneurship, #skincare, #motivation, #technology, #fashion, #travel
+
+BANNED (do NOT return these):
+- Discovery/algorithmic tags: #explore, #fyp, #foryou, #reels, #explorepage, #discoverypage, #foryoupage, #trending, #viral
+- Platform-specific boost tags: #instareels, #fbreels, #shorts, #tiktokviral
+- Generic filler: #content, #post, #video, #photo
+
+Content topic:
 {effective_query}
-"""
+
+Return EXACTLY ONE hashtag. Nothing else."""
         text = await groq_generate_text(MODEL, prompt)
-        broad_tag = next(
+        candidate = next(
             (t for t in text.replace("\n", " ").split() if t.startswith("#")),
             None
         )
+        # Validate: must not be a blacklisted discovery tag
+        if candidate and candidate.lower() not in BROAD_BLACKLIST:
+            broad_tag = candidate
     except Exception:
         broad_tag = None
 
-    if not broad_tag and len(seed_keywords) > 1:
-        broad_tag = f"#{seed_keywords[1].replace(' ', '')}"
-    elif not broad_tag:
-        broad_tag = "#content"
+    # Fallback: derive from seed keywords (content-related, not trending pool)
+    if not broad_tag:
+        if len(seed_keywords) > 1:
+            broad_tag = f"#{seed_keywords[1].replace(' ', '').lower()}"
+        elif seed_keywords:
+            broad_tag = f"#{seed_keywords[0].replace(' ', '').lower()}"
+        else:
+            broad_tag = None
+
+    # Last resort: retry AI with simpler prompt
+    if not broad_tag or broad_tag.lower() in BROAD_BLACKLIST:
+        try:
+            retry_prompt = f"""What broad category does this content belong to: {effective_query}
+Return ONE hashtag for that category (e.g. #marketing, #fitness, #tech). Must have 30K+ posts. ONE hashtag only."""
+            text = await groq_generate_text(MODEL, retry_prompt)
+            candidate = next(
+                (t for t in text.replace("\n", " ").split() if t.startswith("#")),
+                None
+            )
+            if candidate and candidate.lower() not in BROAD_BLACKLIST:
+                broad_tag = candidate
+        except Exception:
+            pass
 
     if broad_tag and broad_tag not in final_tags:
         final_tags.append(broad_tag)
 
     # --------------------------------------------------
     # 4️⃣ FINAL: Return hashtags
-    #    autoposting=True: exactly 3 (relevant, broad, trending)
-    #    autoposting=False: up to 10 (relevant, broad, trending, plus more if available)
+    #    Order: relevant → broad → trending (always)
+    #    autoposting=True  → exactly 3
+    #    autoposting=False → up to 10 (image/video/text posts)
+    # --------------------------------------------------
     ordered_tags = []
     # 1. Relevant first
     if relevant_tag:
@@ -336,37 +378,26 @@ Context:
     # 2. Broad second
     if broad_tag and broad_tag not in ordered_tags:
         ordered_tags.append(broad_tag)
-    # 3. Trending third (Instagram uses DISCOVERY_CORE, others use pool)
+    # 3. Trending third
     if trending_tag and trending_tag not in ordered_tags:
         ordered_tags.append(trending_tag)
-    # Fallbacks for autoposting (3 only)
-    if autoposting:
-        while len(ordered_tags) < 3:
-            pool = TRENDING_POOLS.get(platform, [])
-            if pool:
-                fallback = random.choice(pool)
-                if fallback not in ordered_tags:
-                    ordered_tags.append(fallback)
-                else:
-                    break
-            else:
+
+    target = 3 if autoposting else 10
+
+    # Fill remaining slots from the trending pool (shuffled to vary results)
+    if len(ordered_tags) < target:
+        pool = TRENDING_POOLS.get(platform, [])
+        shuffled_pool = pool[:]
+        random.shuffle(shuffled_pool)
+        existing = set(ordered_tags)
+        for tag in shuffled_pool:
+            if len(ordered_tags) >= target:
                 break
-        return ordered_tags[:3]
-    # For non-autoposting, add more hashtags (up to 10, unique)
-    extra_tags = set(final_tags) - set(ordered_tags)
-    for tag in extra_tags:
-        if len(ordered_tags) >= 10:
-            break
-        ordered_tags.append(tag)
-    # If still less than 10, fill from pool
-    pool = TRENDING_POOLS.get(platform, [])
-    while len(ordered_tags) < 10 and pool:
-        fallback = random.choice(pool)
-        if fallback not in ordered_tags:
-            ordered_tags.append(fallback)
-        else:
-            break
-    return ordered_tags[:10]
+            if tag not in existing:
+                ordered_tags.append(tag)
+                existing.add(tag)
+
+    return ordered_tags[:target]
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
