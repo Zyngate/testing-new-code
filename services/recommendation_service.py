@@ -63,10 +63,14 @@ def format_time_range(hour: int) -> str:
 # Platform-specific research data for best posting times and frequencies
 PLATFORM_PEAK_HOURS = {
     'instagram': {
-        'peak_hours': [7, 8, 9, 11, 12, 17, 18, 19, 21, 22],  # Morning, lunch, evening, late night
-        'best_hours': [8, 12, 18, 21],
-        'posts_per_week': 7,  # 1 post daily or 7-14 per week
-        'description': 'mornings (7-9 AM), lunch (11 AM-12 PM), evenings (5-7 PM), and late night (9-10 PM)'
+        # PRE-PEAK Strategy: Meta's algorithm needs 2-5 hours to distribute content.
+        # Post BEFORE peak traffic, not AT peak. NEVER post at 5 PM, 7 PM, 9:30 PM.
+        # Proven: 6:37 AM = 144K likes, 10:35 AM = 102K likes
+        'peak_hours': [6, 7, 9, 10, 14, 15, 16],  # Pre-peak hours (2-3h before traffic peaks)
+        'best_hours': [6, 7, 10, 14],  # Proven best pre-peak times
+        'posts_per_week': 14,  # 2 posts daily minimum for growth
+        'avoid_hours': [17, 18, 19, 20, 21],  # NEVER post during high traffic
+        'description': 'PRE-PEAK: Post 2-3 hours before traffic peaks. Best at 6-7 AM (before morning rush), 9-10 AM (before lunch peak), 2-4 PM (before evening peak). NEVER post at 5-9 PM - Meta needs time to distribute.'
     },
     'twitter': {
         'peak_hours': [8, 9, 10, 12, 13, 17, 18],  # Business hours
@@ -907,10 +911,19 @@ class RecommendationEngine:
                     platform_time_groups['count'] = platform_df.groupby(['day_of_week', 'hour']).size().values
                     platform_time_groups = platform_time_groups.sort_values('engagement_score', ascending=False)
                     
-                    # Get top performing time slots
-                    for _, row in platform_time_groups.head(num_slots).iterrows():
+                    # Get platform-specific avoid hours (e.g., Instagram avoids 5-9 PM)
+                    avoid_hours = platform_config.get('avoid_hours', [])
+                    
+                    # Get top performing time slots (filtering out avoid_hours)
+                    for _, row in platform_time_groups.head(num_slots * 2).iterrows():
                         hour = int(row['hour'])
                         day_idx = int(row['day_of_week'])
+                        
+                        # Skip platform-specific avoid hours
+                        # (e.g., Instagram: Meta needs 2-5h to distribute, so 5-9 PM is too late)
+                        if hour in avoid_hours:
+                            continue
+                        
                         time_slots.append({
                             'day': day_names[day_idx],
                             'time_range': format_time_range(hour),
@@ -918,6 +931,9 @@ class RecommendationEngine:
                             'engagement_score': float(row['engagement_score']),
                             'data_source': 'user_data'
                         })
+                        
+                        if len(time_slots) >= num_slots:
+                            break
             
             # If not enough user data, use research-based recommendations
             if len(time_slots) < num_slots:
