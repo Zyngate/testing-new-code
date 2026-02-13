@@ -2,6 +2,7 @@
 # stelle_backend/routes/goal_routes.py
 import uuid
 import json
+import re
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional # <-- FIX 18-22: Missing typing imports (List, Dict, Any)
@@ -12,24 +13,36 @@ from fastapi.responses import JSONResponse
 import pytz
 
 from models.common_models import PlanWeekRequest
-from database import goals_collection, users_collection, weekly_plans_collection, chats_collection
+from database import goals_collection, users_collection, weekly_plans_collection, chats_collection, db
 from services.common_utils import get_current_datetime, convert_object_ids, filter_think_messages
 from services.ai_service import get_groq_client, generate_text_embedding # <-- FIX 24: Missing 'generate_text_embedding'
+from services.recommendation_plan_integration import get_recommendation_context_for_plan
 from config import logger, PLANNING_KEY, GOAL_SETTING_KEY
 
 router = APIRouter()
 
-# ... (rest of the file remains the same) ...
+# Collection for user post analytics (used by recommendation engine)
+user_post_analytics_collection = db["user_post_analytics"]
+
 
 # --- Utility for Plan Generation ---
 
 async def generate_weekly_plan(user_id: str, goals_data: List[Dict[str, Any]], user_tz: pytz.BaseTzInfo) -> Dict[str, Any]:
-    """Generates the strategic weekly plan using the LLM."""
+    """Generates the strategic weekly plan using the LLM, integrated with recommendation engine data."""
     
     now_local = datetime.now(user_tz)
     today = now_local.date()
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
+    
+    # Fetch recommendation engine context for social media goals
+    goal_titles = ' '.join([g.get('title', '') for g in goals_data])
+    recommendation_context = await get_recommendation_context_for_plan(
+        user_id=user_id,
+        goal_text=goal_titles,
+        goals_data=goals_data,
+        analytics_collection=user_post_analytics_collection
+    )
     
     # Prepare goals and tasks context
     goals_summary = []
@@ -66,34 +79,92 @@ async def generate_weekly_plan(user_id: str, goals_data: List[Dict[str, Any]], u
 
     # Construct the AI prompt
     prompt = f"""
-You are an expert project manager and personal coach. Your task is to create a comprehensive and strategic weekly plan for a user based on their goals.
+You are a senior domain expert AND project manager. You DO all analysis, research, and thinking yourself. Create a COMPLETE weekly plan with REAL DATA that the user can execute IMMEDIATELY.
+
+🚨 ABSOLUTE RULES - YOU ARE THE EXPERT, USER DOES ZERO RESEARCH:
+- BANNED words in task titles, descriptions, and subtasks: "Research", "Find", "Search", "Look up", "Gather", "Identify", "Explore", "Investigate", "Determine", "Discover", "Brainstorm"
+- NEVER say "research trends" → YOU list the actual current trends with data points and numbers
+- NEVER say "identify target audience" → YOU define the exact audience with demographics, interests, and behavior
+- NEVER say "brainstorm ideas" → YOU provide the actual ready-to-use ideas/titles/strategies
+- NEVER say "gather documents" → YOU list EVERY document with exact names
+- NEVER say "find contacts" → YOU provide actual company names, emails, phones
+- If the goal involves trends, market data, or analysis → YOU provide the actual analyzed data in descriptions
+- Every task description MUST contain REAL DATA: actual trends, numbers, examples, strategies, or content
+- User opens this plan → Executes immediately → No Googling needed
+
+🚫 ANTI-REPETITION RULES (CRITICAL — HIGHEST PRIORITY):
+- EVERY day MUST have completely DIFFERENT task types and titles — NO two days should look alike
+- NEVER repeat the same task title pattern across days (e.g., do NOT have "Optimize for SEO" on multiple days)
+- NEVER use generic filler tasks like "Monitor performance", "Engage with audience", "Create content calendar" across multiple days
+- Each day must represent genuine PROGRESS — Tuesday delivers something NEW that Monday didn't
+- VARY task types across the week: strategy, content creation, distribution, outreach, technical setup, optimization, measurement
+- Setup/configuration tasks (analytics, accounts, tools) belong on Day 1-2 ONLY — never repeat them
+- If a task appears on Monday, a DIFFERENT type of work must appear on Tuesday
+- Task descriptions on Day 3+ MUST reference outcomes from Day 1-2 work
+
+📈 WEEKLY PROGRESSION MANDATE:
+- Plan the week as a JOURNEY with a clear beginning, middle, and end
+- Monday-Tuesday: Foundation work + first major deliverables with SPECIFIC data
+- Wednesday: Build on Mon-Tue output, create DIFFERENT deliverables
+- Thursday: Distribution, outreach, or scaling based on earlier work
+- Friday: Measure results, optimize, prepare for next week
+- NEVER have the same type of task (e.g., "write blog post") on more than 2 days
+
+EXAMPLE:
+❌ BAD: "Analyze current tech trends" with description "Research and identify current tech trends"
+✅ GOOD: "Apply top 5 tech trends to content strategy" with description "Current top trends: (1) AI Agents (enterprise adoption up 340%), (2) Edge AI (on-device processing), (3) Quantum-Safe Encryption ($2.1B market), (4) Spatial Computing, (5) Green Tech. Write content targeting developers and CTOs searching for these topics."
+
+❌ BAD week pattern: Mon=Write blog, Tue=SEO, Wed=Social media calendar, Thu=Engage audience, Fri=Monitor
+✅ GOOD week pattern: Mon=Draft blog #1 with full outline+data, Tue=Build email opt-in + lead magnet, Wed=Pitch 5 guest post sites (emails ready), Thu=Create 3 social media variants from blog, Fri=A/B test headlines + review traffic data
+
+❌ BAD subtask: "Research SEO best practices"
+✅ GOOD subtask: "Apply SEO settings: meta title under 60 chars, description 150-160 chars, keyword density 1.5-2.5%, add 3-5 internal links, include BlogPosting schema markup, target long-tail keywords with 1K-10K monthly search volume"
 
 Current Date: {today.strftime('%Y-%m-%d')}
 Current Calendar Week: {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}
 
-Here is the complete context of the user's current goals and tasks:
+User's goals and tasks:
 ---
 {full_context}
 ---
+{recommendation_context}
 
-Please generate a plan with the following structure in a single, valid JSON object:
+Generate plan in this JSON structure:
 {{
-  "strategic_approach": "A high-level overview for the upcoming weeks until the final goal deadline.",
+  "strategic_approach": "Week's execution strategy with key milestones. If social media goals exist, mention the recommendation engine alignment and optimal posting strategy.",
+  "recommendation_alignment": {{
+    "platforms_detected": ["List of social media platforms found in goals"],
+    "posting_schedule_source": "user_analytics OR research_data",
+    "key_insights": ["Top insight from recommendation engine that shaped this plan"]
+  }},
   "this_week_plan": [
     {{
       "date": "YYYY-MM-DD",
       "day_of_week": "Monday",
-      "daily_focus": "Main objective for the day.",
+      "daily_focus": "Concrete deliverable (Submit X, Contact Y, Complete Z).",
       "tasks": [
         {{
-          "task_id": "The original task ID.",
-          "title": "The original task title.",
-          "status": "The current status of the task.",
-          "description": "Detailed, actionable guide on HOW to complete the task.",
+          "task_id": "Original task ID",
+          "title": "Original task title",
+          "status": "Current status",
+          "description": "Single sentence outcome.",
+          "recommended_posting_time": "8:00 AM (only for social media posting tasks, null for others)",
+          "target_platform": "instagram (only for social media tasks, null for others)",
+          "ai_provided_content": {{
+            "complete_data": "ALL information user needs to execute",
+            "company_list": [{{"name": "...", "email": "...", "phone": "...", "website": "..."}}],
+            "document_checklist": [{{"document": "...", "where_to_get": "...", "fee": "...", "time": "..."}}],
+            "email_templates": ["Ready-to-send emails"],
+            "step_by_step_guide": "Exact steps: Click X, Type Y, Submit Z",
+            "cost_breakdown": "All fees and costs",
+            "timeline": "How long each step takes",
+            "optimal_posting_info": "For social media tasks: Why this time was chosen based on recommendation engine data. Include engagement multiplier and expected reach."
+          }},
           "sub_tasks": [
             {{
-              "title": "A smaller, actionable sub-task.",
-              "description": "Detailed 'how-to' guide for this sub-task."
+              "title": "ACTION verb (Submit/Send/Fill/Contact/Post/Schedule - NOT Research/Find)",
+              "description": "One sentence action.",
+              "ai_content": "COMPLETE info: exact text to type, exact fields to fill, exact emails to send, exact links to click. For social media tasks: include the EXACT time to post and WHY (from recommendation data). Zero blanks."
             }}
           ]
         }}
@@ -102,14 +173,21 @@ Please generate a plan with the following structure in a single, valid JSON obje
   ]
 }}
 
-**CRITICAL RULES**:
-1. Prioritize Overdue Tasks: Any task marked "Deadline Exceeded" MUST be scheduled for the first day of the plan.
-2. Detailed 'How-To' Descriptions: Provide specific, step-by-step guidance for tasks and sub-tasks.
-3. Logical Sequencing: Schedule tasks based on dependencies and logical workflow.
-4. Full Week Plan: Generate a plan for all 7 days (Monday to Sunday). Use empty lists for days with no tasks.
-5. Output ONLY JSON: Return a single, valid JSON object.
+**VALIDATION RULES**:
+1. Can user complete every sub-task without opening Google? If NO → Add more data
+2. Does user know exact companies/contacts? If NO → Add company_list with names, emails, phones
+3. Does user know every document needed? If NO → Add document_checklist with all documents
+4. Does user have ready emails/templates? If NO → Add email_templates
+5. Overdue tasks MUST be first priority
+6. Generate all 7 days (empty arrays for no-task days)
+7. For social media goals: ALWAYS use the RECOMMENDATION ENGINE DATA above to set posting times, frequencies, and best days
+8. For social media content tasks: Schedule content CREATION before the optimal posting window
+9. If recommendation engine shows user-specific analytics, PRIORITIZE those over general research data
+10. Include "recommended_posting_time" and "target_platform" for every social media related task
+11. ANTI-REPETITION CHECK: Are any two days using the same task pattern? If YES → Rewrite to make each day unique
+12. PROGRESSION CHECK: Does each day build on the previous day's output? If NO → Add references to prior work
 
-Now, create the weekly plan.
+Output ONLY valid JSON.
 """
     # Call the AI
     try:
@@ -118,7 +196,7 @@ Now, create the weekly plan.
         response = await rate_limited_groq_call(
             async_client,
             messages=[
-                {"role": "system", "content": "You are an expert AI project manager. Output a single, valid JSON object."},
+                {"role": "system", "content": "You are a senior domain expert who DOES all analysis and research yourself. Provide COMPLETE, READY-TO-USE data in every task — actual trends with numbers, actual strategies, actual content, actual titles. The user should NEVER need to Google anything. NEVER use words like Research, Find, Search, Identify, Explore, Investigate, Determine, Brainstorm in task titles or descriptions. CRITICAL: Every day in the plan MUST have completely DIFFERENT task types. NEVER repeat the same task pattern across days. Each day must deliver unique value and build on previous days. Output a single, valid JSON object."},
                 {"role": "user", "content": prompt}
             ],
             model="llama-3.3-70b-versatile",
@@ -331,40 +409,69 @@ async def goal_setting_endpoint(websocket: WebSocket):
             # Check if user is asking for help/resources for a specific task
             if plan and any(keyword in user_input.lower() for keyword in ["help", "first task", "how to", "tutorial", "video", "resource", "link", "guide", "start", "do", "complete"]):
                 resource_prompt = f"""
-                The user has a learning plan and is now asking for specific help or resources.
+                The user has a plan and is asking for help with a specific task.
+                
+                ⚠️ CRITICAL: YOU must do the work - don't just point to resources. PROVIDE:
+                - Actual code snippets they can copy-paste
+                - Exact terminal commands to run
+                - Step-by-step instructions with specific actions
+                - Ready-to-use templates or starter files
                 
                 User's request: {user_input}
                 Current Plan: {json.dumps(plan, indent=2)}
                 
-                Provide a comprehensive, helpful response that includes:
-                1. A brief encouraging message with overview of what they'll accomplish
-                2. 3-4 highly-rated YouTube video recommendations with DETAILED descriptions (2-3 sentences each explaining what they'll learn, why it's valuable, and what topics are covered)
-                3. 3-4 helpful website/documentation links with DETAILED descriptions (2-3 sentences explaining the content, benefits, and how to use it)
-                4. Specific actionable next steps with timing estimates
+                Provide a COMPLETE, EXECUTABLE response:
+                1. The ACTUAL CODE or content they need to start (not just links to learn)
+                2. Exact commands to run in terminal
+                3. A few curated resources for deeper understanding (not for doing the work)
+                4. Specific next actions they can take RIGHT NOW
                 
                 Return ONLY valid JSON format:
                 {{
-                  "message": "Encouraging message explaining what they'll accomplish and why it matters (2-3 sentences)",
+                  "message": "Brief encouraging message (1-2 sentences)",
+                  "ready_to_use_content": {{
+                    "code_snippets": [
+                      {{
+                        "title": "What this code does",
+                        "language": "python/javascript/etc",
+                        "code": "Actual working code they can copy-paste",
+                        "explanation": "Brief explanation of how to use this code"
+                      }}
+                    ],
+                    "terminal_commands": [
+                      {{
+                        "command": "Exact command to run",
+                        "explanation": "What this command does"
+                      }}
+                    ],
+                    "starter_template": "A ready-to-use template, configuration file, or project structure if applicable"
+                  }},
                   "youtube_videos": [
                     {{
-                      "title": "Specific video title/topic",
-                      "channel": "Popular channel name (e.g., freeCodeCamp, Programming with Mosh, Corey Schafer, Tech With Tim)",
-                      "duration": "Approximate video length (e.g., 4 hours, 45 minutes)",
-                      "description": "Detailed 2-3 sentence description: What specific topics are covered, what you'll be able to do after watching, and why this video is recommended. Be specific about the content.",
-                      "search_query": "Exact search term to find this video on YouTube"
+                      "title": "Video title",
+                      "channel": "Channel name",
+                      "duration": "Duration",
+                      "description": "What they'll learn (for deeper understanding, not required to start)",
+                      "search_query": "YouTube search query"
                     }}
                   ],
                   "websites": [
                     {{
-                      "name": "Website/resource name",
-                      "url": "Actual URL (like python.org/tutorial, docs.python.org, realpython.com, etc.)",
-                      "description": "Detailed 2-3 sentence description: What content is available, how it's structured (interactive, text-based, etc.), and specific benefits or features that make it valuable. Include what makes it unique."
+                      "name": "Resource name",
+                      "url": "Actual URL",
+                      "description": "Reference documentation (for when they need to look things up)"
                     }}
                   ],
-                  "next_steps": "Clear actionable steps with time estimates. Be specific about the order and what to focus on first. 3-4 sentences."
+                  "immediate_actions": [
+                    {{
+                      "step": 1,
+                      "action": "Exact action to take RIGHT NOW",
+                      "time_estimate": "5 minutes"
+                    }}
+                  ]
                 }}
                 
-                Make recommendations specific and detailed. Focus on quality over quantity. Explain WHY each resource is valuable.
+                IMPORTANT: The user should be able to START WORKING immediately from your response without visiting any external links first.
                 Current date/time: {current_date}
                 """
                 
@@ -383,217 +490,461 @@ async def goal_setting_endpoint(websocket: WebSocket):
 
             if not plan:
                 # 1. Decision: Ask question or Generate plan?
-                decision_prompt = f"""
-                You are an expert goal-setting assistant. Your task is to gather key details efficiently with simple, friendly questions.
+                # --- Count how many assistant questions have been asked ---
+                assistant_question_count = sum(
+                    1 for m in conversation_history 
+                    if m["role"] == "assistant" and not m["content"].startswith("{") and not m["content"].startswith("[")
+                )
+                # Detect if user is unsure/doesn't know
+                unsure_phrases = ["no idea", "i don't know", "not sure", "idk", "no clue", "don't know", "i have no", "no preference", "you decide", "up to you", "whatever", "anything"]
+                user_unsure_count = sum(
+                    1 for m in conversation_history 
+                    if m["role"] == "user" and any(phrase in m["content"].lower() for phrase in unsure_phrases)
+                )
+                # HARD LIMIT: Force plan generation after 4 questions OR 2 "no idea" responses
+                force_generate = assistant_question_count >= 4 or user_unsure_count >= 2
+
+                if force_generate:
+                    # Skip asking, go straight to plan generation with smart defaults
+                    goal_details["title"] = "Goal from conversation"
+                    # Extract a better title from conversation
+                    for m in conversation_history:
+                        if m["role"] == "user" and len(m["content"]) > 15:
+                            goal_details["title"] = m["content"][:80]
+                            break
+                else:
+                    decision_prompt = f"""
+                You are an expert goal coach - warm, encouraging, and strategically brilliant.
                 
                 Conversation History:
                 {json.dumps(conversation_history, indent=2)}
 
-                QUESTIONING STRATEGY:
-                - Ask MAXIMUM 2-3 simple questions total
-                - Each question should feel natural and conversational (not interrogative)
-                - Pack 2-3 related details into ONE question, but keep it simple
-                - Avoid overwhelming technical jargon in questions
-                - Stop asking questions once you have: goal specifics, use case, timeline, and experience level
+                📊 CONVERSATION STATUS:
+                - Questions already asked: {assistant_question_count}
+                - Times user said "no idea" or similar: {user_unsure_count}
+                - HARD LIMIT: You can ask AT MOST {max(0, 3 - assistant_question_count)} more questions
                 
-                EXAMPLE GOOD QUESTIONS:
-                - "What specific area of Python interests you (like data science, web apps, automation), and how much time do you have to learn it?"
-                - "What's your current experience level, and what will you build with this skill?"
+                🚨 CRITICAL RULES:
+                1. NEVER ask more than 3 questions TOTAL across the entire conversation
+                2. If user says "no idea", "I don't know", "all", or gives vague answers → DO NOT ask about that topic again. Use smart defaults instead.
+                3. Ask MULTI-PART questions (combine 2-3 things in one question) to minimize back-and-forth
+                4. If you already have: what they want + who it's for + budget OR timeline → GENERATE THE PLAN immediately
+                5. You are NOT a survey. You are a helpful coach who fills in gaps with expertise.
+
+                🧠 SMART DEFAULTS (use these when user doesn't know):
+                - Budget unknown → Suggest a beginner-friendly budget range based on the domain
+                - Target audience unknown → Infer from the goal type
+                - KPIs unknown → Set standard industry benchmarks
+                - Experience unknown → Assume beginner and provide extra guidance
+                - Timeline unknown → Suggest a reasonable timeline based on the goal
                 
-                EXAMPLE BAD QUESTIONS (too complex/technical):
-                - "What speech recognition library or API, natural language processing techniques, feedback mechanisms, and deployment strategies do you plan to use?" (TOO MUCH!)
-                
-                GENERATE PLAN WHEN:
-                - You have the essentials: what, why, when, experience level
-                - You've asked 2-3 questions
-                
+                QUESTION STYLE (ask MULTI-PART, educational questions):
+                ✅ "Great! Two quick things: 1) What's your monthly budget for this? (most beginners start with $5-10/day) and 2) Do you already have any ad creatives or landing pages ready?"
+                ❌ Single-topic questions that drag out the conversation
+                ❌ Asking the same thing the user already answered
+                ❌ Asking for details the user clearly doesn't know
+
                 Response format - valid JSON only:
-                To generate plan: {{ "action": "generate_plan", "goal_title": "specific goal" }}
-                To ask question: {{ "action": "ask_question", "question": "simple conversational question" }}
+                To generate plan: {{ "action": "generate_plan", "goal_title": "specific goal title" }}
+                To ask question: {{ "action": "ask_question", "question": "warm, multi-part, educational question" }}
                 
                 Current date/time: {current_date}
                 """
                 
+                    response = await rate_limited_groq_call(
+                        async_client,
+                        messages=[{"role": "system", "content": decision_prompt}],
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.7,
+                        response_format={"type": "json_object"},
+                    )
+                    decision = json.loads(response.choices[0].message.content)
+
+                    if decision.get("action") == "ask_question":
+                        question = decision.get("question", "Could you tell me more about that?")
+                        await websocket.send_json({"message": question})
+                        conversation_history.append({"role": "assistant", "content": question})
+                        continue
+
+                    if decision.get("action") == "generate_plan":
+                        goal_details["title"] = decision.get("goal_title", "Untitled Goal")
+            
+            # 2. Generate or Revise the plan
+            # --- Step 2a: Classify the goal type to select the right example ---
+            goal_type = "general"
+            conv_text = " ".join([m["content"].lower() for m in conversation_history])
+            if any(kw in conv_text for kw in ["ads manager", "campaign", "ad campaign", "meta ads", "google ads", "brand awareness", "advertising", "marketing campaign", "facebook ads", "instagram ads", "ppc", "paid ads"]):
+                goal_type = "marketing"
+            elif any(kw in conv_text for kw in ["social media", "instagram", "tiktok", "youtube", "followers", "content creator", "influencer", "reels", "posting"]):
+                goal_type = "social_media"
+            elif any(kw in conv_text for kw in ["learn", "course", "python", "programming", "skill", "certification", "study", "education", "tutorial", "training"]):
+                goal_type = "learning"
+            elif any(kw in conv_text for kw in ["manufacturer", "supplier", "import", "export", "factory", "molding", "production", "industrial", "machine"]):
+                goal_type = "manufacturing"
+            elif any(kw in conv_text for kw in ["job", "career", "resume", "interview", "hiring", "employment", "apply", "position", "recruiter"]):
+                goal_type = "job_search"
+            
+            # --- Step 2b: Build the domain-specific example ---
+            domain_example = ""
+            
+            if goal_type == "marketing":
+                domain_example = """
+            DOMAIN: MARKETING/ADVERTISING CAMPAIGN
+            
+            🚨 CRITICAL - GENERATE EXACTLY 3 TASKS (not more, not less):
+            Task 1: Campaign Setup & Audience Targeting (create campaign, set objective, configure pixel, define audiences, set interests/age/location)
+            Task 2: Ad Creative, Copy & Budget (upload creatives, write copy, set budget allocation, configure bidding)
+            Task 3: Launch, Learning Phase & Optimization (publish campaign, what to monitor during learning phase, when/how to optimize after)
+            
+            EACH TASK must have UNIQUE:
+            - strategy_tips: Tips specific to THAT phase only (not generic "monitor performance")
+            - best_practices: DO/DON'T specific to THAT task (not repeated across tasks)
+            - common_mistakes: Mistakes relevant to THAT specific task only
+            - success_metrics: Metrics relevant to THAT phase (setup metrics ≠ scaling metrics)
+            - beginner_tips: Jargon relevant to THAT task only (don't repeat CPM definition in every task)
+            - pro_tips: Advanced tips for THAT specific phase
+            - example_content: Only for ad creative tasks (headlines, copy, CTAs). Other tasks get relevant templates instead.
+            - expected_results: Results expected from THAT specific phase with realistic numbers
+            
+            SUB-TASK SPECIFICITY REQUIREMENTS:
+            - NEVER say "Log in to Meta Ads Manager, click Create Campaign" — instead specify:
+              * EXACT campaign objective to select and WHY
+              * EXACT toggle/setting names (e.g., "Turn ON Advantage Campaign Budget", "Set optimization to Link Clicks")
+              * EXACT audience size to aim for (e.g., "2M - 10M people")
+              * EXACT interests to type in targeting (e.g., "Social media marketing, Hootsuite, Buffer, Later")
+              * EXACT placements to select/deselect
+              * EXACT ad format for each placement (1080x1080 for Feed, 1080x1920 for Stories)
+            - Every sub-task URL must link to a SPECIFIC page, not just adsmanager.meta.com
+            
+            CURRENCY RULES:
+            - If user mentions INR, rupees, or ₹ → use INR as primary currency
+            - If user mentions $, USD, dollars → use USD
+            - If budget is a round number like 50k without currency → ASK or show BOTH (INR and USD)
+            - Always break budget into: daily spend, per-ad-set spend, testing budget, scaling budget
+            
+            KEY MARKETING RULES:
+            - Provide 3+ ad copy variations (benefit-focused, problem-focused, social-proof focused)
+            - Include 4+ headline options
+            - Specify EXACT targeting: age range, location, interests, behaviors, exclusions
+            - Explain: Awareness → Traffic → Conversion funnel with timeline
+            - Warn about Learning Phase (3-7 days, don't touch anything)
+            - Include specific audience suggestions based on the user's product/service
+            """
+            elif goal_type == "social_media":
+                domain_example = """
+            DOMAIN: SOCIAL MEDIA GROWTH
+            Most social media tasks DON'T need email templates, documents, or free/paid tools!
+            Only include email_templates for collaboration/outreach tasks.
+            Only include free/paid options for scheduling/analytics tools.
+            
+            Required fields for each task:
+            - strategy_tips, best_practices, optimal_times, example_content (captions, hashtags, bio templates)
+            - why_this_matters, expected_results, common_mistakes, beginner_tips, pro_tips
+            - success_metrics, next_phase, timeline_summary
+            
+            Profile tasks: strategy_tips + example_content + timeline_summary
+            Content tasks: strategy_tips + best_practices + optimal_times + example_content  
+            Collab tasks: strategy_tips + email_templates (DM templates) + timeline_summary
+            Tool tasks: free_options + paid_options + total_cost_estimate
+            """
+            elif goal_type == "learning":
+                domain_example = """
+            DOMAIN: LEARNING/SKILL DEVELOPMENT
+            Required fields for each task:
+            - free_options: Free courses/platforms with specific URLs, what you get, limitations
+            - paid_options: Paid courses with prices, what you get, recommended_for
+            - youtube_tutorials: Specific video search queries with channel names and durations
+            - why_this_matters, expected_results, common_mistakes, beginner_tips, pro_tips
+            - total_cost_estimate: FREE PATH ($0) vs PAID PATH with specific amounts
+            - timeline_summary: Week-by-week learning progression
+            """
+            elif goal_type == "manufacturing":
+                domain_example = """
+            DOMAIN: MANUFACTURING/BUSINESS
+            CRITICAL: Provide COMPLETE company lists with real names, emails, websites, phone numbers.
+            Required fields: paid_options (companies with full contact info), email_templates (ready-to-send),
+            document_checklist (every document needed), total_cost_estimate, timeline_summary.
+            Also include: why_this_matters, expected_results, common_mistakes, beginner_tips, pro_tips.
+            NEVER say "find manufacturers" - YOU list them with complete contact info.
+            """
+            elif goal_type == "job_search":
+                domain_example = """
+            DOMAIN: JOB SEARCH/CAREER
+            Required fields: free_options (job platforms), paid_options (specific employers with career page URLs),
+            email_templates (cover letter and follow-up templates), youtube_tutorials (interview prep).
+            Also include: why_this_matters, expected_results, common_mistakes, beginner_tips, pro_tips,
+            pre_start_checklist, success_metrics, total_cost_estimate, timeline_summary.
+            """
+            else:
+                domain_example = """
+            DOMAIN: GENERAL
+            Detect the goal type from conversation and include only RELEVANT sections.
+            ALWAYS include: why_this_matters, expected_results, common_mistakes, beginner_tips, pro_tips,
+            success_metrics, next_phase, pre_start_checklist, timeline_summary, total_cost_estimate.
+            Only include email_templates, free/paid options, document_checklist if actually relevant.
+            """
+            
+            # ============================================================
+            # MULTI-CALL PLAN GENERATION
+            # Each task gets its own API call for deeper, non-repetitive content
+            # ============================================================
+
+            SHARED_RULES = """
+🚨 RULES:
+1. NEVER use "Research/Find/Search/Look up/Gather/Identify/Explore" in steps — give DIRECT actions only
+2. NEVER link to google.com — ONLY real direct URLs
+3. If user said "no idea" → YOU decide with expert defaults
+4. Assume beginner. Over-explain everything.
+5. NEVER say "understand the importance of" or "learn about" — NOT tips
+6. pro_tips = advanced expert tactics with numbers. strategy_tips = basic approach. They must be DIFFERENT.
+7. expected_results must have SPECIFIC NUMBERS, not vague text
+8. success_metrics format: "Metric: Good = X, Average = Y, Poor = Z"
+9. beginner_tips format: "Term (Abbrev) = plain English definition"
+10. Sub-task ai_content MUST be a single STRING (not an array). Format: "1. Go to [URL] 2. Click [button] 3. Select [option] ..."
+11. example_content (ad copy, headlines, CTAs) belongs ONLY in creative/copy tasks. Campaign setup and optimization tasks should NOT have example_content.
+12. KPI benchmarks must be CONSISTENT across all tasks — if CPC Good = ₹5 in one task, it must be ₹5 in all tasks.
+13. Each task's ad copy/headlines/CTAs must be COMPLETELY DIFFERENT themes — no rewording the same message.
+
+REAL URLs TO USE (for Meta/Facebook campaigns):
+- Ads Manager: https://business.facebook.com/adsmanager/manage/campaigns
+- Pixel/Events: https://business.facebook.com/events_manager/pixel
+- Audiences: https://business.facebook.com/adsmanager/audiences
+- Creative Hub: https://www.facebook.com/ads/creativehub
+- Ad Library: https://www.facebook.com/ads/library
+- Design tool: https://www.canva.com/create/facebook-ads/
+"""
+
+            if plan and user_input.lower() != "confirm":
+                # === REVISION MODE: Single call to revise existing plan ===
+                revision_prompt = f"""
+                Revise this plan based on the user's feedback. Keep all existing fields and structure. Only change what the user asked for.
+                
+                Current plan:
+                {json.dumps(plan, indent=2)}
+                
+                User's requested changes: {user_input}
+                
+                {SHARED_RULES}
+                {domain_example}
+                
+                Return the COMPLETE revised plan as valid JSON:
+                {{"plan": [... all 3 tasks with all fields ...]}}
+                
+                Current date/time: {current_date}
+                """
                 response = await rate_limited_groq_call(
                     async_client,
-                    messages=[{"role": "system", "content": decision_prompt}],
+                    messages=[{"role": "system", "content": revision_prompt}],
                     model="llama-3.3-70b-versatile",
                     temperature=0.7,
                     response_format={"type": "json_object"},
                 )
-                decision = json.loads(response.choices[0].message.content)
-
-                if decision.get("action") == "ask_question":
-                    question = decision.get("question", "Could you tell me more about that?")
-                    await websocket.send_json({"message": question})
-                    conversation_history.append({"role": "assistant", "content": question})
-                    continue
-
-                if decision.get("action") == "generate_plan":
-                    goal_details["title"] = decision.get("goal_title", "Untitled Goal")
-            
-            # 2. Generate or Revise the plan
-            plan_generation_prompt = f"""
-            Based on the following conversation, generate a HIGHLY SPECIFIC and ACTIONABLE plan for the user's goal.
-            
-            Conversation:
-            {json.dumps(conversation_history, indent=2)}
-            
-            YOUR TASK:
-            1. Create 4-7 main tasks that are concrete and measurable
-            2. Each task MUST have 2-5 specific sub-tasks that break it down into actionable steps
-            3. Be SPECIFIC - avoid generic advice like "practice" or "learn basics"
-            4. Include actual resources, tools, platforms, or methods where applicable
-            5. Make descriptions detailed with step-by-step "how-to" guidance
-            6. Calculate realistic deadlines based on the user's timeline
-            7. For sub-tasks that involve learning or using new tools, include helpful resources (YouTube videos and/or reference websites)
-            
-            OUTPUT FORMAT - Return ONLY valid JSON:
-            {{
-              "plan": [
-                {{
-                  "title": "Specific, measurable task title",
-                  "description": "Detailed step-by-step guide with specific actions, tools, and resources. Tell them EXACTLY what to do and how.",
-                  "deadline": "YYYY-MM-DD",
-                  "sub_tasks": [
-                    {{
-                      "title": "Specific sub-task action",
-                      "description": "Detailed explanation of what to do in this step. Describe the actual actions, NOT the resources. Example: 'Write simple Python scripts to practice using variables, data types, control structures, functions, and object-oriented programming concepts.'",
-                      "resources": {{
-                        "youtube_videos": [
-                          {{
-                            "title": "Video title that explains this concept",
-                            "search_query": "Exact YouTube search query",
-                            "description": "Brief note on what this video covers and why it's helpful (1 sentence)"
-                          }}
-                        ],
-                        "websites": [
-                          {{
-                            "name": "Documentation or tutorial name",
-                            "url": "https://actual-url.com",
-                            "description": "Brief note on what this website provides and how to use it (1 sentence)"
-                          }}
-                        ]
-                      }}
-                    }},
-                    {{
-                      "title": "Another specific sub-task",
-                      "description": "Detailed explanation of the actual steps to take"
-                    }}
-                  ]
-                }}
-              ]
-            }}
-            
-            RESOURCES GUIDELINES:
-            - Add resources to sub-tasks that involve learning new concepts, tools, or techniques
-            - YouTube videos should have specific titles and accurate search queries
-            - Websites should be real, official documentation or trusted tutorial sites
-            - Not every sub-task needs resources - only add them when they provide clear value
-            - For Python: use python.org, realpython.com, official library docs
-            - For ML/DL: use tensorflow.org, keras.io, scikit-learn.org, pytorch.org
-            - For tutorials: mention specific popular channels or course names
-            
-            ⚠️ CRITICAL SEPARATION RULE:
-            - SUB-TASK DESCRIPTION = What the user physically does (write code, practice exercises, build projects, solve problems)
-            - RESOURCES = Where they can learn HOW to do it (videos, documentation, tutorials)
-            - NEVER mention the resources in the description field
-            - NEVER say "use this website" or "watch this video" in the description
-            - Description should stand alone as actionable steps even without resources
-            
-            WRONG EXAMPLE (DON'T DO THIS):
-            {{
-              "title": "Learn Python basics",
-              "description": "Complete the Python tutorial on python.org covering variables and functions"  ❌ BAD - mentions the resource
-            }}
-            
-            RIGHT EXAMPLE (DO THIS):
-            {{
-              "title": "Learn Python basics", 
-              "description": "Study and practice Python fundamentals including variables, data types, control flow, functions, and basic OOP. Complete hands-on exercises for each topic.",  ✓ GOOD - describes actions
-              "resources": {{
-                "websites": [
-                  {{
-                    "name": "Python.org Official Tutorial",
-                    "url": "https://docs.python.org/3/tutorial/",
-                    "description": "Comprehensive tutorial covering all Python basics with examples and exercises."
-                  }}
-                ]
-              }}
-            }}
-
-            EXAMPLES OF GOOD VS BAD:
-            ❌ BAD: "Learn Python basics" - Too vague
-            ✅ GOOD: "Complete Python fundamentals course covering variables, loops, functions, and OOP using Python.org official tutorial"
-            
-            ❌ BAD: "Practice coding" - Not actionable
-            ✅ GOOD: "Solve 3 LeetCode Easy problems daily focusing on array manipulation and string operations"
-            
-            ❌ BAD Sub-task: "Study variables"
-            ✅ GOOD Sub-task: "Complete tutorial sections on int, float, string, and list data types with hands-on exercises"
-            
-            EXAMPLE SUB-TASK WITH RESOURCES:
-            {{
-              "title": "Master neural network fundamentals",
-              "description": "Study neural network architecture, activation functions, backpropagation, and gradient descent. Build 3 simple neural networks from scratch using NumPy, then implement the same networks using Keras. Complete all coding exercises and debug your implementations.",
-              "resources": {{
-                "youtube_videos": [
-                  {{
-                    "title": "Neural Networks Explained - 3Blue1Brown",
-                    "search_query": "3blue1brown neural networks",
-                    "description": "Visual explanation of how neural networks work with mathematical intuition."
-                  }}
-                ],
-                "websites": [
-                  {{
-                    "name": "Keras Official Getting Started Guide",
-                    "url": "https://keras.io/getting_started/",
-                    "description": "Official documentation with step-by-step tutorials and API reference for building neural networks."
-                  }}
-                ]
-              }}
-            }}
-            
-            ANOTHER EXAMPLE - PRACTICE FOCUSED:
-            {{
-              "title": "Practice Python scripting",
-              "description": "Write 10-15 Python scripts covering variables, loops, functions, file I/O, and error handling. Start with simple scripts like calculators and text processors, then move to more complex ones like data parsers. Test each script thoroughly.",
-              "resources": {{
-                "websites": [
-                  {{
-                    "name": "Python Practice Problems",
-                    "url": "https://www.practicepython.org/",
-                    "description": "Collection of Python exercises ranging from beginner to advanced with solutions."
-                  }}
-                ]
-              }}
-            }}
-            
-            CRITICAL RULES FOR SUB-TASKS:
-            1. The "description" field MUST explain the ACTUAL ACTIONS and STEPS to take
-            2. NEVER mention specific websites, courses, or videos in the description
-            3. Description should tell WHAT to do: "Write code", "Solve problems", "Build projects", "Practice exercises"
-            4. Resources section provides WHERE to learn and HOW to do it
-            5. User should understand the task from description alone, resources are helpers
-
-            CRITICAL: Every task MUST include the "sub_tasks" array with 2-5 items. Make them hyper-specific and actionable.
-            Add resources (YouTube videos and/or websites) to sub-tasks that involve learning new concepts.
-            Response must be valid JSON format only.
-            
-            Current date/time: {current_date}
-            """
-            if plan and user_input.lower() != "confirm":
-                plan_generation_prompt += f"\n\nThe user requested changes: {user_input}. Revise the plan accordingly while maintaining specificity and sub-tasks. Return valid JSON."
+                plan_data = json.loads(response.choices[0].message.content)
+                plan = plan_data.get("plan", [])
+            else:
+                # === INITIAL GENERATION: Multi-call for deep content per task ===
+                await websocket.send_json({"message": "🔄 Building your expert plan... generating detailed content for each phase."})
                 
-            response = await rate_limited_groq_call(
-                async_client,
-                messages=[{"role": "system", "content": plan_generation_prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.7,
-                response_format={"type": "json_object"},
-            )
-            plan_data = json.loads(response.choices[0].message.content)
-            plan = plan_data.get("plan", [])
+                # --- Call 1: Generate task skeleton (lightweight) ---
+                conv_summary = json.dumps(conversation_history, indent=2)
+                skeleton_prompt = f"""
+Based on this conversation, create a 3-task action plan outline.
+
+Conversation:
+{conv_summary}
+
+{domain_example}
+
+Return ONLY valid JSON with EXACTLY 3 tasks:
+{{
+  "tasks": [
+    {{"title": "Action Verb + Specific Task", "description": "One sentence measurable outcome", "deadline": "YYYY-MM-DD"}}
+  ]
+}}
+
+Each task title must start with an action verb.
+Current date/time: {current_date}
+"""
+                skeleton_response = await rate_limited_groq_call(
+                    async_client,
+                    messages=[{"role": "system", "content": skeleton_prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.7,
+                    response_format={"type": "json_object"},
+                )
+                skeleton = json.loads(skeleton_response.choices[0].message.content)
+                task_outlines = skeleton.get("tasks", [])[:3]
+                
+                # --- Calls 2-4: Generate each task in full detail ---
+                plan = []
+                covered_beginner_terms = []  # short keywords like "CPC", "CTR"
+                covered_pro_tips = []        # short phrases like "Lookalike Audiences"
+                covered_mistakes = []        # short phrases like "targeting too broad"
+                covered_strategy_tips = []   # short phrases
+                covered_metrics = []         # short phrases like "CPC Good=₹5"
+                
+                for idx, outline in enumerate(task_outlines):
+                    # Build "already covered" context to prevent repetition
+                    already_covered_section = ""
+                    if covered_beginner_terms:
+                        already_covered_section = f"""
+⛔⛔⛔ MANDATORY — READ THIS FIRST ⛔⛔⛔
+
+These EXACT terms/topics are BANNED in this task (already used in previous tasks):
+
+🚫 BANNED beginner terms (do NOT define these again): {', '.join(covered_beginner_terms)}
+🚫 BANNED pro tip topics (do NOT mention these): {', '.join(covered_pro_tips)}
+🚫 BANNED mistake topics (do NOT warn about these): {', '.join(covered_mistakes)}
+🚫 BANNED strategy topics (do NOT repeat these): {', '.join(covered_strategy_tips)}
+🚫 BANNED metrics (use same numbers but different metric names): {', '.join(covered_metrics)}
+
+If ANY of the above terms appear in your output, the response will be REJECTED.
+You MUST define DIFFERENT jargon terms, give DIFFERENT tactical advice, warn about DIFFERENT mistakes.
+"""
+                    
+                    is_later_phase = idx > 0
+                    later_phase_note = ""
+                    if is_later_phase:
+                        later_phase_note = "Sub-tasks for this phase must describe EDITING/OPTIMIZING the existing campaign, NOT creating a new one."
+                    
+                    # Determine if this task should have example_content
+                    task_title_lower = outline.get('title', '').lower()
+                    has_creative = any(kw in task_title_lower for kw in ['creative', 'copy', 'ad copy', 'content', 'design'])
+                    example_content_note = ""
+                    if has_creative:
+                        example_content_note = "This is a CREATIVE task — include example_content with 3+ unique ad_copy_variations, 4+ headlines, 3+ CTAs. Make them COMPLETELY different themes (benefit-focused, problem-focused, social-proof, urgency-based)."
+                    else:
+                        example_content_note = "This is NOT a creative task — do NOT include example_content. Focus on strategy, setup steps, and technical configuration."
+                    
+                    task_prompt = f"""
+{already_covered_section}
+
+Generate Task {idx + 1} of {len(task_outlines)} in FULL expert detail. This is ONE task — put ALL your depth into it.
+
+Conversation context:
+{conv_summary}
+
+TASK TO GENERATE:
+Title: {outline.get('title', '')}
+Description: {outline.get('description', '')}
+Deadline: {outline.get('deadline', '')}
+
+{example_content_note}
+
+{SHARED_RULES}
+{domain_example}
+{later_phase_note}
+
+📊 MINIMUM CONTENT (this is ONE task so be THOROUGH):
+- strategy_tips: 5+ specific instructions with numbers/thresholds
+- best_practices: 5+ DO/DON'T with WHY explanation
+- common_mistakes: 4+ using "MISTAKE: [specific] → FIX: [specific how-to]"
+- beginner_tips: 4+ term definitions in "Term = plain English" format
+- pro_tips: 4+ advanced tactical tips with specific numbers/thresholds
+- sub_tasks: 4-5, each with 7+ click-by-click steps
+
+🎯 ALL REQUIRED FIELDS in ai_provided_content:
+strategy_tips, best_practices, why_this_matters, expected_results (what_to_expect + what_not_to_expect + kpi_benchmarks), common_mistakes, success_metrics, pre_start_checklist, beginner_tips, pro_tips, next_phase, total_cost_estimate, timeline_summary
+
+Also include if relevant: example_content (ad_copy_variations, headlines, CTAs), optimal_times
+
+Return valid JSON for this ONE task:
+{{
+  "title": "...",
+  "description": "...",
+  "deadline": "YYYY-MM-DD",
+  "ai_provided_content": {{
+    "strategy_tips": ["5+ tips with numbers"],
+    "best_practices": ["5+ DO/DON'T with WHY"],
+    "example_content": {{"ad_copy_variations": ["3+ variations"], "headlines": ["4+ options"], "CTAs": ["3+ options"]}},
+    "optimal_times": "Best times with reasoning",
+    "total_cost_estimate": "Budget breakdown in user's currency",
+    "timeline_summary": "Day-by-day timeline for this phase",
+    "why_this_matters": "WHY this task matters",
+    "expected_results": {{
+      "what_to_expect": ["Specific outcomes with NUMBERS"],
+      "what_not_to_expect": ["Common misconceptions"],
+      "kpi_benchmarks": ["Metric: Good = X, Average = Y, Poor = Z"]
+    }},
+    "common_mistakes": ["MISTAKE: ... → FIX: ..."],
+    "success_metrics": ["Metric: Good = X, Average = Y, Poor = Z"],
+    "next_phase": "What comes after this task",
+    "pre_start_checklist": ["Items needed BEFORE starting"],
+    "beginner_tips": ["Term = plain English definition"],
+    "pro_tips": ["Advanced tactic with numbers"]
+  }},
+  "sub_tasks": [
+    {{
+      "title": "Specific action",
+      "description": "One sentence outcome.",
+      "ai_content": "7+ step click-by-click guide with exact URLs, button names, dropdown values, toggle states",
+      "resources": {{
+        "websites": [{{"name": "...", "url": "https://real-url.com/path", "description": "What to do here"}}]
+      }}
+    }}
+  ]
+}}
+
+Current date/time: {current_date}
+"""
+                    # Rate limit buffer between calls
+                    if idx > 0:
+                        await asyncio.sleep(1.5)
+                    
+                    task_response = await rate_limited_groq_call(
+                        async_client,
+                        messages=[{"role": "system", "content": task_prompt}],
+                        model="llama-3.3-70b-versatile",
+                        temperature=0.7,
+                        response_format={"type": "json_object"},
+                    )
+                    task_data = json.loads(task_response.choices[0].message.content)
+                    
+                    # Handle case where model wraps in {"plan": [...]} or {"task": {...}}
+                    if "plan" in task_data and isinstance(task_data["plan"], list):
+                        task_data = task_data["plan"][0]
+                    elif "task" in task_data and isinstance(task_data["task"], dict):
+                        task_data = task_data["task"]
+                    
+                    plan.append(task_data)
+                    
+                    # Track what was covered — extract SHORT keywords for effective banning
+                    ai_content = task_data.get("ai_provided_content", {})
+                    
+                    # Extract key terms from beginner_tips (e.g., "CPC", "CTR", "Ad Set")
+                    for tip in ai_content.get("beginner_tips", []):
+                        # Extract term name from patterns like "Term: CPC (Cost Per Click) = ..." or "CPC = ..."
+                        term_match = re.match(r'^(?:Term:\s*)?([A-Za-z\s/]+?)(?:\s*\(|\s*=)', tip)
+                        if term_match:
+                            covered_beginner_terms.append(term_match.group(1).strip())
+                        else:
+                            covered_beginner_terms.append(tip[:30])
+                    
+                    # Extract short phrases from pro_tips
+                    for tip in ai_content.get("pro_tips", []):
+                        # Take first meaningful phrase (before numbers/details)
+                        short = tip.split(',')[0].split('to ')[0] if ',' in tip or 'to ' in tip else tip[:50]
+                        covered_pro_tips.append(short.strip()[:50])
+                    
+                    # Extract mistake topics
+                    for m in ai_content.get("common_mistakes", []):
+                        mistake_match = re.match(r'MISTAKE:\s*(.+?)\s*→', m)
+                        if mistake_match:
+                            covered_mistakes.append(mistake_match.group(1).strip()[:50])
+                        else:
+                            covered_mistakes.append(m[:40])
+                    
+                    # Extract strategy tip keywords
+                    for tip in ai_content.get("strategy_tips", []):
+                        covered_strategy_tips.append(tip.split(',')[0].strip()[:50])
+                    
+                    # Extract metric names
+                    for m in ai_content.get("success_metrics", []):
+                        metric_match = re.match(r'(?:Metric:\s*)?(.+?)(?:\s*[-,:]\s*Good)', m)
+                        if metric_match:
+                            covered_metrics.append(metric_match.group(1).strip())
+                    
+                    logger.info(f"Generated task {idx + 1}/{len(task_outlines)}: {task_data.get('title', 'unknown')}")
 
             await websocket.send_json(
                 {
@@ -621,6 +972,18 @@ async def goal_setting_endpoint(websocket: WebSocket):
 
         for task_item in plan:
             task_id = str(uuid.uuid4())
+            
+            # Process sub_tasks with complete AI content
+            processed_sub_tasks = []
+            for sub in task_item.get("sub_tasks", []):
+                processed_sub_tasks.append({
+                    "title": sub.get("title"),
+                    "description": sub.get("description"),
+                    "ai_content": sub.get("ai_content"),  # Step-by-step execution guide
+                    "resources": sub.get("resources", {}),
+                    "status": "not started"
+                })
+            
             new_task = {
                 "task_id": task_id,
                 "title": task_item.get("title"),
@@ -630,6 +993,9 @@ async def goal_setting_endpoint(websocket: WebSocket):
                 "updated_at": datetime.now(timezone.utc),
                 "deadline": task_item.get("deadline"),
                 "progress": [],
+                # AI-provided intelligence content
+                "ai_provided_content": task_item.get("ai_provided_content", {}),
+                "sub_tasks": processed_sub_tasks,
             }
             new_goal["tasks"].append(new_task)
 
