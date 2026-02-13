@@ -40,8 +40,8 @@ DATA_STALE_AFTER_HOURS = 24
 DEFAULT_TIMEZONE = "UTC"
 
 # Minimum and maximum posting hours (in user's local timezone)
-# Prevents scheduling at times when people are sleeping (before 8 AM or after 11 PM)
-MINIMUM_POSTING_HOUR = 8   # 8:00 AM - earliest allowed posting time
+# Instagram pre-peak strategy requires 6 AM posting (2-3h before 9 AM peak)
+MINIMUM_POSTING_HOUR = 6   # 6:00 AM - earliest allowed posting time (for pre-peak strategy)
 MAXIMUM_POSTING_HOUR = 23  # 11:00 PM - latest allowed posting time
 
 # Conflict window in minutes - posts scheduled within this window are considered conflicts
@@ -67,29 +67,46 @@ PLATFORM_NAME_MAP = {
 
 PLATFORM_PEAK_HOURS = {
     'instagram': {
-        # Instagram: Visual content - users scroll during commute, lunch, and evening relaxation
-        # Day-wise best hours (engagement varies by day)
+        # Instagram PRE-PEAK Strategy (Meta Algorithm Warm-Up)
+        # KEY INSIGHT: Meta's algorithm takes 2-5 HOURS to distribute your post to
+        # the right audience. Posting AT peak traffic time (5PM, 7PM, 9PM) is WRONG.
+        # You must post 2-3 HOURS BEFORE peak so your post is "warmed up" and
+        # fully distributed by the time peak audience is scrolling.
+        #
+        # PROVEN DATA: 6:37 AM post = 144K likes (pre-peak before 9-11 AM traffic)
+        #              10:35 AM post = 102K likes (pre-peak before 12-2 PM traffic)
+        #              5 PM, 7 PM, 9:30 PM posts = LOW engagement (posted AT peak = too late)
+        #
+        # Peak Traffic Windows → Optimal Post Time (2-3 hours before):
+        #   Morning peak (9-11 AM)    → Post at 6-7 AM
+        #   Lunch peak (12-2 PM)      → Post at 9-10 AM
+        #   Evening peak (5-9 PM)     → Post at 2-4 PM
+        #   Night peak (9-11 PM)      → Post at 6-7 PM
+        #
+        # NEVER post at: 5 PM, 7 PM, 9 PM (high traffic = algorithm can't warm up in time)
         'day_wise_hours': {
-            'Monday': [8, 11, 17, 18, 19],
-            'Tuesday': [7, 8, 11, 18, 19, 20],
-            'Wednesday': [8, 11, 12, 18, 19, 20],
-            'Thursday': [8, 11, 17, 18, 19],
-            'Friday': [8, 11, 14, 17, 18, 19],
-            'Saturday': [10, 11, 14, 17, 19, 20, 21],
-            'Sunday': [10, 11, 14, 17, 18, 19, 20]
+            'Monday': [6, 7, 9, 10, 14, 15, 16],
+            'Tuesday': [6, 7, 9, 10, 14, 15, 16],
+            'Wednesday': [6, 7, 9, 10, 14, 15, 16],
+            'Thursday': [6, 7, 9, 10, 14, 15, 16],
+            'Friday': [6, 7, 9, 10, 14, 15, 16],
+            'Saturday': [7, 8, 9, 10, 14, 15, 16],
+            'Sunday': [7, 8, 9, 10, 14, 15, 16]
         },
-        'peak_hours': [7, 8, 9, 11, 12, 17, 18, 19, 20, 21],
-        'best_hours': [8, 11, 18, 20],
-        'weekend_hours': [10, 11, 14, 17, 19, 20, 21],
-        'weekday_hours': [7, 8, 11, 12, 17, 18, 19, 20],
+        'peak_hours': [6, 7, 8, 9, 10, 14, 15, 16],
+        'best_hours': [6, 7, 10, 14],  # Proven best: early morning + pre-lunch + pre-evening
+        'weekend_hours': [7, 8, 9, 10, 14, 15, 16],
+        'weekday_hours': [6, 7, 9, 10, 14, 15, 16],
         'optimal_minutes': [0, 15, 30, 45],
         'prime_minutes': [5, 20, 35, 50],
         'restrict_days': False,  # No day restriction - post any day
+        'avoid_hours': [17, 18, 19, 20, 21],  # NEVER post at 5-9 PM (high traffic zone)
         'engagement_multiplier': {
             'Monday': 0.95, 'Tuesday': 1.1, 'Wednesday': 1.15,
             'Thursday': 1.0, 'Friday': 1.05, 'Saturday': 0.95, 'Sunday': 0.9
         },
-        'description': 'Best at 8 AM commute, 11 AM break, 6-8 PM evening scroll.'
+        'algorithm_warmup_hours': 3,  # Meta needs ~3 hours to distribute content
+        'description': 'PRE-PEAK strategy: Post 2-3 hours BEFORE peak traffic. Best at 6-7 AM (before morning peak), 9-10 AM (before lunch peak), 2-4 PM (before evening peak). NEVER post at 5-9 PM.'
     },
     'youtube': {
         # YouTube Shorts-focused: Short-form vertical video - similar pattern to TikTok/Reels
@@ -340,12 +357,14 @@ PLATFORM_MINUTE_OFFSET = {
 
 BULK_POSTING_CONFIG = {
     'instagram': {
-        # Instagram 2024-2025 Research:
+        # Instagram 2024-2025 PRE-PEAK Strategy:
+        # CRITICAL: Meta's algorithm needs 2-5 HOURS to show your post to the right audience.
+        # - Post 2-3 hours BEFORE peak traffic, NOT during peak traffic
+        # - 6:37 AM posting → 144K likes (algorithm had time to warm up before 9 AM peak)
+        # - 10:35 AM posting → 102K likes (warmed up before 12 PM lunch peak)
+        # - NEVER post at 5 PM, 7 PM, 9:30 PM (too late, audience already scrolling)
         # - Feed posts + Reels: 2-3 per day MINIMUM for growth
         # - Reels get 22% more engagement than static posts
-        # - Posting 2x/day increases reach by 50% vs 1x/day
-        # - Carousel posts get 1.4x more reach than single images
-        # User requirement: 2 posts/day minimum
         'posts_per_day': {
             'min': 2,       # Minimum for engagement
             'optimal': 3,   # Sweet spot for growth
@@ -361,7 +380,7 @@ BULK_POSTING_CONFIG = {
         'min_hours_between_posts': 2,    # Minimum gap (reduced for higher frequency)
         'optimal_hours_between_posts': 3, # Optimal gap
         'spread_strategy': 'within_day',  # Multiple posts same day
-        'algorithm_notes': '2-3 posts/day minimum. Reels boost visibility. Consistency is key.',
+        'algorithm_notes': 'PRE-PEAK strategy: Post 2-3h before peak traffic. Meta needs 2-5h to distribute. Best: 6-7 AM, 9-10 AM, 2-4 PM.',
     },
     'youtube': {
         # YouTube Shorts-focused 2024-2025 Research:
@@ -740,25 +759,38 @@ class TimeSlotService:
             self.tz = pytz.UTC
             self.user_timezone = "UTC"
     
-    def _is_valid_posting_hour(self, hour: int) -> bool:
+    def _is_valid_posting_hour(self, hour: int, platform: str = None) -> bool:
         """
         Check if the hour is within acceptable posting hours.
         Prevents scheduling at times when people are sleeping.
+        Also enforces platform-specific avoid_hours (e.g., Instagram 5-9 PM).
         
-        Valid hours: 8 AM (8) to 11 PM (23) in user's local timezone.
+        Valid hours: 6 AM (6) to 11 PM (23) in user's local timezone.
         """
-        return MINIMUM_POSTING_HOUR <= hour <= MAXIMUM_POSTING_HOUR
+        if not (MINIMUM_POSTING_HOUR <= hour <= MAXIMUM_POSTING_HOUR):
+            return False
+        
+        # Check platform-specific avoid_hours
+        if platform:
+            platform_lower = platform.lower()
+            platform_config = PLATFORM_PEAK_HOURS.get(platform_lower, {})
+            avoid_hours = platform_config.get('avoid_hours', [])
+            if hour in avoid_hours:
+                return False
+        
+        return True
     
-    def _filter_valid_hours(self, hours: list) -> list:
+    def _filter_valid_hours(self, hours: list, platform: str = None) -> list:
         """
         Filter out hours that fall outside acceptable posting times.
         Returns only hours between MINIMUM_POSTING_HOUR and MAXIMUM_POSTING_HOUR.
+        Also removes platform-specific avoid_hours (e.g., Instagram avoids 5-9 PM).
         """
-        filtered = [h for h in hours if self._is_valid_posting_hour(h)]
+        filtered = [h for h in hours if self._is_valid_posting_hour(h, platform)]
         if not filtered:
             # If all hours were filtered, return safe defaults
-            logger.warning(f"All hours filtered out, using safe defaults (9, 12, 17, 19)")
-            return [9, 12, 17, 19]
+            logger.warning(f"All hours filtered out for {platform}, using safe defaults")
+            return [6, 7, 9, 10, 14, 15]
         return filtered
     
     async def get_optimal_time_for_platform(
@@ -940,8 +972,8 @@ class TimeSlotService:
         for slot in weighted_today_slots:
             hour = slot.get("hour", 12)
             
-            # Skip sleeping hours (before 8 AM / after 11 PM)
-            if not self._is_valid_posting_hour(hour):
+            # Skip sleeping hours AND platform-specific avoid hours (e.g., Instagram 5-9 PM)
+            if not self._is_valid_posting_hour(hour, platform):
                 continue
             
             minute = self._get_optimal_minute(platform, hour)
@@ -994,8 +1026,8 @@ class TimeSlotService:
             else:
                 today_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
         
-        # Filter out sleeping hours (before 8 AM / after 11 PM)
-        today_hours = self._filter_valid_hours(today_hours)
+        # Filter out sleeping hours AND platform-specific avoid hours
+        today_hours = self._filter_valid_hours(today_hours, platform)
         
         best_hours = set(platform_config.get('best_hours', []))
         sorted_hours = sorted(today_hours, key=lambda h: (h not in best_hours, h))
@@ -1081,8 +1113,8 @@ class TimeSlotService:
             else:
                 today_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
         
-        # Filter out sleeping hours (before 8 AM / after 11 PM)
-        today_hours = self._filter_valid_hours(today_hours)
+        # Filter out sleeping hours AND platform-specific avoid hours
+        today_hours = self._filter_valid_hours(today_hours, platform)
         
         # Sort hours by best engagement (best_hours first)
         best_hours = set(platform_config.get('best_hours', []))
@@ -1164,8 +1196,8 @@ class TimeSlotService:
             else:
                 tomorrow_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
         
-        # Filter out sleeping hours (before 8 AM / after 11 PM)
-        tomorrow_hours = self._filter_valid_hours(tomorrow_hours)
+        # Filter out sleeping hours AND platform-specific avoid hours
+        tomorrow_hours = self._filter_valid_hours(tomorrow_hours, platform)
         
         best_hours = set(platform_config.get('best_hours', []))
         sorted_hours = sorted(tomorrow_hours, key=lambda h: (h not in best_hours, h))
@@ -1235,8 +1267,8 @@ class TimeSlotService:
                 if not target_hours:
                     target_hours = platform_config.get('weekday_hours', platform_config.get('best_hours', [12]))
                 
-                # Filter out sleeping hours (before 8 AM / after 11 PM)
-                target_hours = self._filter_valid_hours(target_hours)
+                # Filter out sleeping hours AND platform-specific avoid hours
+                target_hours = self._filter_valid_hours(target_hours, platform)
                 
                 sorted_hours = sorted(target_hours, key=lambda h: (h not in best_hours, h))
                 day_multiplier = platform_config.get('engagement_multiplier', {}).get(target_day, 1.0)
@@ -1580,8 +1612,9 @@ class TimeSlotService:
                     day_hours = platform_config.get('weekday_hours', 
                                 platform_config.get('best_hours', [12]))
             
-            # Filter out sleeping hours (before 8 AM / after 11 PM)
-            day_hours = self._filter_valid_hours(day_hours)
+            # Filter out sleeping hours AND platform-specific avoid hours
+            # (e.g., Instagram avoids 5-9 PM because Meta needs 2-5h warm-up)
+            day_hours = self._filter_valid_hours(day_hours, platform_lower)
             
             # Shuffle hours with weighted randomization for variety
             best_hours = set(platform_config.get('best_hours', []))
@@ -1807,11 +1840,18 @@ class TimeSlotService:
             else "using platform research data"
         )
         
+        # Add pre-peak explanation for Instagram
+        platform_lower = platform.lower()
+        pre_peak_note = ""
+        if platform_lower == "instagram":
+            warmup_hours = PLATFORM_PEAK_HOURS.get('instagram', {}).get('algorithm_warmup_hours', 3)
+            pre_peak_note = f" Pre-peak strategy: Meta algorithm needs ~{warmup_hours}h to distribute your post before peak traffic."
+        
         return (
             f"Post {post_index}/{total_posts} scheduled for {day_text} at {formatted_time} ({tz_display}) - "
             f"{source_text}. "
             f"{target_day}'s engagement: {day_multiplier:.2f}x average. "
-            f"Content: {content_type}."
+            f"Content: {content_type}.{pre_peak_note}"
         )
     
     async def _find_next_available_slot(
@@ -1851,8 +1891,8 @@ class TimeSlotService:
                 else:
                     day_hours = platform_config.get('weekday_hours', [12])
             
-            # Filter out sleeping hours (before 8 AM / after 11 PM)
-            day_hours = self._filter_valid_hours(day_hours)
+            # Filter out sleeping hours AND platform-specific avoid hours
+            day_hours = self._filter_valid_hours(day_hours, platform)
             
             best_hours = set(platform_config.get('best_hours', []))
             day_multiplier = platform_config.get('engagement_multiplier', {}).get(target_day, 1.0)
