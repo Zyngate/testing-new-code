@@ -83,7 +83,7 @@ PLATFORM_PEAK_HOURS = {
         #   Evening peak (5-9 PM)     → Post at 2-4 PM
         #   Night peak (9-11 PM)      → Post at 6-7 PM
         #
-        # NEVER post at: 5 PM, 7 PM, 9 PM (high traffic = algorithm can't warm up in time)
+        # HARD CUTOFF: No posts after 4:45 PM. NEVER post at 5-9 PM.
         'day_wise_hours': {
             'Monday': [6, 7, 9, 10, 14, 15, 16],
             'Tuesday': [6, 7, 9, 10, 14, 15, 16],
@@ -100,7 +100,9 @@ PLATFORM_PEAK_HOURS = {
         'optimal_minutes': [0, 15, 30, 45],
         'prime_minutes': [5, 20, 35, 50],
         'restrict_days': False,  # No day restriction - post any day
-        'avoid_hours': [17, 18, 19, 20, 21],  # NEVER post at 5-9 PM (high traffic zone)
+        'avoid_hours': [17, 18, 19, 20, 21, 22, 23],  # NEVER post at 5 PM or later
+        'max_posting_hour': 16,    # Latest allowed hour (4 PM)
+        'max_posting_minute': 45,  # Latest allowed minute in that hour (4:45 PM hard cutoff)
         'engagement_multiplier': {
             'Monday': 0.95, 'Tuesday': 1.1, 'Wednesday': 1.15,
             'Thursday': 1.0, 'Friday': 1.05, 'Saturday': 0.95, 'Sunday': 0.9
@@ -779,6 +781,42 @@ class TimeSlotService:
                 return False
         
         return True
+
+    def _is_valid_posting_time(self, hour: int, minute: int, platform: str = None) -> bool:
+        """
+        Check if hour:minute is within acceptable posting times.
+        Enforces platform-specific max_posting_hour/max_posting_minute cutoffs.
+        E.g., Instagram hard cutoff at 4:45 PM — no posts after 16:45.
+        """
+        if not self._is_valid_posting_hour(hour, platform):
+            return False
+        
+        if platform:
+            platform_lower = platform.lower()
+            platform_config = PLATFORM_PEAK_HOURS.get(platform_lower, {})
+            max_hour = platform_config.get('max_posting_hour')
+            max_minute = platform_config.get('max_posting_minute')
+            if max_hour is not None and max_minute is not None:
+                if hour > max_hour or (hour == max_hour and minute > max_minute):
+                    return False
+        
+        return True
+
+    def _cap_minute_for_platform(self, hour: int, minute: int, platform: str = None) -> int:
+        """
+        Cap the minute value if it would exceed the platform's max posting time.
+        E.g., Instagram hour 16 → minute capped at 45 (4:45 PM cutoff).
+        Returns the (possibly capped) minute value.
+        """
+        if platform:
+            platform_lower = platform.lower()
+            platform_config = PLATFORM_PEAK_HOURS.get(platform_lower, {})
+            max_hour = platform_config.get('max_posting_hour')
+            max_minute = platform_config.get('max_posting_minute')
+            if max_hour is not None and max_minute is not None:
+                if hour == max_hour and minute > max_minute:
+                    return max_minute
+        return minute
     
     def _filter_valid_hours(self, hours: list, platform: str = None) -> list:
         """
@@ -977,6 +1015,11 @@ class TimeSlotService:
                 continue
             
             minute = self._get_optimal_minute(platform, hour)
+            minute = self._cap_minute_for_platform(hour, minute, platform)  # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+            
+            # Skip if this time exceeds platform's max posting time
+            if not self._is_valid_posting_time(hour, minute, platform):
+                continue
             
             proposed_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             
@@ -1035,6 +1078,11 @@ class TimeSlotService:
         
         for hour in sorted_hours:
             minute = self._get_optimal_minute(platform, hour)
+            minute = self._cap_minute_for_platform(hour, minute, platform)  # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+            
+            # Skip if this time exceeds platform's max posting time
+            if not self._is_valid_posting_time(hour, minute, platform):
+                continue
             
             proposed_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             
@@ -1126,6 +1174,11 @@ class TimeSlotService:
         # Try each hour for TODAY
         for hour in sorted_hours:
             minute = self._get_optimal_minute(platform, hour)
+            minute = self._cap_minute_for_platform(hour, minute, platform)  # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+            
+            # Skip if this time exceeds platform's max posting time
+            if not self._is_valid_posting_time(hour, minute, platform):
+                continue
             
             proposed_time = now.replace(
                 hour=hour,
@@ -1206,6 +1259,11 @@ class TimeSlotService:
         
         for hour in sorted_hours:
             minute = self._get_optimal_minute(platform, hour)
+            minute = self._cap_minute_for_platform(hour, minute, platform)  # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+            
+            # Skip if this time exceeds platform's max posting time
+            if not self._is_valid_posting_time(hour, minute, platform):
+                continue
             
             proposed_time = tomorrow.replace(
                 hour=hour,
@@ -1275,6 +1333,11 @@ class TimeSlotService:
                 
                 for hour in sorted_hours:
                     minute = self._get_optimal_minute(platform, hour)
+                    minute = self._cap_minute_for_platform(hour, minute, platform)  # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+                    
+                    # Skip if this time exceeds platform's max posting time
+                    if not self._is_valid_posting_time(hour, minute, platform):
+                        continue
                     
                     proposed_time = target_date.replace(
                         hour=hour,
@@ -1669,6 +1732,11 @@ class TimeSlotService:
                 minute_variation += random.randint(-7, 7)  # Extra random jitter
                 minute = max(0, min(59, minute + minute_variation))
                 
+                # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+                minute = self._cap_minute_for_platform(hour, minute, platform_lower)
+                if not self._is_valid_posting_time(hour, minute, platform_lower):
+                    continue
+                
                 proposed_time = target_date.replace(
                     hour=hour, minute=minute, second=0, microsecond=0
                 )
@@ -1908,6 +1976,11 @@ class TimeSlotService:
                 minute += ((post_index * 7 + day_offset * 11) % 20)  # Add day+index variation
                 minute += random.randint(-5, 5)  # Extra jitter
                 minute = max(0, min(59, minute))
+                
+                # Enforce platform cutoff (e.g., Instagram 4:45 PM)
+                minute = self._cap_minute_for_platform(hour, minute, platform)
+                if not self._is_valid_posting_time(hour, minute, platform):
+                    continue
                 
                 proposed_time = target_date.replace(
                     hour=hour, minute=minute, second=0, microsecond=0
