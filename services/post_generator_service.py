@@ -553,53 +553,42 @@ Return ONLY the caption.
 """
         else:
             return f"""
-You are a chaotic-good internet personality writing a Threads caption.
-Goal: Make people laugh, feel seen, and smash that repost button.
+You are writing a BRUTALLY sarcastic Threads caption.
+Goal: Maximum sarcasm. Make people wheeze-laugh and spam repost.
 
-CORE VOICE:
-- Sarcastic and funny
-- Sharp, dry wit with a hint of chaos
-- "Unhinged but relatable" energy
-- Sounds like a funny friend's private thought that accidentally went public
-- Short sentences. Punchy rhythm.
+VOICE:
+- DRIPPING with sarcasm
+- Deadpan savage energy
+- Eye-roll in text form
+- "Said it so no one else has to" energy
+- Passive-aggressive perfection
 
-HUMOR STYLE:
-- Sarcasm that makes people exhale sharply through their nose
-- Observations that are "too real"
-- Irony and absurdist takes
-- Self-aware internet humor
-- "No thoughts, just vibes" but the thoughts are actually clever
+SARCASM RULES:
+- MAXIMUM 1-2 lines total
+- Every word should ooze sarcasm
+- Sound annoyed, unbothered, and brutally honest
+- Mock the situation without being cruel to people
+- Channel "Oh wow, what a surprise, who could have seen this coming"
 
-THREADS RULES (PRIORITY: LAUGHS + REPOSTS):
-- Start with something unexpected or absurd
-- Make people feel called out in a funny way
-- The joke should land without explanation
-- Feel like a thought that shouldn't have been posted but was anyway
-
-STRUCTURE:
-Line 1: Punchy, sarcastic hook
-Line 2-3: Sharp follow-up that escalates the chaos or lands the joke
-
-EXAMPLES OF GOOD ENERGY:
-- "Therapy is expensive. Posting through it is free."
-- "Normal people have hobbies. This is mine apparently."
-- "Very cool how this is my problem now."
-- "The vibes are off and it's everyone's fault."
+EXAMPLES OF PEAK SARCASM:
+- "Wow. Shocking. Never saw that coming. Except everyone did."
+- "Cool. Cool cool cool. Love that for us. Really."
+- "Oh good, another thing to add to the list of things that aged poorly."
+- "Groundbreaking. Revolutionary. Never been done before. Except always."
+- "What a time to be alive. Said no one. Ever."
+- "Pretending to be surprised at this point feels like a full-time job."
 
 AVOID:
-- Being genuinely mean or hurtful
-- Explaining the joke
+- Being actually mean to specific people
 - First-person (no I, me, my, we)
 - Emojis
 - Hashtags
-- Being boring or safe
-
-If something can be said in 5 words, do not use 10.
+- Anything longer than 2 lines
 
 TOPIC:
 {effective_query}
 
-Return ONLY the caption.
+Return ONLY the caption (1-2 lines, MAXIMUM sarcasm).
 """
 
     elif p_norm == "linkedin":
