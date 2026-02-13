@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, List
 from groq import Groq
 import os
 from config import logger
+from services.recommendation_plan_integration import get_recommendation_context_sync
 
 # Groq Setup
 GROQ_API_KEY = os.getenv('GROQ_API_WEEKLY_PLANNER')
@@ -21,6 +22,64 @@ SUPPORTED_PLATFORMS = ['instagram', 'linkedin', 'facebook', 'threads', 'youtube'
 class WeeklyPlanner:
     def __init__(self):
         self.model = "llama-3.3-70b-versatile"
+    
+    def generate_subtask_resources(self, goal: str, task_title: str, subtask_title: str) -> Optional[Dict[str, Any]]:
+        """Generate learning resources (YouTube videos and websites) for a specific subtask"""
+        if not groq_client:
+            return None
+        
+        try:
+            prompt = f"""
+You are a learning resource curator. Generate helpful learning resources for this subtask.
+
+Goal: {goal}
+Task: {task_title}
+Subtask: {subtask_title}
+
+Provide 1-2 YouTube videos and 1-2 websites that would help complete this specific subtask.
+Be practical and specific - only suggest resources that directly help with this action.
+
+Return ONLY valid JSON in this exact format:
+{{
+  "youtube_videos": [
+    {{
+      "title": "Specific video topic",
+      "search_query": "Exact YouTube search term"
+    }}
+  ],
+  "websites": [
+    {{
+      "name": "Website/documentation name",
+      "url": "https://actual-url.com"
+    }}
+  ]
+}}
+
+If no relevant resources are needed for this subtask, return empty arrays.
+"""
+            
+            response = groq_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a learning resource curator. Return only valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"},
+                max_tokens=500
+            )
+            
+            resources = json.loads(response.choices[0].message.content)
+            
+            # Only return if there are actual resources
+            if (resources.get("youtube_videos") and len(resources["youtube_videos"]) > 0) or \
+               (resources.get("websites") and len(resources["websites"]) > 0):
+                return resources
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error generating subtask resources: {str(e)}")
+            return None
     
     def calculate_weeks(self, start_date: datetime, end_date: datetime) -> int:
         """Calculate number of weeks between dates"""
@@ -45,8 +104,197 @@ class WeeklyPlanner:
         # Default to general
         return 'general', None
     
+    def _generate_week_outline(self, goal: str, weeks: int, start_date: datetime, end_date: datetime, recommendation_context: str = "") -> Optional[List[Dict]]:
+        """
+        Phase 1: Generate a unique week-by-week outline (milestones + task titles only).
+        This prevents repetition by planning all weeks at a high level BEFORE filling details.
+        Small output = model stays creative and doesn't fall into copy-paste patterns.
+        """
+        if not groq_client:
+            return None
+        
+        try:
+            prompt = f"""Create a UNIQUE week-by-week outline for this {weeks}-week plan.
+
+Goal: {goal}
+Timeline: {start_date.strftime('%m/%d/%Y')} to {end_date.strftime('%m/%d/%Y')}
+{recommendation_context}
+
+CRITICAL UNIQUENESS RULES:
+1. Each week has a UNIQUE milestone, focus_area, and 5 UNIQUE task titles (Mon-Fri)
+2. NO task title may repeat or be similar across ANY weeks
+3. A task type may appear at MOST ONCE across ALL weeks:
+   - "Monitor comments" → max 1 time total
+   - "Create social media posts" → max 1 time total
+   - "Review/adjust strategy" → max 1 time total
+   - "Engage audience" → max 1 time total
+4. Setup tasks (create accounts, set up analytics, install tools) → Week 1 ONLY
+5. Each week MUST introduce a DIFFERENT type of work. Vary between:
+   - Content creation (different pieces each time)
+   - SEO optimization (technical SEO, on-page, off-page — each once)
+   - Email marketing (list building, sequences, newsletters)
+   - Outreach (guest posts, partnerships, backlinks)
+   - Repurposing (turn blog to video, infographic, podcast)
+   - Community building (forums, comments, groups)
+   - Paid promotion (ads setup, retargeting, A/B testing)
+   - Data analysis (traffic, conversions, user behavior)
+   - Technical improvements (site speed, mobile, schema markup)
+   - Networking (collaborations, interviews, webinars)
+6. Later weeks must BUILD on earlier weeks' results (reference prior output)
+7. Week titles must show clear PROGRESSION toward the goal
+
+BANNED words in task titles: "Research", "Find", "Search", "Identify", "Explore", "Investigate", "Brainstorm", "Gather", "Determine"
+
+Return ONLY this JSON:
+{{
+  "weeks": [
+    {{
+      "week_number": 1,
+      "milestone": "Unique milestone for this week",
+      "focus_area": "Unique focus area",
+      "tasks": ["Mon task title", "Tue task title", "Wed task title", "Thu task title", "Fri task title"]
+    }}
+  ]
+}}"""
+
+            response = groq_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are a creative project planner. Generate MAXIMALLY DIVERSE week outlines. Every single week must have completely different task types — NO repetition allowed. Return JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                response_format={"type": "json_object"},
+                max_tokens=min(1500 + (weeks * 120), 8000)
+            )
+            
+            outline = json.loads(response.choices[0].message.content)
+            weeks_data = outline.get("weeks", [])
+            
+            if weeks_data and len(weeks_data) >= weeks * 0.7:  # Accept if at least 70% of weeks generated
+                logger.info(f"Phase 1 outline generated: {len(weeks_data)} weeks with unique tasks")
+                return weeks_data
+            else:
+                logger.warning(f"Outline incomplete: got {len(weeks_data)} weeks, expected {weeks}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Outline generation failed, proceeding without: {e}")
+            return None
+    
+    def _post_process_plan(self, plan_dict: Dict) -> Dict:
+        """
+        Post-process the generated plan to:
+        1. Replace banned words ONLY at the start of titles (context-safe)
+        2. Ensure recommendation fields exist on all tasks
+        3. Detect and log repetitive patterns
+        """
+        import re
+        
+        # Only replace banned words when they START a title/sentence.
+        # This avoids nonsense like "Apply high-authority sites in the niche"
+        # (from "Search for high-authority sites in the niche").
+        TITLE_START_REPLACEMENTS = {
+            r'^Research\s+and\s+': '',           # "Research and analyze..." → "Analyze..."
+            r'^Research\s+': 'Apply ',           # "Research trends" → "Apply trends"
+            r'^Find\s+': 'Select ',              # "Find tools" → "Select tools"
+            r'^Search\s+for\s+': 'Select ',      # "Search for sites" → "Select sites"
+            r'^Look\s+up\s+': 'Review ',         # "Look up docs" → "Review docs"
+            r'^Gather\s+': 'Compile ',           # "Gather data" → "Compile data"
+            r'^Identify\s+': 'Define ',          # "Identify audience" → "Define audience"
+            r'^Explore\s+': 'Implement ',        # "Explore options" → "Implement options"
+            r'^Investigate\s+': 'Analyze ',      # "Investigate issue" → "Analyze issue"
+            r'^Determine\s+': 'Establish ',      # "Determine scope" → "Establish scope"
+            r'^Discover\s+': 'Leverage ',        # "Discover trends" → "Leverage trends"
+            r'^Brainstorm\s+': 'Draft ',         # "Brainstorm ideas" → "Draft ideas"
+        }
+        
+        # For descriptions, just strip the verb prefix if it starts with a banned word
+        BANNED_WORDS_RE = re.compile(
+            r'\b(research|find|search for|look up|gather|identify|explore|'
+            r'investigate|determine|discover|brainstorm)\b',
+            re.IGNORECASE
+        )
+        
+        def fix_title(text: str) -> str:
+            """Fix banned words only at the START of titles — safe replacements."""
+            if not text:
+                return text
+            for pattern, replacement in TITLE_START_REPLACEMENTS.items():
+                new_text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+                if new_text != text:
+                    # Ensure first char is capitalized after replacement
+                    if new_text and new_text[0].islower():
+                        new_text = new_text[0].upper() + new_text[1:]
+                    return new_text
+            return text
+        
+        def check_description(text: str, task_title: str) -> str:
+            """Log banned words in descriptions but don't blindly replace mid-sentence."""
+            if not text:
+                return text
+            matches = BANNED_WORDS_RE.findall(text)
+            if matches:
+                logger.info(f"Banned words in description of '{task_title}': {matches} (kept as-is for context)")
+            return text
+        
+        # Track title frequencies to detect repetition
+        title_counts = {}
+        
+        for week in plan_dict.get("weekly_plans", []):
+            for task in week.get("tasks", []):
+                # Fix banned words in title (start-of-title only — safe)
+                task["title"] = fix_title(task.get("title", ""))
+                # Check descriptions but don't blindly replace mid-sentence
+                task["description"] = check_description(task.get("description", ""), task["title"])
+                
+                # Track repetitive titles
+                title_key = task["title"].lower().strip()
+                title_counts[title_key] = title_counts.get(title_key, 0) + 1
+                
+                # Ensure recommendation fields exist
+                if "recommended_posting_time" not in task:
+                    task["recommended_posting_time"] = None
+                if "target_platform" not in task:
+                    task["target_platform"] = None
+                
+                # Fix banned words in subtasks (title-start only)
+                for subtask in task.get("subtasks", []):
+                    if isinstance(subtask, dict):
+                        subtask["title"] = fix_title(subtask.get("title", ""))
+                        if "description" in subtask:
+                            subtask["description"] = check_description(subtask.get("description", ""), subtask.get("title", ""))
+        
+        # Log repetition warnings
+        repeated = {k: v for k, v in title_counts.items() if v > 1}
+        if repeated:
+            logger.warning(f"Repetitive task titles detected (post-processing): {repeated}")
+        
+        return plan_dict
+    
+    def _build_outline_constraint(self, outline: List[Dict], weeks: int, start_date: datetime) -> str:
+        """Convert Phase 1 outline into a prompt constraint for Phase 2."""
+        if not outline:
+            return ""
+        
+        lines = ["\n\n🎯 MANDATORY WEEK STRUCTURE (YOU MUST USE THESE EXACT TITLES — DO NOT CHANGE THEM):"]
+        for week_data in outline[:weeks]:
+            wn = week_data.get("week_number", "?")
+            milestone = week_data.get("milestone", "")
+            focus = week_data.get("focus_area", "")
+            tasks = week_data.get("tasks", [])
+            
+            lines.append(f"\nWeek {wn}: milestone=\"{milestone}\", focus=\"{focus}\"")
+            days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+            for i, task_title in enumerate(tasks[:5]):
+                day = days[i] if i < len(days) else days[0]
+                lines.append(f"  {day}: \"{task_title}\"")
+        
+        lines.append("\n⚠️ USE THE EXACT TASK TITLES ABOVE. Add detailed descriptions, subtasks, and real data for each.")
+        return "\n".join(lines)
+    
     def generate_weekly_plan(self, goal: str, start_date: datetime, end_date: datetime, previous_plan: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
-        """Generate a weekly action plan using Groq AI"""
+        """Generate a weekly action plan using Groq AI, integrated with recommendation engine data."""
         if not groq_client:
             raise Exception("Groq API key not configured")
         
@@ -56,135 +304,37 @@ class WeeklyPlanner:
         if weeks > 20:
             weeks = 20
         
-        # Dynamic context — no predefined goal type
-        context = (
-            "Analyze the goal text and derive needed themes, skills, tasks, "
-            "and progress structure based on logical reasoning."
-        )
+        # Fetch recommendation engine context for social media goals
+        recommendation_context = get_recommendation_context_sync(goal)
         
-        # 5 task per week rule
-        focus_areas = (
-            "Each week must include exactly 5 tasks assigned strictly to weekdays "
-            "(Monday to Friday). Saturday and Sunday must not contain any tasks."
-        )
+        # Phase 1: Generate unique week outline to prevent repetition
+        outline = self._generate_week_outline(goal, weeks, start_date, end_date, recommendation_context)
+        outline_constraint = self._build_outline_constraint(outline, weeks, start_date) if outline else ""
         
-        prompt = f"""
-You are a senior AI planning system. Create a structured weekly plan.
+        prompt = f"""You are a senior AI planning system and domain expert. Create a detailed weekly plan.
 
-Goal:
-{goal}
-
+Goal: {goal}
 Timeline: {start_date.strftime('%m/%d/%Y')} to {end_date.strftime('%m/%d/%Y')}
 Duration: {weeks} weeks
+{recommendation_context}
+{outline_constraint}
 
-Context:
-{context}
+RULES:
+1. Return ONLY valid JSON. {weeks} weeks, exactly 5 tasks/week (Mon-Fri only), 2-3 subtasks per task.
+2. YOU are the domain expert. Every description MUST contain REAL specifics — actual numbers, actual tools, actual steps, actual content. User executes immediately with zero Googling.
+3. BANNED title/subtask words: "Research", "Find", "Search", "Identify", "Explore", "Investigate", "Brainstorm", "Gather", "Determine", "Discover", "Look up"
+4. Subtasks = execution actions with embedded data. Verbs: Write, Publish, Configure, Apply, Draft, Submit, Schedule, Deploy, Launch, Record.
+5. Subtasks can include optional resources: {{"youtube_videos": [{{"title": "...", "search_query": "..."}}], "websites": [{{"name": "...", "url": "..."}}]}}
+6. For social media tasks: set recommended_posting_time and target_platform fields.
 
-⚠️ STRICT RULES:
-1. JSON ONLY — no extra words, no markdown.
-2. Weekly plan MUST contain exactly {weeks} week blocks.
-3. EACH WEEK must contain exactly 5 tasks.
-4. Tasks MUST only be scheduled Monday–Friday.
-5. No weekend tasks allowed.
-6. Each task must be unique.
-7. Do not leave any field empty.
-8. DO NOT include overall_strategy.
-9. EACH TASK MUST have 2-3 actionable subtasks that are concrete steps to complete the task.
+QUALITY STANDARD (every description must match this detail level):
+BAD: "Write blog post about AI trends"
+GOOD: "Write 2000-word post: '5 AI Agent Frameworks Reshaping Enterprise Automation in 2026' covering LangGraph (event-driven graphs), CrewAI (role-based agents), AutoGen (multi-agent conversations), Semantic Kernel (.NET integration), BabyAGI (task-driven). Include comparison table, code snippet for each, 3 use cases per framework. Target keyword: 'AI agent frameworks 2026' (8.1K monthly searches, difficulty: 34)."
 
-SUBTASKS GUIDELINES:
-- Subtasks must be specific actions/solutions, NOT suggestions
-- Each subtask should be a concrete step that directly accomplishes part of the main task
-- Use action verbs: "Create", "Write", "Install", "Configure", "Test", "Review"
-- Bad example: "Consider learning about X" ❌
-- Good example: "Complete tutorial section 1-3" ✓
+JSON structure:
+{{"weekly_plans": [{{"week_number": 1, "week_start": "{start_date.strftime('%m/%d/%Y')}", "week_end": "{(start_date + timedelta(days=6)).strftime('%m/%d/%Y')}", "milestone": "...", "focus_area": "...", "tasks": [{{"task_id": "task_w1_t1", "title": "...", "description": "DETAILED with real data/numbers/names", "priority": "High|Medium|Low", "estimated_hours": 3, "dependencies": [], "day_of_week": "Monday", "status": "pending", "recommended_posting_time": null, "target_platform": null, "subtasks": [{{"title": "Specific action with real data embedded", "resources": {{}}}}]}}]}}]}}
 
-JSON FORMAT TEMPLATE:
-{{
-  "weekly_plans": [
-    {{
-      "week_number": 1,
-      "week_start": "{start_date.strftime('%m/%d/%Y')}",
-      "week_end": "{(start_date + timedelta(days=6)).strftime('%m/%d/%Y')}",
-      "milestone": "Specific target of the week",
-      "focus_area": "Theme of the week",
-      "tasks": [
-        {{
-          "task_id": "task_w1_t1",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "High",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Monday",
-          "status": "pending",
-          "subtasks": [
-            "Concrete action step 1",
-            "Concrete action step 2",
-            "Concrete action step 3"
-          ]
-        }},
-        {{
-          "task_id": "task_w1_t2",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Medium",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Tuesday",
-          "status": "pending",
-          "subtasks": [
-            "Concrete action step 1",
-            "Concrete action step 2"
-          ]
-        }},
-        {{
-          "task_id": "task_w1_t3",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Medium",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Wednesday",
-          "status": "pending",
-          "subtasks": [
-            "Concrete action step 1",
-            "Concrete action step 2",
-            "Concrete action step 3"
-          ]
-        }},
-        {{
-          "task_id": "task_w1_t4",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Low",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Thursday",
-          "status": "pending",
-          "subtasks": [
-            "Concrete action step 1",
-            "Concrete action step 2"
-          ]
-        }},
-        {{
-          "task_id": "task_w1_t5",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Low",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Friday",
-          "status": "pending",
-          "subtasks": [
-            "Concrete action step 1",
-            "Concrete action step 2",
-            "Concrete action step 3"
-          ]
-        }}
-      ]
-    }}
-  ]
-}}
+Each week_start = previous + 7 days. task_id format: task_wN_tM.
 """
         
         try:
@@ -192,12 +342,12 @@ JSON FORMAT TEMPLATE:
             response = groq_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "Return pure JSON output only."},
+                    {"role": "system", "content": "You are a senior expert who provides COMPLETE, READY-TO-USE data — actual trends, numbers, titles, strategies. The user NEVER needs to Google anything. CRITICAL: Each week MUST be completely UNIQUE — different task titles, different focus, different deliverables. NEVER repeat the same task pattern across weeks. Week N must build on Week N-1 results. Return pure JSON output only."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.15,
+                temperature=0.4,
                 response_format={"type": "json_object"},
-                max_tokens=3000 + (weeks * 200)
+                max_tokens=min(10000 + (weeks * 800), 32000)
             )
             
             content = response.choices[0].message.content
@@ -224,10 +374,26 @@ JSON FORMAT TEMPLATE:
                     if "subtasks" not in task or not task["subtasks"] or len(task["subtasks"]) == 0:
                         # Generate default actionable subtasks based on task title
                         task["subtasks"] = [
-                            f"Break down {task['title']} into smaller steps",
-                            f"Execute the main action for {task['title']}",
-                            f"Review and verify {task['title']} completion"
+                            {"title": f"Break down {task['title']} into smaller steps"},
+                            {"title": f"Execute the main action for {task['title']}"},
+                            {"title": f"Review and verify {task['title']} completion"}
                         ]
+                    else:
+                        # Normalize subtasks - handle both string and object formats
+                        normalized_subtasks = []
+                        for subtask in task["subtasks"]:
+                            if isinstance(subtask, str):
+                                # Convert string subtask to object format
+                                normalized_subtasks.append({"title": subtask})
+                            elif isinstance(subtask, dict):
+                                # Ensure dict has title
+                                if "title" not in subtask:
+                                    subtask["title"] = "Subtask action"
+                                normalized_subtasks.append(subtask)
+                        task["subtasks"] = normalized_subtasks
+            
+            # Phase 3: Post-process to fix banned words and ensure fields
+            plan_dict = self._post_process_plan(plan_dict)
             
             return plan_dict
             
@@ -513,86 +679,40 @@ JSON FORMAT TEMPLATE:
         
         weeks = self.calculate_weeks(start_date, end_date)
         
+        # Fetch recommendation engine context for social media goals
+        recommendation_context = get_recommendation_context_sync(original_goal)
+        
+        # Phase 1: Generate unique week outline to prevent repetition
+        outline = self._generate_week_outline(original_goal, weeks, start_date, end_date, recommendation_context)
+        outline_constraint = self._build_outline_constraint(outline, weeks, start_date) if outline else ""
+        
         # Create detailed prompt with strict JSON format
-        prompt = f"""You are regenerating a weekly plan.
+        prompt = f"""You are regenerating a weekly plan. Build on completed work, skip finished tasks.
 
 Goal: {original_goal}
 Timeline: {start_date.strftime('%m/%d/%Y')} to {end_date.strftime('%m/%d/%Y')}
 Duration: {weeks} weeks{completed_info}
+{recommendation_context}
+{outline_constraint}
 
-⚠️ STRICT RULES:
-1. JSON ONLY — no extra words, no markdown.
-2. Weekly plan MUST contain exactly {weeks} week blocks.
-3. EACH WEEK must contain exactly 5 tasks.
-4. Tasks MUST only be scheduled Monday–Friday.
-5. Each task must be unique.
-6. Each week MUST have: week_number, milestone, focus_area, tasks array
+RULES:
+1. Return ONLY valid JSON. {weeks} weeks, exactly 5 tasks/week (Mon-Fri only), 2-3 subtasks per task.
+2. YOU are the domain expert. Every description MUST contain REAL specifics — actual numbers, tools, steps, content. Zero Googling needed.
+3. BANNED title/subtask words: "Research", "Find", "Search", "Identify", "Explore", "Investigate", "Brainstorm", "Gather", "Determine", "Discover", "Look up"
+4. Subtasks = execution actions with embedded data. Verbs: Write, Publish, Configure, Apply, Draft, Submit, Schedule, Deploy, Launch, Record.
+5. Subtasks can include optional resources: {{"youtube_videos": [{{"title": "...", "search_query": "..."}}], "websites": [{{"name": "...", "url": "..."}}]}}
+6. For social media tasks: set recommended_posting_time and target_platform fields.
 7. DO NOT include overall_strategy field.
 
-JSON FORMAT (follow exactly):
-{{
-  "weekly_plans": [
-    {{
-      "week_number": 1,
-      "week_start": "{start_date.strftime('%m/%d/%Y')}",
-      "week_end": "{(start_date + timedelta(days=6)).strftime('%m/%d/%Y')}",
-      "milestone": "Specific target of the week",
-      "focus_area": "Theme of the week",
-      "tasks": [
-        {{
-          "task_id": "task_w1_t1",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "High",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Monday",
-          "status": "pending"
-        }},
-        {{
-          "task_id": "task_w1_t2",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Medium",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Tuesday",
-          "status": "pending"
-        }},
-        {{
-          "task_id": "task_w1_t3",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Medium",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Wednesday",
-          "status": "pending"
-        }},
-        {{
-          "task_id": "task_w1_t4",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Low",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Thursday",
-          "status": "pending"
-        }},
-        {{
-          "task_id": "task_w1_t5",
-          "title": "Task title",
-          "description": "Detailed explanation",
-          "priority": "Low",
-          "estimated_hours": 3,
-          "dependencies": [],
-          "day_of_week": "Friday",
-          "status": "pending"
-        }}
-      ]
-    }}
-  ]
-}}"""
+QUALITY STANDARD (every description must match this detail level):
+BAD: "Write blog post about AI trends"
+GOOD: "Write 2000-word post: '5 AI Agent Frameworks Reshaping Enterprise Automation in 2026' covering LangGraph, CrewAI, AutoGen, Semantic Kernel, BabyAGI. Include comparison table, code snippet for each. Target keyword: 'AI agent frameworks 2026' (8.1K monthly searches, difficulty: 34)."
+
+JSON structure:
+{{"weekly_plans": [{{"week_number": 1, "week_start": "{start_date.strftime('%m/%d/%Y')}", "week_end": "{(start_date + timedelta(days=6)).strftime('%m/%d/%Y')}", "milestone": "...", "focus_area": "...", "tasks": [{{"task_id": "task_w1_t1", "title": "...", "description": "DETAILED with real data", "priority": "High|Medium|Low", "estimated_hours": 3, "dependencies": [], "day_of_week": "Monday", "status": "pending", "recommended_posting_time": null, "target_platform": null, "subtasks": [{{"title": "Specific action with real data", "resources": {{}}}}]}}]}}]}}
+
+Each week_start = previous + 7 days. task_id format: task_wN_tM.
+"""
         
         try:
             response = groq_client.chat.completions.create(
@@ -600,16 +720,16 @@ JSON FORMAT (follow exactly):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert project manager. Always respond with valid JSON only. NEVER include 'overall_strategy' field."
+                        "content": "You are a senior domain expert who provides COMPLETE data — actual trends, numbers, strategies, titles, content. The user NEVER needs to Google anything. CRITICAL: Each week MUST be completely UNIQUE — different tasks, different focus, different deliverables. NEVER repeat the same weekly pattern. Always respond with valid JSON only. NEVER include 'overall_strategy' field."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=0.15,  # Lower temperature for more consistent output
+                temperature=0.4,  # Balanced: varied enough to avoid repetition, consistent enough for quality
                 response_format={"type": "json_object"},  # Force JSON response
-                max_tokens=3000 + (weeks * 200)
+                max_tokens=min(10000 + (weeks * 800), 32000)
             )
             
             content = response.choices[0].message.content.strip()
@@ -677,6 +797,10 @@ JSON FORMAT (follow exactly):
                         task['dependencies'] = []
             
             logger.info(f"Successfully regenerated plan with {len(plan_data['weekly_plans'])} weeks")
+            
+            # Post-process to fix banned words and ensure fields
+            plan_data = self._post_process_plan(plan_data)
+            
             return plan_data
             
         except json.JSONDecodeError as je:
