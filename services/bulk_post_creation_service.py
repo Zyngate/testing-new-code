@@ -365,12 +365,22 @@ async def process_bulk_media_urls(
                     local_time = scheduled_time.isoformat()
                     user_timezone = 'UTC'
 
+            # Fix content type in reason text to match actual media type per post
+            actual_media_type = media_types_list[media_idx]
+            if reason and "Content: " in reason:
+                import re as re_module
+                reason = re_module.sub(
+                    r'Content: \w+\.',
+                    f'Content: {actual_media_type}.',
+                    reason
+                )
+
             post_obj = {
                 "userId": user_id,
                 "mediaUrls": [media_url],
                 "caption": final_caption,
                 "platform": PLATFORM_NAME_MAP.get(platform, platform.capitalize()),
-                "mediaType": media_types_list[media_idx],
+                "mediaType": actual_media_type,
                 "scheduledAt": local_time if 'local_time' in locals() else (scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time),
                 "scheduledAtUTC": scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time,
                 "localTime": local_time if 'local_time' in locals() else (scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else scheduled_time),
