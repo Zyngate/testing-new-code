@@ -226,12 +226,78 @@ OCR text:
     return (resp or "").strip()
 
 
+# Vision model fallback list (try in order if one fails)
+VISION_MODELS = [
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.2-90b-vision-preview",
+    "llama-3.2-11b-vision-preview",
+]
+
+async def _call_vision_model_with_retry(client, prompt_content: list, max_retries: int = 3) -> dict:
+    """
+    Call vision model with retry logic and fallback models.
+    Handles 503 over capacity errors with exponential backoff.
+    """
+    import time
+    
+    last_error = None
+    
+    for model in VISION_MODELS:
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt_content}],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+                
+                raw_content = response.choices[0].message.content
+                
+                # Parse JSON response
+                if isinstance(raw_content, str):
+                    raw_content = raw_content.strip()
+                    # Handle markdown code blocks
+                    if raw_content.startswith("```"):
+                        raw_content = raw_content.split("```")[1]
+                        if raw_content.startswith("json"):
+                            raw_content = raw_content[4:]
+                    return json.loads(raw_content)
+                elif isinstance(raw_content, dict):
+                    return raw_content
+                else:
+                    return json.loads(str(raw_content))
+                    
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                # Check if it's a capacity/rate limit error
+                if "503" in str(e) or "over capacity" in error_str or "rate" in error_str:
+                    # Exponential backoff: 1s, 2s, 4s
+                    wait_time = (2 ** attempt)
+                    logger.warning(f"Vision model {model} over capacity, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Non-recoverable error for this model, try next
+                    logger.warning(f"Vision model {model} failed: {e}")
+                    break
+        
+        # Try next model
+        logger.info(f"Trying fallback vision model...")
+    
+    # All models failed
+    logger.error(f"All vision models failed. Last error: {last_error}")
+    return {"caption": "", "ocr_text": "", "objects": [], "actions": []}
+
+
 # -----------------------------------------------------
-# 3. VISUAL ANALYSIS + OCR USING GROQ SCOUT VISION MODEL
+# 3. VISUAL ANALYSIS + OCR USING GROQ VISION MODEL
 # -----------------------------------------------------
 async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
     """
-    Uses Groq Scout (meta-llama/llama-4-scout-17b-16e-instruct) in JSON mode to:
+    Uses Groq Vision models with retry/fallback to:
       - produce a one-line caption per frame
       - extract OCR text (ocr_text)
       - list objects and actions
@@ -275,22 +341,8 @@ async def analyze_frames_with_groq(frame_paths: List[str]) -> Dict[str, Any]:
                 }
             ]
 
-            response = client.chat.completions.create(
-                model="meta-llama/llama-4-maverick-17b-128e-instruct",
-                messages=[{"role": "user", "content": prompt_content}],
-                response_format={"type": "json_object"},
-                temperature=0.2,
-            )
-
-            # response.choices[0].message.content should already be JSON (string or dict)
-            parsed = response.choices[0].message.content
-            # parsed may be a string or dict; handle both
-            if isinstance(parsed, str):
-                parsed_json = json.loads(parsed)
-            elif isinstance(parsed, dict):
-                parsed_json = parsed
-            else:
-                parsed_json = json.loads(str(parsed))
+            # 🔄 Use retry function with fallback models
+            parsed_json = await _call_vision_model_with_retry(client, prompt_content)
 
             caption = parsed_json.get("caption", "") or ""
             ocr_text = parsed_json.get("ocr_text", "") or ""
@@ -448,16 +500,60 @@ def clean_transcript_for_caption(transcript: str) -> str:
 # -----------------------------------------------------
 # 5. MAIN PIPELINE (Groq STT + Vision) - OPTIMIZED FOR SPEED
 # -----------------------------------------------------
+
+def _get_fallback_result(platforms: List[str], error_msg: str = "") -> Dict[str, Any]:
+    """Return a safe fallback result when processing fails."""
+    return {
+        "detected_person": None,
+        "transcript": "",
+        "visual_summary": "Video analysis unavailable",
+        "visual_captions": [],
+        "detected_texts": [],
+        "marketing_prompt": "",
+        "keywords": ["video", "content", "viral"],
+        "captions": {p: "Amazing content worth watching! 🔥" for p in platforms},
+        "platform_hashtags": {p: ["#content", "#viral", "#trending"] for p in platforms},
+        "titles": {},
+        "boards": {},
+        "_error": error_msg,
+    }
+
+
 async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None, autoposting: bool = False) -> Dict[str, Any]:
-    # 🔒 Defensive fix: flatten platforms if nested
-    if platforms and isinstance(platforms[0], list):
+    """
+    Main video caption pipeline. NEVER crashes - always returns valid result.
+    """
+    # 🔐 MASTER TRY-EXCEPT: Ensures we NEVER crash
+    try:
+        return await _caption_from_video_file_inner(video_filepath, platforms, client, autoposting)
+    except Exception as e:
+        logger.error(f"🚨 CRITICAL: Video caption pipeline failed completely: {e}", exc_info=True)
+        # Return fallback instead of crashing
+        return _get_fallback_result(platforms or ["instagram"], str(e)[:200])
+
+
+async def _caption_from_video_file_inner(video_filepath: str, platforms: List[str], client: Optional[Groq] = None, autoposting: bool = False) -> Dict[str, Any]:
+    """Inner implementation - can throw exceptions, caught by wrapper."""
+    
+    # 🔒 Defensive: Normalize platforms
+    if not platforms:
+        platforms = ["instagram"]
+    if isinstance(platforms[0], list):
         platforms = platforms[0]
+    platforms = [p.lower().strip() for p in platforms if p]
 
     # -----------------------------------------------------
     # CACHE CHECK: Skip Vision + STT if already analyzed
     # -----------------------------------------------------
-    video_hash = compute_video_hash(video_filepath)
-    cached = await get_cached_video_analysis(video_hash)
+    video_hash = None
+    cached = None
+    
+    try:
+        video_hash = compute_video_hash(video_filepath)
+        cached = await get_cached_video_analysis(video_hash)
+    except Exception as e:
+        logger.warning(f"Cache lookup failed (non-fatal): {e}")
+        cached = None
     
     if cached:
         logger.info("✅ Using CACHED video analysis - skipping Vision + STT")
@@ -566,18 +662,22 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         # -----------------------------------------------------
         # 6b. IDENTIFY PERSON IN VIDEO (PUBLIC FIGURE)
         # -----------------------------------------------------
+        detected_person = None
+        try:
+            identified_person = await identify_person_from_frames(
+                visual_captions=visual_captions,
+                ocr_texts=detected_texts,
+                transcript=transcript
+            )
 
-        identified_person = await identify_person_from_frames(
-            visual_captions=visual_captions,
-            ocr_texts=detected_texts,
-            transcript=transcript
-        )
-
-        detected_person = (
-            identified_person
-            if identified_person and identified_person.lower() != "unknown"
-           else None
-        )
+            detected_person = (
+                identified_person
+                if identified_person and identified_person.lower() != "unknown"
+               else None
+            )
+        except Exception as e:
+            logger.warning(f"Person identification failed (non-fatal): {e}")
+            detected_person = None
 
         if detected_person:
             marketing_prompt = (
@@ -588,17 +688,21 @@ async def caption_from_video_file(video_filepath: str, platforms: List[str], cli
         # -----------------------------------------------------
         # SAVE TO CACHE (Vision + STT results only)
         # -----------------------------------------------------
-        await save_video_analysis(video_hash, {
-            "transcript": transcript,
-            "visual_summary": visual_summary,
-            "visual_captions": visual_captions,
-            "detected_texts": detected_texts,
-            "ocr_text_combined": ocr_text_combined,
-            "detected_person": detected_person,
-            "marketing_prompt": marketing_prompt,
-            "objects": objects_detected,
-            "actions": actions_detected,
-        })
+        if video_hash:
+            try:
+                await save_video_analysis(video_hash, {
+                    "transcript": transcript,
+                    "visual_summary": visual_summary,
+                    "visual_captions": visual_captions,
+                    "detected_texts": detected_texts,
+                    "ocr_text_combined": ocr_text_combined,
+                    "detected_person": detected_person,
+                    "marketing_prompt": marketing_prompt,
+                    "objects": objects_detected,
+                    "actions": actions_detected,
+                })
+            except Exception as e:
+                logger.warning(f"Cache save failed (non-fatal): {e}")
         
         # Cleanup temp files
         try:
@@ -700,18 +804,54 @@ Focus on ONE strong idea or reaction.
 
     # Run all hashtag tasks + caption task in parallel
     hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
-    all_results = await asyncio.gather(*hashtag_tasks, get_captions())
-
-    # Extract results
-    platform_hashtags: Dict[str, List[str]] = {}
-    for result in all_results[:-1]:  # All except last (captions)
-        p, tags = result
-        platform_hashtags[p] = tags
     
-    captions_data = all_results[-1]  # Last result is captions dict
-    captions = captions_data.get("captions", {}) if isinstance(captions_data, dict) else captions_data
-    titles = captions_data.get("titles", {}) if isinstance(captions_data, dict) else {}
-    boards = captions_data.get("boards", {}) if isinstance(captions_data, dict) else {}
+    try:
+        all_results = await asyncio.gather(*hashtag_tasks, get_captions(), return_exceptions=True)
+    except Exception as e:
+        logger.error(f"Parallel task execution failed: {e}")
+        all_results = [("instagram", [])] + [{"captions": {p: "Amazing content! 🔥" for p in platforms}}]
+
+    # Extract results (with safety checks)
+    platform_hashtags: Dict[str, List[str]] = {}
+    try:
+        for result in all_results[:-1]:  # All except last (captions)
+            if isinstance(result, Exception):
+                logger.warning(f"Hashtag task failed: {result}")
+                continue
+            if isinstance(result, tuple) and len(result) == 2:
+                p, tags = result
+                platform_hashtags[p] = tags if tags else []
+    except Exception as e:
+        logger.warning(f"Error extracting hashtags: {e}")
+    
+    # Extract captions data (with safety checks)
+    captions = {}
+    titles = {}
+    boards = {}
+    
+    try:
+        captions_data = all_results[-1] if all_results else {}
+        
+        # Handle exception result
+        if isinstance(captions_data, Exception):
+            logger.warning(f"Caption generation failed: {captions_data}")
+            captions = {p: "Amazing content worth sharing! 🔥" for p in platforms}
+        elif isinstance(captions_data, dict):
+            captions = captions_data.get("captions", {})
+            titles = captions_data.get("titles", {})
+            boards = captions_data.get("boards", {})
+        else:
+            captions = captions_data if captions_data else {}
+    except Exception as e:
+        logger.warning(f"Error extracting captions: {e}")
+        captions = {p: "Check out this content! 🔥" for p in platforms}
+
+    # Ensure all platforms have captions (fallback)
+    for p in platforms:
+        if p not in captions or not captions[p]:
+            captions[p] = "Amazing content worth watching! 🔥"
+        if p not in platform_hashtags:
+            platform_hashtags[p] = ["#content", "#viral", "#trending"]
 
     return {
         "detected_person": detected_person,

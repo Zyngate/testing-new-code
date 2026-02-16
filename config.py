@@ -60,7 +60,7 @@ if not all([
     POST_CLOUDINARY_API_KEY,
     POST_CLOUDINARY_API_SECRET
 ]):
-    logger.warning("?? Cloudinary credentials for post scheduler are missing")
+    logger.warning("WARNING: Cloudinary credentials for post scheduler are missing")
 
 cloudinary.config(
     cloud_name=POST_CLOUDINARY_CLOUD_NAME,
@@ -91,19 +91,45 @@ CLASSIFY_CLIENT_KEY       = os.getenv("GROQ_API_KEY_CLASSIFY", BASE_GROQ_KEY)
 GROQ_API_KEY_CAPTION      = os.getenv("GROQ_API_KEY_CAPTION", BASE_GROQ_KEY)
 GROQ_API_KEY_CODE         = os.getenv("GROQ_API_KEY_CODE", BASE_GROQ_KEY)
 GROQ_API_KEY_RESEARCHAGENT= os.getenv("GROQ_API_KEY_RESEARCHAGENT", BASE_GROQ_KEY)
+
+# Caption Key Pool for rotation
+CAPTION_API_KEYS = []
+for i in [None, "_1", "_2", "_3"]:
+    key_name = f"GROQ_API_KEY_CAPTION{i if i else ''}"
+    key_val = os.getenv(key_name)
+    if key_val:
+        CAPTION_API_KEYS.append(key_val)
+if not CAPTION_API_KEYS:
+    CAPTION_API_KEYS = [BASE_GROQ_KEY]
+
+logger.info(f"Caption key pool size: {len(CAPTION_API_KEYS)}")
+#
+# Hashtag Key Pool for parallel hashtag generation (dedicated keys for speed)
+HASHTAG_API_KEYS = []
+for i in [None, "_1", "_2", "_3"]:
+    key_name = f"GROQ_API_KEY_HASHTAG{i if i else ''}"
+    key_val = os.getenv(key_name)
+    if key_val:
+        HASHTAG_API_KEYS.append(key_val)
+if not HASHTAG_API_KEYS:
+    # Fallback to caption keys or base key
+    HASHTAG_API_KEYS = CAPTION_API_KEYS.copy() if CAPTION_API_KEYS else [BASE_GROQ_KEY]
+
+logger.info(f"Hashtag key pool size: {len(HASHTAG_API_KEYS)}")
+
 GROQ_API_KEY_STELLE_MODEL = os.getenv("GROQ_API_KEY_STELLE_MODEL", BASE_GROQ_KEY)
 PLANNING_KEY              = os.getenv("GROQ_API_KEY_PLANNING", BASE_GROQ_KEY)
 GOAL_SETTING_KEY          = os.getenv("GROQ_API_KEY_GOAL_SETTING", BASE_GROQ_KEY)
 MEMORY_SUMMARY_KEY        = os.getenv("GROQ_API_KEY_MEMORY_SUMMARY", BASE_GROQ_KEY)
 GROQ_API_KEY_RECOMMENDATION = os.getenv("GROQ_API_KEY_RECOMMENDATION")
-# --- NEW: Video Captioning Key (STRICT ? no fallback) ---
+# --- NEW: Video Captioning Key (STRICT - no fallback) ---
 GROQ_API_KEY_VIDEO_CAPTION = os.getenv("GROQ_API_KEY_VIDEO_CAPTION")
 if not GROQ_API_KEY_VIDEO_CAPTION:
     logger.warning("GROQ_API_KEY_VIDEO_CAPTION is missing! Video caption endpoints will fail.")
 
-GROQ_API_KEY_VISUALIZE = os.getenv("GROQ_API_KEY_VISUALIZE")
+GROQ_API_KEY_VISUALIZE = os.getenv("GROQ_API_KEY_VISUALIZE", BASE_GROQ_KEY)
 if not GROQ_API_KEY_VISUALIZE:
-    raise RuntimeError("GROQ_API_KEY_VISUALIZE is not set")
+    logger.warning("GROQ_API_KEY_VISUALIZE is not set, using BASE_GROQ_KEY")
 
 # Browsing / DeepSearch
 INTERNET_CLIENT_KEY = os.getenv("GROQ_API_KEY_BROWSE", BASE_GROQ_KEY)
