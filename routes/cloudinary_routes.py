@@ -26,8 +26,6 @@ async def _upload_single_file(file_content: bytes, filename: str, semaphore: asy
                         file_content,
                         resource_type="auto",
                         folder="scheduler_media",
-                        eager_async=True,  # Don't wait for video transcoding
-                        eager_notification_url=None  # Skip webhook
                     )
                 ),
                 timeout=UPLOAD_TIMEOUT_SECONDS

@@ -426,9 +426,14 @@ async def bulk_confirm(payload: dict):
             # Always store in UTC in the database
             scheduled_at_utc = scheduled_at.astimezone(timezone.utc)
 
+            # Handle both mediaUrl (singular) and mediaUrls (plural) from frontend
+            media_urls = post.get("mediaUrls") or [post.get("mediaUrl", "")]
+            if isinstance(media_urls, str):
+                media_urls = [media_urls]
+
             post_doc = {
                 "userId": user_id,
-                "mediaUrls": [post["mediaUrl"]],
+                "mediaUrls": media_urls,
                 "caption": post.get("caption", ""),
                 "platform": post["platform"],
                 "mediaType": post["mediaType"],
@@ -439,6 +444,10 @@ async def bulk_confirm(payload: dict):
                 "timeDataSource": "manual",
                 "recommendationReason": "User approved"
             }
+
+            # Save title for YouTube and Pinterest
+            if post.get("title"):
+                post_doc["title"] = post["title"]
 
             await db["scheduledposts"].insert_one(post_doc)
             saved_posts.append(post_doc)

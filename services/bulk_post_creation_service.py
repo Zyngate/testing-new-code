@@ -41,10 +41,12 @@ CAPTION_SEMAPHORE = asyncio.Semaphore(6)  # Max 6 concurrent caption generations
 async def upload_to_cloudinary(file: UploadFile) -> str:
     """Upload a file to Cloudinary with rate limiting."""
     async with UPLOAD_SEMAPHORE:
+        # Read file content into memory to avoid stream position issues
+        content = await file.read()
         result = cloudinary.uploader.upload(
-            file.file,
-            resource_type="video",
-            folder="scheduler_videos"
+            content,
+            resource_type="auto",
+            folder="scheduler_media"
         )
         return result["secure_url"]
 
@@ -431,6 +433,9 @@ async def process_bulk_media_urls(
                 "postIndex": post['postIndex'],  # Correct chronological index
                 "totalPosts": num_posts,
             }
+            # Save title for YouTube and Pinterest
+            if post.get('title'):
+                post_doc['title'] = post['title']
             posts_to_insert.append(post_doc)
     
     # Bulk insert to database (more efficient than individual inserts)
