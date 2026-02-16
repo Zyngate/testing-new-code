@@ -2,14 +2,101 @@
 import asyncio
 import itertools
 import random
+import re
 from typing import List, Dict, Any
 from groq import AsyncGroq
 from enum import Enum
-from config import logger
+from spellchecker import SpellChecker
+from config import logger, HASHTAG_API_KEYS
 from services.ai_service import (
     rate_limited_groq_call,
     groq_generate_text,
 )
+
+# Initialize spell checker (English)
+_spell = SpellChecker()
+
+# Words to preserve (brand names, tech terms, social media terms)
+_PRESERVE_WORDS = {
+    "instagram", "linkedin", "facebook", "tiktok", "youtube", "pinterest",
+    "threads", "twitter", "reddit", "reels", "hashtag", "hashtags",
+    "ai", "saas", "api", "cta", "seo", "roi", "kpi", "b2b", "b2c",
+    "influencer", "influencers", "podcast", "webinar", "ecommerce",
+    "startup", "startups", "entrepreneur", "entrepreneurs",
+    "mindset", "workflow", "workflows", "automate", "automation",
+    "stelle", "groq", "openai", "chatgpt", "gpt",
+}
+
+def fix_spelling_errors(text: str) -> str:
+    """
+    Fix spelling errors in caption text.
+    Preserves: hashtags, URLs, brand names, and intentional formatting.
+    """
+    if not text:
+        return text
+    
+    # Split into paragraphs to preserve structure
+    paragraphs = text.split("\n\n")
+    fixed_paragraphs = []
+    
+    for paragraph in paragraphs:
+        words = paragraph.split()
+        fixed_words = []
+        
+        for word in words:
+            # Skip hashtags, mentions, URLs
+            if word.startswith('#') or word.startswith('@') or word.startswith('http'):
+                fixed_words.append(word)
+                continue
+            
+            # Extract punctuation
+            prefix = ""
+            suffix = ""
+            clean_word = word
+            
+            # Handle leading punctuation
+            while clean_word and not clean_word[0].isalnum():
+                prefix += clean_word[0]
+                clean_word = clean_word[1:]
+            
+            # Handle trailing punctuation
+            while clean_word and not clean_word[-1].isalnum():
+                suffix = clean_word[-1] + suffix
+                clean_word = clean_word[:-1]
+            
+            if not clean_word:
+                fixed_words.append(word)
+                continue
+            
+            # Skip preserved words (case-insensitive)
+            if clean_word.lower() in _PRESERVE_WORDS:
+                fixed_words.append(word)
+                continue
+            
+            # Skip short words (likely abbreviations) and all caps (acronyms)
+            if len(clean_word) <= 2 or clean_word.isupper():
+                fixed_words.append(word)
+                continue
+            
+            # Check and fix spelling
+            lower_word = clean_word.lower()
+            if lower_word not in _spell:
+                correction = _spell.correction(lower_word)
+                if correction and correction != lower_word:
+                    # Preserve original capitalization pattern
+                    if clean_word[0].isupper():
+                        correction = correction.capitalize()
+                    elif clean_word.isupper():
+                        correction = correction.upper()
+                    
+                    logger.debug(f"Spell fix: {clean_word} -> {correction}")
+                    clean_word = correction
+            
+            fixed_words.append(prefix + clean_word + suffix)
+        
+        fixed_paragraphs.append(" ".join(fixed_words))
+    
+    return "\n\n".join(fixed_paragraphs)
 
 MODEL = "llama-3.3-70b-versatile"
 
@@ -221,6 +308,32 @@ async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> Lis
 
 #hashtag
 
+# Hashtag key rotation index
+_hashtag_key_index = 0
+
+def _get_next_hashtag_key() -> str:
+    """Get next API key from hashtag pool with rotation."""
+    global _hashtag_key_index
+    key = HASHTAG_API_KEYS[_hashtag_key_index % len(HASHTAG_API_KEYS)]
+    _hashtag_key_index += 1
+    return key
+
+async def _groq_hashtag_call(prompt: str) -> str | None:
+    """Fast hashtag-specific Groq call with dedicated key pool."""
+    api_key = _get_next_hashtag_key()
+    client = AsyncGroq(api_key=api_key)
+    try:
+        resp = await client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_completion_tokens=50,  # Short response for hashtags
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        logger.warning(f"Hashtag API call failed: {e}")
+        return None
+
 async def generate_trending_hashtags(platform: str, topic: str) -> List[str]:
     prompt = f"""
 Generate 4 currently trending hashtags for {platform}.
@@ -235,8 +348,10 @@ Rules:
 - No generic words like viral, trending unless platform-native
 """
     try:
-        text = await groq_generate_text(MODEL, prompt)
-        return [t for t in text.split() if t.startswith("#")][:4]
+        text = await _groq_hashtag_call(prompt)
+        if text:
+            return [t for t in text.split() if t.startswith("#")][:4]
+        return []
     except:
         return []
 
@@ -246,6 +361,63 @@ TRENDING_GENERATORS = {
 }
 
 
+async def _fetch_trending_tag(platform: str, effective_query: str) -> str | None:
+    """Fetch trending tag - run in parallel."""
+    if platform == "instagram":
+        return random.choice(INSTAGRAM_DISCOVERY_CORE)
+    
+    pool = TRENDING_POOLS.get(platform, [])
+    if pool:
+        return random.choice(pool)
+    
+    # Only call AI if no pool exists
+    prompt = f"""Generate ONE extremely trending hashtag for {platform} with very high reach.
+Return ONLY one hashtag.
+Context: {effective_query}"""
+    text = await _groq_hashtag_call(prompt)
+    if text:
+        return next((t for t in text.replace("\n", " ").split() if t.startswith("#")), None)
+    return None
+
+
+async def _fetch_relevant_tag(platform: str, effective_query: str, seed_keywords: List[str]) -> str | None:
+    """Fetch relevant tag - run in parallel."""
+    prompt = f"""Generate ONE highly relevant hashtag for {platform} that directly matches the content topic.
+Return ONLY one hashtag.
+Context: {effective_query}"""
+    text = await _groq_hashtag_call(prompt)
+    if text:
+        tag = next((t for t in text.replace("\n", " ").split() if t.startswith("#")), None)
+        if tag:
+            return tag
+    # Fallback to seed keyword
+    if seed_keywords:
+        return f"#{seed_keywords[0].replace(' ', '')}"
+    return None
+
+
+async def _fetch_broad_tag(platform: str, effective_query: str, seed_keywords: List[str]) -> str | None:
+    """Fetch broad category tag - run in parallel."""
+    prompt = f"""Generate ONE broad, category-level hashtag for {platform}.
+CRITICAL: Must be a real category tag with 30K+ posts (e.g. #photography, #marketing, #fitness).
+BANNED: #fyp, #explore, #viral, #trending, #reels, #foryou
+Content: {effective_query}
+Return EXACTLY ONE hashtag."""
+    
+    text = await _groq_hashtag_call(prompt)
+    if text:
+        candidate = next((t for t in text.replace("\n", " ").split() if t.startswith("#")), None)
+        if candidate and candidate.lower() not in BROAD_BLACKLIST:
+            return candidate
+    
+    # Fallback to seed keywords
+    if len(seed_keywords) > 1:
+        return f"#{seed_keywords[1].replace(' ', '').lower()}"
+    elif seed_keywords:
+        return f"#{seed_keywords[0].replace(' ', '').lower()}"
+    return None
+
+
 async def fetch_platform_hashtags(
     client: AsyncGroq,
     seed_keywords: List[str],
@@ -253,149 +425,38 @@ async def fetch_platform_hashtags(
     effective_query: str,
     autoposting: bool = False
 ) -> List[str]:
-
+    """
+    OPTIMIZED: Runs all 3 hashtag AI calls in PARALLEL for speed.
+    Uses dedicated hashtag API key pool to avoid rate limiting with captions.
+    """
     platform = platform.lower()
-    final_tags: List[str] = []
 
-    # --------------------------------------------------
-    # 1️⃣ EXTREME TRENDING (platform-native, high reach)
-    # --------------------------------------------------
-    trending_tag = None
+    # 🚀 RUN ALL 3 HASHTAG FETCHES IN PARALLEL
+    trending_task = _fetch_trending_tag(platform, effective_query)
+    relevant_task = _fetch_relevant_tag(platform, effective_query, seed_keywords)
+    broad_task = _fetch_broad_tag(platform, effective_query, seed_keywords)
 
-    try:
-        if platform == "instagram":
-            trending_tag = random.choice(INSTAGRAM_DISCOVERY_CORE)
-        else:
-            pool = TRENDING_POOLS.get(platform, [])
-            if pool:
-                trending_tag = random.choice(pool)
-            else:
-                prompt = f"""
-Generate ONE extremely trending hashtag for {platform} with very high reach.
-Return ONLY one hashtag.
+    results = await asyncio.gather(
+        trending_task, relevant_task, broad_task,
+        return_exceptions=True
+    )
 
-Context:
-{effective_query}
-"""
-                text = await groq_generate_text(MODEL, prompt)
-                trending_tag = next(
-                    (t for t in text.replace("\n", " ").split() if t.startswith("#")),
-                    None
-                )
-    except Exception:
-        trending_tag = None
+    trending_tag = results[0] if not isinstance(results[0], Exception) else None
+    relevant_tag = results[1] if not isinstance(results[1], Exception) else None
+    broad_tag = results[2] if not isinstance(results[2], Exception) else None
 
-    if trending_tag:
-        final_tags.append(trending_tag)
-
-    # --------------------------------------------------
-    # 2️⃣ RELEVANT (most contextually accurate)
-    # --------------------------------------------------
-    relevant_tag = None
-
-    try:
-        prompt = f"""
-Generate ONE highly relevant hashtag for {platform} that directly matches the content topic.
-Return ONLY one hashtag.
-
-Context:
-{effective_query}
-"""
-        text = await groq_generate_text(MODEL, prompt)
-        relevant_tag = next(
-            (t for t in text.replace("\n", " ").split() if t.startswith("#")),
-            None
-        )
-    except Exception:
-        relevant_tag = None
-
-    if not relevant_tag and seed_keywords:
-        relevant_tag = f"#{seed_keywords[0].replace(' ', '')}"
-
-    if relevant_tag and relevant_tag not in final_tags:
-        final_tags.append(relevant_tag)
-
-    # --------------------------------------------------
-    # 3️⃣ BROAD (category / domain-level, 30K+ posts, content-related)
-    # --------------------------------------------------
-    broad_tag = None
-
-    try:
-        prompt = f"""You are a social media hashtag expert. Generate ONE broad, category-level hashtag for {platform}.
-
-CRITICAL REQUIREMENTS:
-- The hashtag MUST be directly related to the video/content topic
-- The hashtag MUST be a real, widely-used category tag with at least 30,000 posts on {platform}
-- Think of the broad CATEGORY or NICHE the content belongs to
-- Examples of good broad tags: #photography, #digitalmarketing, #fitness, #foodie, #entrepreneurship, #skincare, #motivation, #technology, #fashion, #travel
-
-BANNED (do NOT return these):
-- Discovery/algorithmic tags: #explore, #fyp, #foryou, #reels, #explorepage, #discoverypage, #foryoupage, #trending, #viral
-- Platform-specific boost tags: #instareels, #fbreels, #shorts, #tiktokviral
-- Generic filler: #content, #post, #video, #photo
-
-Content topic:
-{effective_query}
-
-Return EXACTLY ONE hashtag. Nothing else."""
-        text = await groq_generate_text(MODEL, prompt)
-        candidate = next(
-            (t for t in text.replace("\n", " ").split() if t.startswith("#")),
-            None
-        )
-        # Validate: must not be a blacklisted discovery tag
-        if candidate and candidate.lower() not in BROAD_BLACKLIST:
-            broad_tag = candidate
-    except Exception:
-        broad_tag = None
-
-    # Fallback: derive from seed keywords (content-related, not trending pool)
-    if not broad_tag:
-        if len(seed_keywords) > 1:
-            broad_tag = f"#{seed_keywords[1].replace(' ', '').lower()}"
-        elif seed_keywords:
-            broad_tag = f"#{seed_keywords[0].replace(' ', '').lower()}"
-        else:
-            broad_tag = None
-
-    # Last resort: retry AI with simpler prompt
-    if not broad_tag or broad_tag.lower() in BROAD_BLACKLIST:
-        try:
-            retry_prompt = f"""What broad category does this content belong to: {effective_query}
-Return ONE hashtag for that category (e.g. #marketing, #fitness, #tech). Must have 30K+ posts. ONE hashtag only."""
-            text = await groq_generate_text(MODEL, retry_prompt)
-            candidate = next(
-                (t for t in text.replace("\n", " ").split() if t.startswith("#")),
-                None
-            )
-            if candidate and candidate.lower() not in BROAD_BLACKLIST:
-                broad_tag = candidate
-        except Exception:
-            pass
-
-    if broad_tag and broad_tag not in final_tags:
-        final_tags.append(broad_tag)
-
-    # --------------------------------------------------
-    # 4️⃣ FINAL: Return hashtags
-    #    Order: relevant → broad → trending (always)
-    #    autoposting=True  → exactly 3
-    #    autoposting=False → up to 10 (image/video/text posts)
-    # --------------------------------------------------
+    # Order: relevant → broad → trending
     ordered_tags = []
-    # 1. Relevant first
     if relevant_tag:
         ordered_tags.append(relevant_tag)
-    # 2. Broad second
     if broad_tag and broad_tag not in ordered_tags:
         ordered_tags.append(broad_tag)
-    # 3. Trending third
     if trending_tag and trending_tag not in ordered_tags:
         ordered_tags.append(trending_tag)
 
     target = 3 if autoposting else 10
 
-    # Fill remaining slots from the trending pool (shuffled to vary results)
+    # Fill remaining slots from trending pool
     if len(ordered_tags) < target:
         pool = TRENDING_POOLS.get(platform, [])
         shuffled_pool = pool[:]
@@ -887,6 +948,9 @@ async def _generate_caption_for_platform(
     caption_text = "\n\n".join(
         [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
     )
+
+    # 🔤 FIX SPELLING ERRORS
+    caption_text = fix_spelling_errors(caption_text)
 
     logger.info(f"Caption generated for {p_norm}: {len(caption_text)} characters")
 
