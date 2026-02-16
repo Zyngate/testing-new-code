@@ -593,10 +593,13 @@ class RecommendationEngine:
                         print(f"Warning: Could not parse timestamp '{posting_time_str}', using current time")
                 
                 # Ensure timezone awareness
+                # The posting_time string is in the USER's local timezone (e.g., IST)
+                # NOT UTC - so localize it in the user's timezone directly
                 if posting_time_utc.tzinfo is None:
-                    posting_time_utc = utc_tz.localize(posting_time_utc)
+                    # Time was parsed without timezone info - it's in the user's local timezone
+                    posting_time_utc = user_tz.localize(posting_time_utc)
                 
-                # Convert to user timezone
+                # Convert to user timezone (if already has tz info from ISO format, convert properly)
                 posting_time_user = posting_time_utc.astimezone(user_tz)
                 
             except Exception as e:
@@ -687,8 +690,11 @@ class RecommendationEngine:
             'hourly_rate_performance': hourly_rate_perf,
             'daily_rate_performance': daily_rate_perf,
             'best_hour': best_hour,
+            'best_hour_display': format_hour_12h(best_hour),
             'best_day': best_day,
             'best_day_name': best_day_name,
+            'timezone': self.user_timezone,
+            'timezone_display': self.timezone_display_name,
             'hour_confidence': hour_confidence,
             'day_confidence': day_confidence,
             'hourly_count': hourly_count,
@@ -795,6 +801,8 @@ class RecommendationEngine:
                 'best_hour_by_rate': best_hour_by_rate,
                 'best_day_by_rate': best_day_by_rate,
                 'best_day_name_by_rate': best_day_name_by_rate,
+                'timezone': self.user_timezone,
+                'timezone_display': self.timezone_display_name,
                 'hour_confidence': hour_confidence,
                 'day_confidence': day_confidence,
                 'hourly_count': hourly_count,
@@ -1021,7 +1029,9 @@ class RecommendationEngine:
                 'time_slots': time_slots[:num_slots],
                 'peak_hours_description': platform_config['description'],
                 'data_source': 'user_data' if (use_user_data and platform_post_count >= 5) else 'research_data',
-                'user_post_count': platform_post_count
+                'user_post_count': platform_post_count,
+                'timezone': self.user_timezone,
+                'timezone_display': self.timezone_display_name
             }
         
         return {
@@ -1029,7 +1039,9 @@ class RecommendationEngine:
             'data_source': data_source,
             'use_user_data': use_user_data,
             'total_posts_analyzed': total_recent_posts,
-            'min_posts_threshold': MIN_POSTS_FOR_USER_DATA
+            'min_posts_threshold': MIN_POSTS_FOR_USER_DATA,
+            'timezone': self.user_timezone,
+            'timezone_display': self.timezone_display_name
         }
 
     def analyze_platform_performance(self) -> PlatformPerformance:
@@ -1188,11 +1200,12 @@ class RecommendationEngine:
         insights = []
         time_perf = self.analyze_time_performance()
         
-        # Best posting hour insight
+        # Best posting hour insight (with timezone label)
         best_hour = time_perf.get('best_hour', 12)
         hourly_perf = time_perf.get('hourly_performance', {})
         best_hour_engagement = hourly_perf.get(best_hour, 0)
         hour_formatted = datetime.strptime(str(best_hour), '%H').strftime('%I %p').lstrip('0')
+        tz_label = self.timezone_display_name if self.timezone_display_name else "your timezone"
         
         # Calculate how much better the best hour is
         avg_hourly = sum(hourly_perf.values()) / len(hourly_perf) if hourly_perf else 0
@@ -1200,12 +1213,12 @@ class RecommendationEngine:
         
         if hour_boost > 20:
             insights.append(
-                f"⏰ Your sweet spot is around {hour_formatted}! Posts at this time get {hour_boost:.0f}% more engagement than your average. "
+                f"⏰ Your sweet spot is around {hour_formatted} ({tz_label})! Posts at this time get {hour_boost:.0f}% more engagement than your average. "
                 f"That's a huge difference — try to schedule your most important content around this time."
             )
         elif best_hour_engagement > 0:
             insights.append(
-                f"⏰ Posts around {hour_formatted} tend to perform well for you, averaging {best_hour_engagement:,.0f} interactions. "
+                f"⏰ Posts around {hour_formatted} ({tz_label}) tend to perform well for you, averaging {best_hour_engagement:,.0f} interactions. "
                 f"This could be when your audience is most active!"
             )
         
@@ -1259,7 +1272,7 @@ class RecommendationEngine:
             if most_posted_hour != best_hour and most_posted_count > 3:
                 best_hour_str = datetime.strptime(str(best_hour), '%H').strftime('%I %p').lstrip('0')
                 insights.append(
-                    f"💡 Interesting pattern: You usually post around {hour_str}, but your content actually performs better around {best_hour_str}. "
+                    f"💡 Interesting pattern: You usually post around {hour_str} ({tz_label}), but your content actually performs better around {best_hour_str} ({tz_label}). "
                     f"Try shifting your posting schedule to catch that engagement boost!"
                 )
         
@@ -1468,14 +1481,16 @@ class RecommendationEngine:
             f"That's an average of {(total_engagement / total_posts):,.0f} per post — let's work on pushing that higher!"
         )
         
-        # Trend analysis
-        if len(df) >= 5:
-            split_point = int(len(df) * 0.6)
+        # Trend analysis - require at least 8 posts for meaningful trend comparison
+        if len(df) >= 8:
+            # Use 50/50 split for fairer comparison
+            split_point = len(df) // 2
             early_df = df.iloc[:split_point]
             recent_df = df.iloc[split_point:]
             
-            early_engagement = early_df['engagement_score'].mean()
-            recent_engagement = recent_df['engagement_score'].mean()
+            # Use MEDIAN to avoid outlier sensitivity (one viral post shouldn't skew trends)
+            early_engagement = early_df['engagement_score'].median()
+            recent_engagement = recent_df['engagement_score'].median()
             
             # Protect against NaN values
             if pd.isna(early_engagement):
@@ -1495,7 +1510,8 @@ class RecommendationEngine:
                     f"📈 You're trending upward! Recent content is getting {change_pct:.0f}% more engagement. "
                     f"You're finding your groove."
                 )
-            elif change_pct < -20:
+            elif change_pct < -30:
+                # Only show decline warning if it's a significant drop (30%+)
                 insights.append(
                     f"📉 Heads up: your recent posts are down {abs(change_pct):.0f}% from earlier performance. "
                     f"This happens to everyone — let's look at what was working before and get back on track!"
@@ -1505,6 +1521,12 @@ class RecommendationEngine:
                     f"➡️ Your engagement is holding steady. Consistency is great, but let's experiment with new approaches "
                     f"to break through to the next level!"
                 )
+        elif len(df) >= 3:
+            # For small datasets, just give a general growth insight without trend claims
+            insights.append(
+                f"📊 With {len(df)} posts analyzed, it's still early to identify clear trends. "
+                f"Keep posting consistently and we'll be able to give you detailed growth insights once you have 8+ posts!"
+            )
         
         # Posting frequency insight
         if 'posting_time' in df.columns and len(df) > 1:
@@ -1658,10 +1680,11 @@ class RecommendationEngine:
                 'total_weekly_posts': total_weekly_posts
             })
         
-        # Best hour optimization recommendation
+        # Best hour optimization recommendation (with timezone context)
         best_hour = time_perf.get('best_hour', 12)
         hourly_perf = time_perf.get('hourly_performance', {})
         hourly_counts = time_perf.get('hourly_count', {})
+        tz_display = self.timezone_display_name if self.timezone_display_name else "your timezone"
         
         if len(hourly_counts) > 0:
             most_posted_hour = max(hourly_counts, key=hourly_counts.get)
@@ -1677,10 +1700,10 @@ class RecommendationEngine:
                     recommendations.append({
                         'priority': 'medium',
                         'category': 'Timing Optimization',
-                        'action': f"Shift your posting time from {current_hour_str} to around {best_hour_str}",
+                        'action': f"Shift your posting time from {current_hour_str} to around {best_hour_str} ({tz_display})",
                         'reason': (
-                            f"You typically post around {current_hour_str}, but your content performs {improvement:.0f}% better "
-                            f"when posted around {best_hour_str}. Your audience is more active at that time!"
+                            f"You typically post around {current_hour_str} ({tz_display}), but your content performs {improvement:.0f}% better "
+                            f"when posted around {best_hour_str} ({tz_display}). Your audience is more active at that time!"
                         ),
                         'expected_outcome': (
                             f"This simple timing shift could boost your engagement by {improvement:.0f}% without changing anything about your content. "
@@ -1834,23 +1857,24 @@ class RecommendationEngine:
                     )
                 })
         
-        # Story/cross-promotion based on engagement patterns
+        # Story/cross-promotion - only show if user has significant engagement to amplify
         if 'platform' in df.columns:
             platforms = df['platform'].unique()
-            if 'instagram' in platforms or 'facebook' in platforms:
+            total_engagement = df['engagement_score'].sum()
+            if ('instagram' in platforms or 'facebook' in platforms) and total_engagement > 5000 and total_posts >= 10:
                 recommendations.append({
                     'priority': 'medium',
                     'category': 'Cross-Promotion',
                     'action': (
                         "Amplify your posts with Stories:\n"
-                        "• Tease new posts in your Stories with \"New post alert!\" stickers\n"
+                        "• Tease new posts in your Stories with 'New post alert!' stickers\n"
                         "• Share behind-the-scenes of your content creation\n"
                         "• Use countdown stickers for upcoming content\n"
                         "• Reshare posts to Stories after 24 hours for a second wave of engagement"
                     ),
                     'reason': (
-                        "Stories get 3-5x more visibility than feed posts for many accounts. "
-                        "Using Stories to drive people to your posts creates a powerful engagement loop."
+                        f"With {total_engagement:,.0f} total interactions across {total_posts} posts, you have content worth amplifying. "
+                        "Stories get 3-5x more visibility than feed posts for many accounts."
                     ),
                     'expected_outcome': (
                         "Creators who promote feed posts in Stories see 20-40% higher engagement. "
@@ -1858,8 +1882,8 @@ class RecommendationEngine:
                     )
                 })
         
-        # Engagement rate specific recommendations
-        if avg_engagement_rate < 2:
+        # Engagement rate specific recommendations - only with enough data
+        if avg_engagement_rate < 2 and total_posts >= 8:
             recommendations.append({
                 'priority': 'high',
                 'category': 'Audience Connection',
@@ -2016,8 +2040,8 @@ class RecommendationEngine:
         recommendations = []
         total_posts = len(df)
         
-        # Posting frequency recommendation
-        if total_posts < 15:
+        # Posting frequency recommendation - only when we have enough data to determine frequency
+        if total_posts < 15 and total_posts >= 5:
             posts_needed = 20 - total_posts
             recommendations.append({
                 'priority': 'medium',
@@ -2065,15 +2089,33 @@ class RecommendationEngine:
                 })
         
         # Trend/engagement analysis for growth
-        if total_posts >= 5:
-            split_point = int(total_posts * 0.6)
+        # Require at least 8 posts for meaningful trend analysis
+        if total_posts >= 8:
+            # Use 50/50 split for fairer comparison
+            split_point = total_posts // 2
             recent_df = df.iloc[split_point:]
             early_df = df.iloc[:split_point]
             
-            recent_engagement = recent_df['engagement_score'].mean()
-            early_engagement = early_df['engagement_score'].mean()
+            # Use MEDIAN instead of mean to avoid outlier sensitivity
+            # (one viral post shouldn't skew the entire trend analysis)
+            recent_engagement = recent_df['engagement_score'].median()
+            early_engagement = early_df['engagement_score'].median()
             
-            if recent_engagement < early_engagement * 0.8:
+            # Also check mean for context
+            recent_mean = recent_df['engagement_score'].mean()
+            early_mean = early_df['engagement_score'].mean()
+            
+            # Protect against NaN
+            if pd.isna(recent_engagement): recent_engagement = 0
+            if pd.isna(early_engagement): early_engagement = 0
+            if pd.isna(recent_mean): recent_mean = 0
+            if pd.isna(early_mean): early_mean = 0
+            
+            # Only show trend reversal if BOTH median and mean show decline (>30% threshold)
+            median_decline = ((early_engagement - recent_engagement) / early_engagement * 100) if early_engagement > 0 else 0
+            mean_decline = ((early_mean - recent_mean) / early_mean * 100) if early_mean > 0 else 0
+            
+            if median_decline > 30 and mean_decline > 20:
                 recommendations.append({
                     'priority': 'high',
                     'category': 'Trend Reversal',
@@ -2085,15 +2127,15 @@ class RecommendationEngine:
                         "• Consider a bold, attention-grabbing post to reset momentum"
                     ),
                     'reason': (
-                        f"Your recent posts are averaging {((early_engagement - recent_engagement) / early_engagement * 100):.0f}% "
-                        f"less engagement than earlier. This happens to everyone — the key is to adapt quickly!"
+                        f"Your recent {len(recent_df)} posts are trending {median_decline:.0f}% lower engagement "
+                        f"compared to your earlier {len(early_df)} posts. This happens to everyone — the key is to adapt quickly!"
                     ),
                     'expected_outcome': (
                         "Most engagement dips are temporary. Taking action within 1-2 weeks typically "
                         "helps creators recover and sometimes even surpass previous levels."
                     )
                 })
-            elif recent_engagement > early_engagement * 1.3:
+            elif early_engagement > 0 and recent_engagement > early_engagement * 1.3:
                 recommendations.append({
                     'priority': 'medium',
                     'category': 'Momentum Capture',
