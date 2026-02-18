@@ -835,6 +835,12 @@ If someone reads only the first paragraph,
 they must clearly understand what the video is about.
 If not, rewrite internally before responding.
 
+FACTUALITY RULE (NON-NEGOTIABLE):
+- Do NOT invent events, money amounts, claims, or motivations.
+- Only describe what is clearly present in the provided topic.
+- If the topic lacks detail, stay general rather than guessing.
+- Never fabricate numbers, deals, or drama.
+
 TOPIC:
 {effective_query}
 
