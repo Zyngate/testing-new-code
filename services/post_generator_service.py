@@ -6,97 +6,12 @@ import re
 from typing import List, Dict, Any
 from groq import AsyncGroq
 from enum import Enum
-from spellchecker import SpellChecker
 from config import logger, HASHTAG_API_KEYS
 from services.ai_service import (
     rate_limited_groq_call,
     groq_generate_text,
 )
 
-# Initialize spell checker (English)
-_spell = SpellChecker()
-
-# Words to preserve (brand names, tech terms, social media terms)
-_PRESERVE_WORDS = {
-    "instagram", "linkedin", "facebook", "tiktok", "youtube", "pinterest",
-    "threads", "twitter", "reddit", "reels", "hashtag", "hashtags",
-    "ai", "saas", "api", "cta", "seo", "roi", "kpi", "b2b", "b2c",
-    "influencer", "influencers", "podcast", "webinar", "ecommerce",
-    "startup", "startups", "entrepreneur", "entrepreneurs",
-    "mindset", "workflow", "workflows", "automate", "automation",
-    "stelle", "groq", "openai", "chatgpt", "gpt",
-}
-
-def fix_spelling_errors(text: str) -> str:
-    """
-    Fix spelling errors in caption text.
-    Preserves: hashtags, URLs, brand names, and intentional formatting.
-    """
-    if not text:
-        return text
-    
-    # Split into paragraphs to preserve structure
-    paragraphs = text.split("\n\n")
-    fixed_paragraphs = []
-    
-    for paragraph in paragraphs:
-        words = paragraph.split()
-        fixed_words = []
-        
-        for word in words:
-            # Skip hashtags, mentions, URLs
-            if word.startswith('#') or word.startswith('@') or word.startswith('http'):
-                fixed_words.append(word)
-                continue
-            
-            # Extract punctuation
-            prefix = ""
-            suffix = ""
-            clean_word = word
-            
-            # Handle leading punctuation
-            while clean_word and not clean_word[0].isalnum():
-                prefix += clean_word[0]
-                clean_word = clean_word[1:]
-            
-            # Handle trailing punctuation
-            while clean_word and not clean_word[-1].isalnum():
-                suffix = clean_word[-1] + suffix
-                clean_word = clean_word[:-1]
-            
-            if not clean_word:
-                fixed_words.append(word)
-                continue
-            
-            # Skip preserved words (case-insensitive)
-            if clean_word.lower() in _PRESERVE_WORDS:
-                fixed_words.append(word)
-                continue
-            
-            # Skip short words (likely abbreviations) and all caps (acronyms)
-            if len(clean_word) <= 2 or clean_word.isupper():
-                fixed_words.append(word)
-                continue
-            
-            # Check and fix spelling
-            lower_word = clean_word.lower()
-            if lower_word not in _spell:
-                correction = _spell.correction(lower_word)
-                if correction and correction != lower_word:
-                    # Preserve original capitalization pattern
-                    if clean_word[0].isupper():
-                        correction = correction.capitalize()
-                    elif clean_word.isupper():
-                        correction = correction.upper()
-                    
-                    logger.debug(f"Spell fix: {clean_word} -> {correction}")
-                    clean_word = correction
-            
-            fixed_words.append(prefix + clean_word + suffix)
-        
-        fixed_paragraphs.append(" ".join(fixed_words))
-    
-    return "\n\n".join(fixed_paragraphs)
 
 MODEL = "llama-3.3-70b-versatile"
 
@@ -115,7 +30,12 @@ HASHTAG_LIMITS = {
 async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) -> str | None:
     for attempt in range(retries):
         try:
-            text = await groq_generate_text(MODEL, prompt, max_completion_tokens=800)
+            text = await groq_generate_text(
+                MODEL,
+                prompt,
+                max_completion_tokens=600,
+                temperature=0.7
+)
             if text and text.strip():
                 return text.strip()
         except Exception as e:
@@ -190,7 +110,7 @@ PLATFORM_STYLES = {
 BANNED_WORDS = [
     "lowkey", "low key", "low-key",
     "highkey", "high key", "high-key",
-    "obsessed", "literally", "fr", "no cap",
+    "obsessed", "literally", "no cap",
     "delulu"
 ]
 
@@ -550,6 +470,13 @@ PARAGRAPH 3 — REFLECTION / CTA
 - Natural and thoughtful, not salesy  
 - End with a question or reflective line
 
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
+
 STYLE:
 - Human and engaging  
 - Confident, not corporate  
@@ -738,6 +665,13 @@ ENGAGEMENT RULE:
 - At least one line must add a concern, insight, or reflection
 - If the caption feels light, expand it internally before returning
 
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
+
 STYLE:
 - Conversational
 - Relatable
@@ -776,6 +710,13 @@ PINTEREST RULES (PRIORITY: SAVES + CLICKS):
 - Never aggressive
 - Never ask questions directly
 
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
+
 AVOID:
 - First-person (no I, me, my, we)
 - Emojis
@@ -793,53 +734,62 @@ Return ONLY the caption (1-2 sentences max).
 """
     elif p_norm == "youtube":
         return f"""
-You are a creator-growth AI writing a YouTube video description.
+You are writing a YouTube video description.
 
 GOAL:
-- Maximize watch time
-- Improve search discoverability
-- Clearly explain what the video covers
-- Encourage engagement naturally
-
-DESCRIPTION STRUCTURE (MANDATORY):
+- Clearly explain the topic
+- Improve search visibility
+- Keep viewers interested
+- Sound human, not academic
 
 OPENING (First 2–3 lines):
-- Clearly state what this video is about
-- Mention the core topic explicitly
-- Include important keywords naturally
-- Make it obvious what viewers will learn
+- State the core topic immediately
+- Mention relevant keywords naturally
+- Do NOT reference the video itself
+- Do NOT write like a blog article
+
+AVOID THESE OPENING PHRASES:
+- "This video is about"
+- "In this video"
+- "Today we"
+- "This video explains"
+- "This video covers"
 
 BODY:
-- Expand on what the video covers
-- Mention 2–4 specific insights, examples, or key points
-- Be clear and concrete, not abstract
-- Keep paragraphs readable and skimmable
-- Do NOT create artificial mystery
+- Expand using 2–4 specific insights
+- Anchor explanation to the example in the topic
+- Avoid generic marketing advice
+- Keep paragraphs short and readable
+- Avoid textbook tone
+- No artificial mystery
 
 ENDING:
-- Add a natural engagement prompt (comment or subscribe)
-- No forced controversy
-- No dramatic bait
+- Add a natural engagement prompt
+- Keep it simple and authentic
+
+SELF-CHECK:
+- Fix spelling or grammar mistakes
+- Ensure no dropped words (e.g., "om" instead of "from")
+
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
+
+VOICE RULE:
+Write as if explaining the strategy behind the example,
+not reviewing someone else’s advertisement.
+
+Do NOT refer to the example as "an advertisement".
+Do NOT write like an external observer.
 
 RULES:
-- Clear and specific
-- Informative but engaging
 - No emojis
-- No hashtags inside the description
+- No hashtags
 - No exaggerated tension
-- No vagueness
-- Avoid abstract filler language
-
-CLARITY CHECK:
-If someone reads only the first paragraph,
-they must clearly understand what the video is about.
-If not, rewrite internally before responding.
-
-FACTUALITY RULE (NON-NEGOTIABLE):
-- Do NOT invent events, money amounts, claims, or motivations.
-- Only describe what is clearly present in the provided topic.
-- If the topic lacks detail, stay general rather than guessing.
-- Never fabricate numbers, deals, or drama.
+- No vague filler language
 
 TOPIC:
 {effective_query}
@@ -876,6 +826,13 @@ RULES:
 - No emojis
 - No hashtags inside the text
 
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
+
 CONTEXT (for understanding only):
 {effective_query}
 
@@ -885,6 +842,13 @@ Return ONLY the caption text.
     elif p_norm == "twitter":
         return f"""
 Write a short, punchy tweet.
+
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
 
 RULES:
 - STRICTLY NO first-person language (no I, me, my, we, our)
@@ -909,6 +873,13 @@ RULES:
 - React like a human
 - Be platform-appropriate
 - No hashtags in text
+
+CONTEXT ANCHOR (MANDATORY):
+
+Base the caption on what specifically happens in the video.
+Describe actions, visuals, or sequences shown.
+Do not write abstract commentary about the topic.
+The caption should reflect the flow of the video, not just the theme.
 
 Context:
 {effective_query}
@@ -935,60 +906,100 @@ async def _generate_hashtags_for_platform(
         tags = []
     return (p_norm, tags)
 
+def has_prefix_corruption(text: str) -> bool:
+    # Detect words like "eeing", "oming"
+    bad_ing = re.findall(r"\b[a-z]{1,2}ing\b", text)
+
+    # Detect suspicious short fragments surrounded by spaces
+    suspicious_fragments = re.findall(r"\s[a-z]{1,2}\s", text)
+
+    allowed = {" to ", " in ", " on ", " of ", " at ", " by ", " is ", " it ", " as ", " be ", " an ", " or ", " if ", " go ", " do "}
+    suspicious_fragments = [w for w in suspicious_fragments if w not in allowed]
+
+    return bool(bad_ing or suspicious_fragments)
+
+def fix_dropped_first_char(text: str) -> str:
+    """
+    Fix common dropped-first-letter corruption:
+    freedom -> eedom
+    from -> om
+    free -> ee
+    freeing -> eeing
+    """
+
+    text = re.sub(r"\beedom\b", "freedom", text)
+    text = re.sub(r"\bom\b", "from", text)
+    text = re.sub(r"\beeing\b", "freeing", text)
+    text = re.sub(r"\bee\b", "free", text)
+
+    return text
 
 async def _generate_caption_for_platform(
     p_norm: str,
     effective_query: str
 ) -> tuple[str, str]:
     """Generate caption for a single platform. Returns (platform, caption)."""
+
     caption_prompt = _build_caption_prompt(p_norm, effective_query)
-    caption_text = await safe_generate_caption(caption_prompt, platform=p_norm)
-    
+
+    # 1️⃣ Generate caption (single pass only)
+    caption_text = await safe_generate_caption(
+        caption_prompt,
+        platform=p_norm
+    )
+
     if not caption_text:
         caption_text = ""
+
+    # -------- HARD CLEANUP (Fix dropped prefixes safely) --------
+    caption_text = re.sub(r"[ \t]+", " ", caption_text)
+    caption_text = fix_dropped_first_char(caption_text)
 
     # 🔒 PLATFORM-SPECIFIC FORMAT GUARD
     if p_norm == "linkedin":
         caption_text = enforce_vertical_bullets(caption_text)
-    
-    # 🔒 THREADS SARCASTIC ENFORCEMENT: Ultra-short for non-marketing
+
+    # 🔒 THREADS SARCASTIC ENFORCEMENT
     if p_norm == "threads":
         is_campaign = is_marketing_campaign(effective_query)
         if not is_campaign:
-            # Force EXTREME brevity for sarcastic non-marketing content
-            # Max 120 characters OR 15 words (whichever is hit first)
             words = caption_text.split()
+
+            # Max 15 words
             if len(words) > 15:
-                caption_text = ' '.join(words[:15])  # Hard cut to 15 words
-            
+                caption_text = " ".join(words[:15])
+
+            # Max 120 characters
             if len(caption_text) > 120:
-                caption_text = caption_text[:120].rsplit(' ', 1)[0]  # Cut at last complete word
-            
+                caption_text = caption_text[:120].rsplit(" ", 1)[0]
+
             if not caption_text.strip():
                 caption_text = "Well, this happened."
 
-    # ---------------------------
-    # Cleaning (SAFE)
-    # ---------------------------
-    caption_text = caption_text.replace('\\"', '').replace('"', '').strip()
+    # -------- SAFE CLEANING --------
+    caption_text = caption_text.replace('\\"', "").replace('"', "").strip()
+
+    # Fix common dropped-preposition typos
+    caption_text = re.sub(r"\bom\b", "from", caption_text)
+    caption_text = re.sub(r"\bor\b", "for", caption_text)
+    caption_text = re.sub(r"\bf\b", "of", caption_text)
 
     for bad in BANNED_WORDS:
-        caption_text = caption_text.replace(bad, "").replace(bad.title(), "")
+        pattern = r'\b' + re.escape(bad) + r'\b'
+        caption_text = re.sub(pattern, '', caption_text, flags=re.IGNORECASE)
 
-    # Preserve paragraphs
+    # Preserve paragraph breaks properly
     caption_text = "\n\n".join(
         [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
     )
 
-    # 🔤 FIX SPELLING ERRORS
-    caption_text = fix_spelling_errors(caption_text)
+    if not caption_text:
+        caption_text = f"Caption could not be generated for {p_norm}. Please retry."
 
     logger.info(f"Caption generated for {p_norm}: {len(caption_text)} characters")
 
-    if not caption_text:
-        caption_text = f"Caption could not be generated for {p_norm}. Please retry."
-    
     return (p_norm, caption_text)
+
 
 
 async def generate_caption_post(
@@ -1015,22 +1026,51 @@ async def generate_caption_post(
     async def generate_title(platform: str, query: str, caption: str = "") -> tuple[str, str]:
         if platform == "youtube":
             prompt = f"""
-Generate a UNIQUE YouTube video title that is curiosity-driven, highly clickable, and trend-aware. Do NOT repeat or paraphrase the video description or caption. Use a different angle, hook, or question. Make it stand out in search and recommendations.
+Generate ONE highly clickable YouTube title.
 
-Rules:
-- 40–60 characters
-- Clickable but not clickbait
-- Use curiosity, action, or emotional hooks
-- Avoid repeating or paraphrasing the main description/caption
-- Make it feel native to YouTube trends
+PRIMARY GOAL:
+Make the viewer feel compelled to click.
+
+The title MUST create a strong curiosity gap.
+It should hint at something hidden, overlooked, changing, or misunderstood.
+
+PSYCHOLOGICAL TRIGGERS (Use at least ONE):
+- A hidden reason
+- A mistake most people make
+- A shift happening quietly
+- Something becoming obsolete
+- An unexpected outcome
+- A contrast between belief vs reality
+- A system behind the scenes
+
+REQUIREMENTS:
+- 45–65 characters
+- Must clearly reference the core topic
+- Must include at least one relevant keyword
+- Must feel slightly bold or disruptive
+- No emojis
+- No hashtags
+
+STRICTLY AVOID:
+- "What they're not telling you"
+- "The truth about"
+- "Complete guide"
+- "Explained"
+- Generic vague titles
+- Corporate tone
+- Marketing hype words (revolutionary, ultimate, game-changing)
+
+CRITICAL:
+If the title feels safe, neutral, or predictable,
+rewrite it internally until it creates tension.
+
+The viewer should feel:
+"I need to know what this means."
 
 Context:
 {query}
 
-Caption (for reference, do NOT copy):
-{caption}
-
-Return ONLY the title text.
+Return ONLY the title.
 """
         elif platform == "pinterest":
             prompt = f"""
