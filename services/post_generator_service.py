@@ -569,8 +569,21 @@ LENGTH:
 - Long-form: 800–1,100 characters total  
 - EXACTLY 3 paragraphs separated by a blank line  
 
-VIDEO CONTEXT:
+VIDEO DETAILS (USE THESE SPECIFICS CAREFULLY):
+
+TOPIC:
 {effective_query}
+
+MANDATORY SPECIFICITY RULE:
+- You MUST reference at least ONE concrete detail from the topic.
+- Do NOT write abstract commentary.
+- The caption should make it obvious what the video is about.
+- If someone reads the caption without watching the video, 
+  they must clearly understand the subject.
+
+SELF-CHECK:
+If the topic is not clearly identifiable from the caption,
+rewrite internally before returning.
 
 Return ONLY the caption text.
 """
@@ -780,35 +793,47 @@ Return ONLY the caption (1-2 sentences max).
 """
     elif p_norm == "youtube":
         return f"""
-You are a creator-growth AI writing YouTube content.
-Goal: Maximum watch time and comments. NOT brand safety.
+You are a creator-growth AI writing a YouTube video description.
 
-CORE VOICE (NON-NEGOTIABLE):
-- Sharp, sarcastic, self-aware
-- Slightly dangerous or accusatory but smart
-- Implies "people are lying" or "you were misled"
-- Never educational or safe
-- Short sentences. Punchy rhythm.
+GOAL:
+- Maximize watch time
+- Improve search discoverability
+- Clearly explain what the video covers
+- Encourage engagement naturally
 
-YOUTUBE RULES (PRIORITY: WATCH TIME + COMMENTS):
+DESCRIPTION STRUCTURE (MANDATORY):
 
-DESCRIPTION:
-- Expand the controversy without resolving it
-- Add context but keep tension
-- Build tension, do NOT resolve it
-- Make the viewer feel late or misled
-- End with a question that provokes arguments in comments
-- Short paragraphs, readable out loud
+OPENING (First 2–3 lines):
+- Clearly state what this video is about
+- Mention the core topic explicitly
+- Include important keywords naturally
+- Make it obvious what viewers will learn
 
-AVOID:
-- First-person (no I, me, my, we)
-- Emojis
-- Hashtags
-- Motivational tone
-- Politeness
-- Explaining too much
+BODY:
+- Expand on what the video covers
+- Mention 2–4 specific insights, examples, or key points
+- Be clear and concrete, not abstract
+- Keep paragraphs readable and skimmable
+- Do NOT create artificial mystery
 
-If something can be said in 5 words, do not use 10.
+ENDING:
+- Add a natural engagement prompt (comment or subscribe)
+- No forced controversy
+- No dramatic bait
+
+RULES:
+- Clear and specific
+- Informative but engaging
+- No emojis
+- No hashtags inside the description
+- No exaggerated tension
+- No vagueness
+- Avoid abstract filler language
+
+CLARITY CHECK:
+If someone reads only the first paragraph,
+they must clearly understand what the video is about.
+If not, rewrite internally before responding.
 
 TOPIC:
 {effective_query}
