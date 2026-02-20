@@ -8,10 +8,10 @@ router = APIRouter(prefix="/media", tags=["Media Upload"])
 
 MAX_MEDIA_UPLOAD = 10
 # Max concurrent Cloudinary uploads to avoid overwhelming the connection
-MAX_CONCURRENT_UPLOADS = 5
+MAX_CONCURRENT_UPLOADS = 2
 
 
-UPLOAD_TIMEOUT_SECONDS = 120  # 2 min per file (videos can be large)
+UPLOAD_TIMEOUT_SECONDS = 300  # 2 min per file (videos can be large)
 
 
 async def _upload_single_file(file_content: bytes, filename: str, semaphore: asyncio.Semaphore) -> dict:
@@ -53,7 +53,13 @@ async def upload_media(files: List[UploadFile] = File(...)):
             detail=f"Maximum {MAX_MEDIA_UPLOAD} media files allowed"
         )
 
-    # Validate file types first (fast check before any uploads)
+    MAX_FILE_SIZE_MB = 100
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+    valid_files = []
+    failed_files_size = []
+
+    # ✅ Validate files
     for file in files:
         if not file.content_type.startswith(("image/", "video/")):
             raise HTTPException(
@@ -61,18 +67,33 @@ async def upload_media(files: List[UploadFile] = File(...)):
                 detail=f"Only image or video files are allowed. '{file.filename}' is {file.content_type}"
             )
 
-    # Read all file contents into memory so Cloudinary uploads don't fight over streams
+        if file.size and file.size > MAX_FILE_SIZE_BYTES:
+            failed_files_size.append(file.filename)
+        else:
+            valid_files.append(file)
+
+    if not valid_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"All files exceed {MAX_FILE_SIZE_MB}MB limit."
+        )
+
+    # ✅ Read ONLY valid files
     file_data = []
-    for file in files:
+    for file in valid_files:
         try:
             content = await file.read()
             file_data.append((content, file.filename))
         except Exception:
             logger.error(f"❌ Failed to read file {file.filename}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Failed to read file: {file.filename}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to read file: {file.filename}"
+            )
 
-    # Upload all files in parallel with a concurrency limit
+    # ✅ Upload with concurrency control
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+
     tasks = [
         _upload_single_file(content, filename, semaphore)
         for content, filename in file_data
@@ -81,23 +102,29 @@ async def upload_media(files: List[UploadFile] = File(...)):
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     uploaded_files = []
-    failed_files = []
+    failed_files_upload = []
+
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.error(f"❌ Cloudinary upload failed for {file_data[i][1]}: {result}", exc_info=True)
-            failed_files.append(file_data[i][1])
+            logger.error(
+                f"❌ Cloudinary upload failed for {file_data[i][1]}: {result}",
+                exc_info=True
+            )
+            failed_files_upload.append(file_data[i][1])
         else:
             uploaded_files.append(result)
 
-    if failed_files and not uploaded_files:
+    # ❌ If everything failed (size + upload)
+    if not uploaded_files:
         raise HTTPException(
             status_code=500,
-            detail=f"All uploads failed. Failed files: {', '.join(failed_files)}"
+            detail=f"All uploads failed. Failed files: {', '.join(failed_files_size + failed_files_upload)}"
         )
 
+    # ✅ Partial success allowed
     return {
         "success": True,
         "count": len(uploaded_files),
-        "failed": failed_files,
+        "failed": failed_files_size + failed_files_upload,
         "media": uploaded_files
     }
