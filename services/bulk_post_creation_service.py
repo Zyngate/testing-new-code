@@ -290,11 +290,44 @@ async def process_bulk_media_urls(
                 
                 try:
                     if media_type == "VIDEO":
+                        import subprocess
+
+                        def get_video_duration(path: str) -> float:
+                            cmd = [
+                                "ffprobe",
+                                "-v", "error",
+                                "-show_entries", "format=duration",
+                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                path,
+                            ]
+                            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            return float(result.stdout)
+                        duration = get_video_duration(local_path)
+
+                        if duration > 120:
+                            start_time = 60
+                            clip_duration = 120
+                            clipped_path = local_path.replace(".mp4", "_clipped.mp4")
+
+                            subprocess.run([
+                                "ffmpeg",
+                                "-y",
+                                "-ss", str(start_time),
+                                "-t", str(clip_duration),
+                                "-i", local_path,
+                                "-c", "copy",
+                                clipped_path
+          ])
+
+                            video_to_process = clipped_path
+                        else:
+                            video_to_process = local_path
+
                         result = await caption_from_video_file(
-                            video_filepath=local_path,
+                            video_filepath=video_to_process,
                             platforms=platforms_lower,
                             autoposting=True
-                        )
+    )
                     else:
                         client = Groq(api_key=GROQ_API_KEY_CAPTION)
                         result = await caption_from_image_file(
@@ -307,6 +340,10 @@ async def process_bulk_media_urls(
                 finally:
                     if os.path.exists(local_path):
                         os.remove(local_path)
+
+                    clipped_path = local_path.replace(".mp4", "_clipped.mp4")
+                    if os.path.exists(clipped_path):
+                        os.remove(clipped_path)
                         
             except Exception as e:
                 logger.error(f"Caption generation failed for {url}: {e}")

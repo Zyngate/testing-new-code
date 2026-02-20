@@ -6,7 +6,7 @@ from config import logger
 
 router = APIRouter(prefix="/media", tags=["Media Upload"])
 
-MAX_MEDIA_UPLOAD = 20
+MAX_MEDIA_UPLOAD = 10
 # Max concurrent Cloudinary uploads to avoid overwhelming the connection
 MAX_CONCURRENT_UPLOADS = 5
 
@@ -43,7 +43,7 @@ async def _upload_single_file(file_content: bytes, filename: str, semaphore: asy
 @router.post("/upload-media")
 async def upload_media(files: List[UploadFile] = File(...)):
     """
-    Upload up to 20 images/videos to Cloudinary in parallel.
+    Upload up to 10 images/videos to Cloudinary in parallel.
     Returns Cloudinary URLs.
     """
 
