@@ -61,6 +61,21 @@ def format_time_range(hour: int) -> str:
     return f"{to_12h(start_hour)} - {to_12h(end_hour)}"
 
 # Platform-specific research data for best posting times and frequencies
+# Posting strategy tiers:
+#   aggressive  = early growth phase, maximize visibility and algorithm favor
+#   optimal     = established account, balance quality and frequency
+#   conservative = large audience, focus on quality over quantity
+POSTING_STRATEGY_TIERS = {
+    'instagram': {'aggressive': 21, 'optimal': 14, 'conservative': 7},
+    'twitter':   {'aggressive': 35, 'optimal': 21, 'conservative': 10},
+    'x':         {'aggressive': 35, 'optimal': 21, 'conservative': 10},
+    'facebook':  {'aggressive': 10, 'optimal': 5,  'conservative': 3},
+    'youtube':   {'aggressive': 5,  'optimal': 3,  'conservative': 2},
+    'linkedin':  {'aggressive': 7,  'optimal': 5,  'conservative': 3},
+    'tiktok':    {'aggressive': 28, 'optimal': 14, 'conservative': 7},
+    'threads':   {'aggressive': 21, 'optimal': 14, 'conservative': 7},
+}
+
 PLATFORM_PEAK_HOURS = {
     'instagram': {
         # PRE-PEAK Strategy: Meta's algorithm needs 2-5 hours to distribute content.
@@ -902,8 +917,10 @@ class RecommendationEngine:
             # Get platform config (default to instagram if not found)
             platform_config = PLATFORM_PEAK_HOURS.get(platform_lower, PLATFORM_PEAK_HOURS.get('instagram'))
             
-            # Determine recommended posts per week for this platform
-            posts_per_week = platform_config['posts_per_week']
+            # Determine posting strategy tier and recommended posts per week
+            strategy = self._determine_posting_strategy(df)
+            strategy_tiers = POSTING_STRATEGY_TIERS.get(platform_lower, POSTING_STRATEGY_TIERS.get('instagram'))
+            posts_per_week = strategy_tiers.get(strategy, platform_config['posts_per_week'])
             
             # Calculate number of time slots to recommend (match the posting frequency)
             num_slots = min(posts_per_week, 14)  # Cap at 14 slots (2 per day max in output)
@@ -1026,6 +1043,7 @@ class RecommendationEngine:
                 'platform': platform_lower,
                 'platform_display': platform.capitalize(),
                 'posts_per_week': posts_per_week,
+                'posting_strategy': strategy,
                 'time_slots': time_slots[:num_slots],
                 'peak_hours_description': platform_config['description'],
                 'data_source': 'user_data' if (use_user_data and platform_post_count >= 5) else 'research_data',
@@ -1036,6 +1054,7 @@ class RecommendationEngine:
         
         return {
             'platform_schedules': platform_schedules,
+            'posting_strategy': strategy,
             'data_source': data_source,
             'use_user_data': use_user_data,
             'total_posts_analyzed': total_recent_posts,
@@ -1573,6 +1592,36 @@ class RecommendationEngine:
         
         return insights
 
+    def _determine_posting_strategy(self, df: pd.DataFrame) -> str:
+        """
+        Determine the posting strategy tier based on account growth stage.
+        - 'aggressive': Early growth / small account → post as much as possible
+        - 'optimal': Established account with decent engagement → balanced approach
+        - 'conservative': Large, grown account → focus on quality
+        """
+        total_posts = len(df)
+        avg_views = df['views'].mean() if 'views' in df.columns else 0
+        avg_engagement = df['engagement_score'].mean() if len(df) > 0 else 0
+        avg_reach = df['reach'].mean() if 'reach' in df.columns else 0
+        
+        # Protect against NaN
+        if pd.isna(avg_views): avg_views = 0
+        if pd.isna(avg_engagement): avg_engagement = 0
+        if pd.isna(avg_reach): avg_reach = 0
+        
+        # Conservative = consistently high reach/views (established big account)
+        # Thresholds: avg views > 100K or avg reach > 50K AND decent post history
+        if (avg_views > 100000 or avg_reach > 50000) and total_posts >= 20:
+            return 'conservative'
+        
+        # Optimal = moderate reach, growing account
+        # Thresholds: avg views > 20K or avg reach > 10K
+        if (avg_views > 20000 or avg_reach > 10000) and total_posts >= 15:
+            return 'optimal'
+        
+        # Default: aggressive — still growing, need maximum visibility
+        return 'aggressive'
+
     def generate_recommendations(self) -> Dict[str, Any]:
         """Generate categorized, dynamic actionable recommendations"""
         df = self.processed_data
@@ -2039,6 +2088,132 @@ class RecommendationEngine:
         """Generate growth-focused recommendations"""
         recommendations = []
         total_posts = len(df)
+        
+        # --- ALWAYS: Meta/TikTok Verification recommendation ---
+        platforms = df['platform'].unique().tolist() if 'platform' in df.columns else []
+        meta_platforms = [p for p in platforms if p in ['instagram', 'facebook']]
+        has_tiktok = 'tiktok' in platforms
+        
+        verification_platforms = []
+        if meta_platforms:
+            verification_platforms.append('Meta (Instagram/Facebook)')
+        if has_tiktok:
+            verification_platforms.append('TikTok')
+        if not verification_platforms:
+            # Even if user isn't on these platforms yet, still recommend
+            verification_platforms = ['Meta (Instagram/Facebook)', 'TikTok']
+        
+        verification_text = ' and '.join(verification_platforms)
+        recommendations.append({
+            'priority': 'high',
+            'category': 'Verification',
+            'action': (
+                f"Get verified on {verification_text} to unlock more reach:\n"
+                "• Verified accounts get priority in search results and recommendations\n"
+                "• Meta Verified gives you a blue badge + impersonation protection + direct support\n"
+                "• TikTok verification boosts credibility and unlocks creator tools\n"
+                "• Verification signals trust to the algorithm — your content gets shown to more people"
+            ),
+            'reason': (
+                "Verified accounts consistently see 30-50% more reach than unverified ones. "
+                "The algorithm treats verified creators as trusted sources, pushing their content further. "
+                "It's one of the fastest ways to increase your organic visibility."
+            ),
+            'expected_outcome': (
+                "Creators who get verified typically see an immediate boost in impressions and reach. "
+                "Combined with good content, verification can be the difference between 10K and 100K views."
+            )
+        })
+        
+        # --- ALWAYS: Stick to trending topics for reach ---
+        recommendations.append({
+            'priority': 'high',
+            'category': 'Trending Topics',
+            'action': (
+                "Stick to trending topics if you want reach:\n"
+                "• Monitor trending sounds, hashtags, and topics daily on each platform\n"
+                "• Jump on trends within the first 24-48 hours — early movers get the most reach\n"
+                "• Put your unique spin on trends — don't just copy, add your perspective\n"
+                "• Use trending audio on Reels/TikTok — the algorithm pushes content with popular sounds\n"
+                "• Follow news in your niche and create content around breaking stories fast"
+            ),
+            'reason': (
+                "Platforms actively push trending content to more users. When you create around a trending topic, "
+                "the algorithm already has a massive audience searching for and engaging with that topic — "
+                "your content rides that wave. Original content is great for loyalty, but trending content is how you get discovered."
+            ),
+            'expected_outcome': (
+                "Creators who consistently tap into trends see 3-10x more reach on those posts compared to non-trending content. "
+                "Even one viral trend-based post can bring thousands of new followers who then see your regular content."
+            )
+        })
+        
+        # --- ALWAYS: Posting Strategy (Aggressive → Optimal → Conservative) ---
+        strategy = self._determine_posting_strategy(df)
+        
+        if strategy == 'aggressive':
+            strategy_action = (
+                "You're in GROWTH MODE — go aggressive with your posting:\n"
+                "• Post 2-3x per day on Instagram/TikTok/Threads\n"
+                "• Post 3-5x per day on Twitter/X\n"
+                "• Upload 4-5 YouTube videos per week if possible\n"
+                "• Quantity matters right now — the algorithm needs to learn who you are\n"
+                "• Repurpose content across platforms to maximize output without burning out"
+            )
+            strategy_reason = (
+                "When you're still growing, the algorithm doesn't know you yet. "
+                "High posting frequency tells platforms you're a serious creator worth distributing. "
+                "Every post is a lottery ticket for going viral — the more you post, the more chances you get."
+            )
+            strategy_outcome = (
+                "Aggressive posters in the growth phase typically see 2-5x faster follower growth. "
+                "Once you've built momentum and your average reach exceeds 20K+, we'll shift you to a more balanced schedule."
+            )
+        elif strategy == 'optimal':
+            strategy_action = (
+                "You've built momentum — shift to an OPTIMAL posting schedule:\n"
+                "• Post 1-2x per day on Instagram/TikTok/Threads\n"
+                "• Post 2-3x per day on Twitter/X\n"
+                "• Upload 2-3 YouTube videos per week\n"
+                "• Focus on your best-performing content types and times\n"
+                "• Quality over quantity now — each post should be intentional"
+            )
+            strategy_reason = (
+                "Your account has solid traction — the algorithm knows you and your audience is engaged. "
+                "At this stage, posting too much can actually hurt by diluting engagement rates. "
+                "Focus on consistency at the right times rather than maximum volume."
+            )
+            strategy_outcome = (
+                "Optimal-stage creators who focus on quality see higher engagement rates, better algorithmic favor, "
+                "and more sustainable growth without burnout."
+            )
+        else:  # conservative
+            strategy_action = (
+                "You've grown big — maintain with a CONSERVATIVE, quality-first strategy:\n"
+                "• Post 1x per day or every other day on Instagram/TikTok\n"
+                "• Post 1-2x per day on Twitter/X\n"
+                "• Upload 1-2 high-quality YouTube videos per week\n"
+                "• Every post should be polished — your audience expects quality\n"
+                "• Focus on community engagement and brand partnerships"
+            )
+            strategy_reason = (
+                "With your reach and audience size, you've won the algorithm's trust. "
+                "At this stage, fewer but higher-quality posts maintain engagement rates better. "
+                "Over-posting with a large audience can lead to unfollows and engagement drops."
+            )
+            strategy_outcome = (
+                "Large accounts that maintain quality-first posting see sustained engagement rates "
+                "and stronger monetization opportunities. Your audience values each post more."
+            )
+        
+        recommendations.append({
+            'priority': 'high',
+            'category': 'Posting Strategy',
+            'action': strategy_action,
+            'reason': strategy_reason,
+            'expected_outcome': strategy_outcome,
+            'current_strategy': strategy
+        })
         
         # Posting frequency recommendation - only when we have enough data to determine frequency
         if total_posts < 15 and total_posts >= 5:
