@@ -632,7 +632,12 @@ STYLE:
 - Human and engaging  
 - Confident, not corporate  
 - Clear, not abstract  
-
+MANDATORY SPECIFICITY RULE:
+- You MUST reference at least ONE concrete detail from the topic.
+IMPORTANT:
+- The video includes {detected_person}.
+- Naturally reference {detected_person} 2-4 times.
+- Do NOT force the name.
 RULES:
 - You MAY reference visuals or moments in the video  
 - STRICTLY NO first-person language (no I, me, my, we)  
