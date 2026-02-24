@@ -793,10 +793,12 @@ VIDEO SIGNALS (for understanding only):
 Focus on ONE strong idea or reaction.
 """
             captions_result = await generate_caption_post(
-                creator_context,
-                keywords,
-                platforms
-            )
+    creator_context,
+    keywords,
+    platforms,
+    autoposting=autoposting,
+    detected_person=detected_person
+)
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
             logger.error(f"generate_caption_post failed: {e}", exc_info=True)

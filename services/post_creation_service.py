@@ -157,6 +157,7 @@ async def create_post_from_uploaded_media(
                         return await caption_from_video_file(
                             video_filepath=video_to_process,
                             platforms=platforms,
+                            autoposting=is_autopost
                     )   
                     else:
                         client = Groq(api_key=GROQ_API_KEY_CAPTION)
@@ -164,6 +165,7 @@ async def create_post_from_uploaded_media(
                             image_filepath=local_media_path,
                             platforms=platforms,
                             client=client,
+                            autoposting=is_autopost
                         )
 
             async def get_ai_times():
@@ -174,7 +176,7 @@ async def create_post_from_uploaded_media(
                     platforms,
                     user_timezone=user_tz,
                 )
-
+            is_autopost = schedule_mode == "AUTO"
             # Execute both simultaneously
             ai_result, optimal_times = await asyncio.gather(
                 get_ai_captions(),

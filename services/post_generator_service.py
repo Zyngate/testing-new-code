@@ -456,10 +456,15 @@ async def fetch_platform_hashtags(
     trending_tag = results[0] if not isinstance(results[0], Exception) else None
     broad_tag = results[1] if not isinstance(results[1], Exception) else None
 
-    # 🎯 STRICT 3:3:4 STRUCTURE
-    relevant_limit = 3
-    broad_limit = 3
-    trending_limit = 4
+    # 🎯 STRUCTURE BASED ON MODE
+    if autoposting:
+        relevant_limit = 1
+        broad_limit = 1
+        trending_limit = 1
+    else:
+        relevant_limit = 3
+        broad_limit = 3
+        trending_limit = 4
 
     ordered_tags = []
 
@@ -489,7 +494,15 @@ async def fetch_platform_hashtags(
         ordered_tags.append(tag)
 
     # 3️⃣ TRENDING (max 4 unique)
-    pool = TRENDING_POOLS.get(platform, [])
+    # 3️⃣ TRENDING
+    if platform == "instagram":
+        if autoposting:
+            pool = INSTAGRAM_DISCOVERY_CORE
+        else:
+            pool = TRENDING_POOLS.get(platform, [])
+    else:
+        pool = TRENDING_POOLS.get(platform, [])
+
     random.shuffle(pool)
 
     trending_added = 0
@@ -547,18 +560,33 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     # 4️⃣ Final hard trim (guaranteed safe now)
     return text[:target_chars]
 
+
+
 # ---------------------------
 # 3) caption generator
 # ---------------------------
 
-
-def _build_caption_prompt(p_norm: str, effective_query: str) -> str:
+def _build_caption_prompt(
+    p_norm: str,
+    effective_query: str,
+    detected_person: str | None = None
+) -> str:
+    person_instruction = ""
+    if detected_person:
+        person_instruction = f"""
+IMPORTANT:
+- The video includes {detected_person}.
+- Naturally reference {detected_person} 1–2 times.
+- Do NOT force the name.
+"""
     """Build the caption prompt for a given platform."""
     # Detect if this is a marketing campaign (affects Threads tone)
     is_campaign = is_marketing_campaign(effective_query)
     
     if p_norm == "instagram":
         return f"""
+{person_instruction}
+
 Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
 
 STRUCTURE (MANDATORY):
@@ -1002,16 +1030,18 @@ Return ONLY the caption text.
 async def _generate_hashtags_for_platform(
     p_norm: str,
     seed_keywords: List[str],
-    effective_query: str
+    effective_query: str,
+    autoposting: bool
 ) -> tuple[str, List[str]]:
     """Generate hashtags for a single platform. Returns (platform, hashtags)."""
     try:
         tags = await fetch_platform_hashtags(
-            client=None,
-            seed_keywords=seed_keywords,
-            platform=p_norm,
-            effective_query=effective_query
-        )
+    client=None,
+    seed_keywords=seed_keywords,
+    platform=p_norm,
+    effective_query=effective_query,
+    autoposting=autoposting
+)
     except Exception as e:
         logger.error(f"Hashtag generation failed for {p_norm}: {e}")
         tags = []
@@ -1047,11 +1077,16 @@ def fix_dropped_first_char(text: str) -> str:
 
 async def _generate_caption_for_platform(
     p_norm: str,
-    effective_query: str
+    effective_query: str,
+    detected_person: str | None = None
 ) -> tuple[str, str]:
     """Generate caption for a single platform. Returns (platform, caption)."""
 
-    caption_prompt = _build_caption_prompt(p_norm, effective_query)
+    caption_prompt = _build_caption_prompt(
+    p_norm,
+    effective_query,
+    detected_person
+)
 
     # 1️⃣ Generate caption (single pass only)
     caption_text = await safe_generate_caption(
@@ -1117,6 +1152,8 @@ async def generate_caption_post(
     effective_query: str,
     seed_keywords: List[str],
     platforms: List[str],
+    autoposting: bool = False,
+    detected_person: str | None = None
 ) -> Dict[str, Any]:
 
     captions: Dict[str, str] = {}
@@ -1129,9 +1166,14 @@ async def generate_caption_post(
 
     # Create all tasks for parallel execution
     hashtag_tasks = [
-        _generate_hashtags_for_platform(p_norm, seed_keywords, effective_query)
-        for p_norm in normalized_platforms
-    ]
+    _generate_hashtags_for_platform(
+        p_norm,
+        seed_keywords,
+        effective_query,
+        autoposting
+    )
+    for p_norm in normalized_platforms
+]
 
     # Title generation tasks (YouTube and Pinterest only, platform-specific prompts)
     async def generate_title(platform: str, query: str, caption: str = "") -> tuple[str, str]:
@@ -1213,9 +1255,13 @@ Return ONLY the title text.
     # Only generate title tasks for YouTube and Pinterest, passing the generated caption for uniqueness
     # Wait for captions to be generated first
     caption_results = await asyncio.gather(*[
-        _generate_caption_for_platform(p_norm, effective_query)
-        for p_norm in normalized_platforms
-    ])
+    _generate_caption_for_platform(
+        p_norm,
+        effective_query,
+        detected_person
+    )
+    for p_norm in normalized_platforms
+])
     captions = {p_norm: caption_text for p_norm, caption_text in caption_results}
 
     title_tasks = [
