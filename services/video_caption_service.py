@@ -793,7 +793,7 @@ VIDEO SIGNALS (for understanding only):
 Focus on ONE strong idea or reaction.
 """
             captions_result = await generate_caption_post(
-    creator_context,
+    marketing_prompt,
     keywords,
     platforms,
     autoposting=autoposting,
