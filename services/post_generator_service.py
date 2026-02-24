@@ -595,6 +595,21 @@ IMPORTANT:
     # Detect if this is a marketing campaign (affects Threads tone)
     is_campaign = is_marketing_campaign(effective_query)
     
+    identity_hook_rule = ""
+    if detected_person:
+        identity_hook_rule = f"""
+- The FIRST sentence MUST begin with "{detected_person}".
+- Do NOT begin with: "A conversation", "The video", "A speaker", or any generic subject.
+- Do NOT use the word "speaker".
+- The person must be framed as the central figure.
+"""
+    else:
+        identity_hook_rule = """
+- Do NOT begin with: "A conversation", "The video", or "A speaker".
+- The hook must begin with a concrete action or statement from the video.
+- Do NOT use the word "speaker".
+"""
+    
     if p_norm == "instagram":
         return f"""
 {person_instruction}
@@ -603,11 +618,14 @@ Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
 
 STRUCTURE (MANDATORY):
 
-PARAGRAPH 1 — HOOK  
-- 2–3 short lines  
-- Strong curiosity, tension, or emotional pull  
-- Must clearly connect to the video  
-- Designed to stop scrolling and trigger "more"
+PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
+
+{identity_hook_rule}
+
+- 2–3 short lines.
+- Must reference a specific phrase from:
+  • OCR text
+  • Transcript
 
 PARAGRAPH 2 — CONTEXT & INSIGHT  
 - Explain what's happening in the video  
