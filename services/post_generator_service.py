@@ -569,14 +569,26 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
 def _build_caption_prompt(
     p_norm: str,
     effective_query: str,
-    detected_person: str | None = None
+    detected_person: str | None = None,
+    ocr_text: str | None = None,
+    transcript: str | None = None
 ) -> str:
     person_instruction = ""
+    raw_material = ""
+
+    # Always inject OCR + transcript
+    if ocr_text:
+        raw_material += f"\nOCR TEXT DETECTED:\n{ocr_text[:400]}\n"
+
+    if transcript:
+        raw_material += f"\nTRANSCRIPT EXCERPT:\n{transcript[:400]}\n"
+
+    # Person instruction only if person exists
     if detected_person:
         person_instruction = f"""
 IMPORTANT:
 - The video includes {detected_person}.
-- Naturally reference {detected_person} 1–2 times.
+- Naturally reference {detected_person} 2-4 times.
 - Do NOT force the name.
 """
     """Build the caption prompt for a given platform."""
@@ -636,6 +648,9 @@ LENGTH:
 - EXACTLY 3 paragraphs separated by a blank line  
 
 VIDEO DETAILS (USE THESE SPECIFICS CAREFULLY):
+
+RAW VIDEO MATERIAL (PRIORITY FOR HOOK):
+{raw_material}
 
 TOPIC:
 {effective_query}
@@ -942,10 +957,15 @@ Write a LONG-FORM TikTok caption (800–1000 characters).
 
 STRUCTURE (MANDATORY):
 
-PARAGRAPH 1 — HOOK
-- First 2–3 lines must stop scrolling
-- Create curiosity, tension, or emotion
-- Make the viewer NEED to watch
+PARAGRAPH 1 — HOOK (CRITICAL)
+
+- Must reference a specific phrase from:
+  • OCR text
+  • Transcript
+- If a strong quote exists, paraphrase it.
+- Do NOT invent drama.
+- Do NOT exaggerate tone.
+- The hook must feel extracted from the video.
 
 PARAGRAPH 2 — CORE IDEA
 - Focus on ONE strong reaction, thought, or insight
@@ -1078,14 +1098,18 @@ def fix_dropped_first_char(text: str) -> str:
 async def _generate_caption_for_platform(
     p_norm: str,
     effective_query: str,
-    detected_person: str | None = None
+    detected_person: str | None = None,
+    ocr_text: str | None = None,
+    transcript: str | None = None
 ) -> tuple[str, str]:
     """Generate caption for a single platform. Returns (platform, caption)."""
 
     caption_prompt = _build_caption_prompt(
     p_norm,
     effective_query,
-    detected_person
+    detected_person,
+    ocr_text,
+    transcript
 )
 
     # 1️⃣ Generate caption (single pass only)
@@ -1153,7 +1177,9 @@ async def generate_caption_post(
     seed_keywords: List[str],
     platforms: List[str],
     autoposting: bool = False,
-    detected_person: str | None = None
+    detected_person: str | None = None,
+    ocr_text: str | None = None,
+    transcript: str | None = None
 ) -> Dict[str, Any]:
 
     captions: Dict[str, str] = {}
@@ -1258,7 +1284,9 @@ Return ONLY the title text.
     _generate_caption_for_platform(
         p_norm,
         effective_query,
-        detected_person
+        detected_person,
+        ocr_text,
+        transcript
     )
     for p_norm in normalized_platforms
 ])

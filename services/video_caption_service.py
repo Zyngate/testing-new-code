@@ -797,7 +797,9 @@ Focus on ONE strong idea or reaction.
     keywords,
     platforms,
     autoposting=autoposting,
-    detected_person=detected_person
+    detected_person=detected_person,
+    ocr_text=ocr_text_combined,
+    transcript=transcript
 )
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
