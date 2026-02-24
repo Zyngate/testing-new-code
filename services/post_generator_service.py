@@ -3,6 +3,7 @@ import asyncio
 import itertools
 import random
 import re
+import httpx
 from typing import List, Dict, Any
 from groq import AsyncGroq
 from enum import Enum
@@ -127,6 +128,7 @@ BROAD_BLACKLIST = {
     "#trending", "#viral",
 }
 
+SUGGESTION_CACHE = {}
 
 # Algorithm-optimized hashtag pools for maximum reach
 TRENDING_POOLS = {
@@ -299,22 +301,91 @@ Context: {effective_query}"""
         return next((t for t in text.replace("\n", " ").split() if t.startswith("#")), None)
     return None
 
+async def fetch_search_suggestions(query: str, platform: str) -> List[str]:
+    base_url = "https://suggestqueries.google.com/complete/search"
 
-async def _fetch_relevant_tag(platform: str, effective_query: str, seed_keywords: List[str]) -> str | None:
-    """Fetch relevant tag - run in parallel."""
-    prompt = f"""Generate ONE highly relevant hashtag for {platform} that directly matches the content topic.
-Return ONLY one hashtag.
-Context: {effective_query}"""
-    text = await _groq_hashtag_call(prompt)
-    if text:
-        tag = next((t for t in text.replace("\n", " ").split() if t.startswith("#")), None)
-        if tag:
-            return tag
-    # Fallback to seed keyword
-    if seed_keywords:
-        return f"#{seed_keywords[0].replace(' ', '')}"
-    return None
+    cache_key = f"{platform}:{query.lower()}"
+    if cache_key in SUGGESTION_CACHE:
+        return SUGGESTION_CACHE[cache_key]
 
+    if platform == "youtube":
+        params = {"client": "firefox", "ds": "yt", "q": query}
+    elif platform == "instagram":
+        params = {"client": "firefox", "q": f"{query} instagram hashtag"}
+    elif platform == "tiktok":
+        params = {"client": "firefox", "q": f"{query} tiktok hashtag"}
+    elif platform == "linkedin":
+        params = {"client": "firefox", "q": f"{query} linkedin professional"}
+    else:
+        params = {"client": "firefox", "q": query}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=2.0)
+        ) as client:
+            response = await client.get(base_url, params=params)
+            suggestions = response.json()[1]
+            SUGGESTION_CACHE[cache_key] = suggestions
+            return suggestions
+    except Exception:
+        return []
+
+def build_relevant_from_suggestions(
+    suggestions: List[str],
+    seed_keywords: List[str],
+    platform: str
+) -> List[str]:
+
+    max_tags = 3
+    final = []
+    seen = set()
+
+    for suggestion in suggestions:
+        words = re.findall(r"[A-Za-z]+", suggestion)
+
+        # Skip very short suggestions
+        if len(words) < 2:
+            continue
+
+        # 1️⃣ Primary entity (first 2 words)
+        primary = "#" + "".join(w.capitalize() for w in words[:2])
+
+        # 2️⃣ Single strongest keyword
+        single = "#" + words[0].capitalize()
+
+        # 3️⃣ Two-word compressed variant
+        if len(words) >= 3:
+            compressed = "#" + words[0].capitalize() + words[2].capitalize()
+        else:
+            compressed = None
+
+        candidates = [primary, single, compressed]
+
+        for tag in candidates:
+            if not tag:
+                continue
+
+            # Avoid overly long hashtags
+            if len(tag) > 25:
+                continue
+
+            if tag.lower() not in seen:
+                seen.add(tag.lower())
+                final.append(tag)
+
+        if len(final) >= max_tags:
+            break
+
+    # Fallback if suggestions weak
+    if len(final) < max_tags:
+        for kw in seed_keywords:
+            tag = "#" + kw.replace(" ", "").capitalize()
+            if tag.lower() not in seen:
+                final.append(tag)
+            if len(final) >= max_tags:
+                break
+
+    return final[:max_tags]
 
 async def _fetch_broad_tag(platform: str, effective_query: str, seed_keywords: List[str]) -> str | None:
     """Fetch broad category tag - run in parallel."""
@@ -345,51 +416,91 @@ async def fetch_platform_hashtags(
     effective_query: str,
     autoposting: bool = False
 ) -> List[str]:
-    """
-    OPTIMIZED: Runs all 3 hashtag AI calls in PARALLEL for speed.
-    Uses dedicated hashtag API key pool to avoid rate limiting with captions.
-    """
+
     platform = platform.lower()
 
-    # 🚀 RUN ALL 3 HASHTAG FETCHES IN PARALLEL
+    # 1️⃣ Suggestion-based relevant tags
+    # Extract only meaningful sentence (skip instruction text)
+    lines = [l.strip() for l in effective_query.split("\n") if l.strip()]
+    clean_query = ""
+
+    for line in lines:
+        if line.lower().startswith(("this video", "you are", "focus on", "context")):
+            continue
+        if len(line.split()) > 3:  # Must be meaningful phrase
+            clean_query = line
+            break
+
+    # Fallback
+    if not clean_query:
+        clean_query = effective_query[:80]
+    clean_query = clean_query[:80]
+
+    suggestions = await fetch_search_suggestions(clean_query, platform)
+    relevant_tags = build_relevant_from_suggestions(
+        suggestions,
+        seed_keywords,
+        platform
+    )
+
+    # 2️⃣ Run trending + broad in parallel
     trending_task = _fetch_trending_tag(platform, effective_query)
-    relevant_task = _fetch_relevant_tag(platform, effective_query, seed_keywords)
     broad_task = _fetch_broad_tag(platform, effective_query, seed_keywords)
 
     results = await asyncio.gather(
-        trending_task, relevant_task, broad_task,
+        trending_task,
+        broad_task,
         return_exceptions=True
     )
 
     trending_tag = results[0] if not isinstance(results[0], Exception) else None
-    relevant_tag = results[1] if not isinstance(results[1], Exception) else None
-    broad_tag = results[2] if not isinstance(results[2], Exception) else None
+    broad_tag = results[1] if not isinstance(results[1], Exception) else None
 
-    # Order: relevant → broad → trending
+    # 🎯 STRICT 3:3:4 STRUCTURE
+    relevant_limit = 3
+    broad_limit = 3
+    trending_limit = 4
+
     ordered_tags = []
-    if relevant_tag:
-        ordered_tags.append(relevant_tag)
+
+    # 1️⃣ RELEVANT (max 3)
+    for tag in relevant_tags:
+        if len(ordered_tags) >= relevant_limit:
+            break
+        if tag not in ordered_tags:
+            ordered_tags.append(tag)
+
+    # 2️⃣ BROAD (max 3 unique)
+    broad_tags = []
+
+    # Add AI broad first
     if broad_tag and broad_tag not in ordered_tags:
-        ordered_tags.append(broad_tag)
-    if trending_tag and trending_tag not in ordered_tags:
-        ordered_tags.append(trending_tag)
+        broad_tags.append(broad_tag)
 
-    target = 3 if autoposting else 10
+    # Add from seed keywords (unique only)
+    for kw in set(seed_keywords):
+        candidate = f"#{kw.replace(' ', '').lower()}"
+        if candidate not in ordered_tags and candidate not in broad_tags:
+            broad_tags.append(candidate)
+        if len(broad_tags) >= broad_limit:
+            break
 
-    # Fill remaining slots from trending pool
-    if len(ordered_tags) < target:
-        pool = TRENDING_POOLS.get(platform, [])
-        shuffled_pool = pool[:]
-        random.shuffle(shuffled_pool)
-        existing = set(ordered_tags)
-        for tag in shuffled_pool:
-            if len(ordered_tags) >= target:
-                break
-            if tag not in existing:
-                ordered_tags.append(tag)
-                existing.add(tag)
+    for tag in broad_tags[:broad_limit]:
+        ordered_tags.append(tag)
 
-    return ordered_tags[:target]
+    # 3️⃣ TRENDING (max 4 unique)
+    pool = TRENDING_POOLS.get(platform, [])
+    random.shuffle(pool)
+
+    trending_added = 0
+    for tag in pool:
+        if trending_added >= trending_limit:
+            break
+        if tag not in ordered_tags:
+            ordered_tags.append(tag)
+            trending_added += 1
+
+    return ordered_tags[:10]
 
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
