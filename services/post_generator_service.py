@@ -420,21 +420,26 @@ async def fetch_platform_hashtags(
     platform = platform.lower()
 
     # 1️⃣ Suggestion-based relevant tags
-    # Extract only meaningful sentence (skip instruction text)
-    lines = [l.strip() for l in effective_query.split("\n") if l.strip()]
-    clean_query = ""
+    # Remove instruction-style sentences aggressively
+    clean_query = effective_query
 
-    for line in lines:
-        if line.lower().startswith(("this video", "you are", "focus on", "context")):
-            continue
-        if len(line.split()) > 3:  # Must be meaningful phrase
-            clean_query = line
-            break
+    # Remove common instruction patterns
+    instruction_patterns = [
+    r"here are .*?keywords.*?:",
+    r"generate .*?keywords.*?:",
+    r"based on the conversation.*?:",
+    r"focus\s*:?[\w\s]*",
+]
 
-    # Fallback
-    if not clean_query:
-        clean_query = effective_query[:80]
-    clean_query = clean_query[:80]
+    for pattern in instruction_patterns:
+        clean_query = re.sub(pattern, "", clean_query, flags=re.IGNORECASE)
+
+    # Keep only first 12 words max
+    clean_query = " ".join(clean_query.split()[:12]).strip()
+
+    # Fallback protection
+    if len(clean_query.split()) < 2:
+        clean_query = " ".join(seed_keywords)
 
     suggestions = await fetch_search_suggestions(clean_query, platform)
     relevant_tags = build_relevant_from_suggestions(
