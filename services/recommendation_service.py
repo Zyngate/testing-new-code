@@ -35,7 +35,7 @@ def extract_platform_from_url(url: str) -> str:
     if "instagram.com" in url_lower: return "instagram"
     elif "youtube.com" in url_lower or "youtu.be" in url_lower: return "youtube"
     elif "linkedin.com" in url_lower: return "linkedin"
-    elif "threads.net" in url_lower: return "threads"
+    elif "threads.net" in url_lower or "threads.com" in url_lower: return "threads"
     elif "tiktok.com" in url_lower: return "tiktok"
     elif "facebook.com" in url_lower or "fb.com" in url_lower: return "facebook"
     else: return "unknown"
@@ -331,6 +331,7 @@ class RecommendationResponse(BaseModel):
     user_timezone: str
     timezone_display_name: str
     posts_by_platform: Dict[str, int]
+    overview_totals: Dict[str, Any]  # Total metrics: likes, comments, replies, reposts, shares, views, saved
     content_performance: Dict[str, float]
     content_performance_by_rate: Dict[str, float]
     time_performance: Dict[str, Any]
@@ -2361,6 +2362,20 @@ class RecommendationService:
         recommendations = recommendations_data.get('recommendations_by_category', {})
 
         posts_by_platform = df["platform"].value_counts().to_dict()
+
+        # Compute overview totals (all raw metrics summed across all posts)
+        overview_totals = {
+            'total_likes': int(df['likes'].sum()) if 'likes' in df.columns else 0,
+            'total_comments': int(df['comments'].sum()) if 'comments' in df.columns else 0,
+            'total_replies': int(df['replies'].sum()) if 'replies' in df.columns else 0,
+            'total_shares': int(df['shares'].sum()) if 'shares' in df.columns else 0,
+            'total_reposts': int(df['reposts'].sum()) if 'reposts' in df.columns else 0,
+            'total_views': int(df['views'].sum()) if 'views' in df.columns else 0,
+            'total_saved': int(df['saved'].sum()) if 'saved' in df.columns else 0,
+            'total_interactions': int(df['interactions'].sum()) if 'interactions' in df.columns else 0,
+            'avg_engagement_rate': float(df['engagement_rate'].mean()) if 'engagement_rate' in df.columns else 0.0,
+        }
+
         content_analysis = []
         for _, row in df.iterrows():
             content_analysis.append(
@@ -2398,6 +2413,7 @@ class RecommendationService:
             user_timezone=self.engine.user_timezone,
             timezone_display_name=self.engine.timezone_display_name,
             posts_by_platform=clean_for_json(posts_by_platform),
+            overview_totals=clean_for_json(overview_totals),
             content_performance=clean_for_json(content_perf),
             content_performance_by_rate=clean_for_json(content_perf_rate),
             time_performance=clean_for_json(time_perf),
