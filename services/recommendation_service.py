@@ -1118,7 +1118,8 @@ class RecommendationEngine:
     def analyze_platform_distribution(self) -> Dict[str, Any]:
         """Analyze the distribution of posts across platforms"""
         platform_counts = self.processed_data['platform'].value_counts().to_dict()
-        platform_percentages = {platform: (count / len(self.processed_data)) * 100
+        total_processed = len(self.processed_data)
+        platform_percentages = {platform: (count / total_processed) * 100 if total_processed > 0 else 0.0
                               for platform, count in platform_counts.items()}
         platform_engagement = self.processed_data.groupby('platform')['engagement_score'].mean().to_dict()
         platform_engagement_rate = self.processed_data.groupby('platform')['engagement_rate'].mean().to_dict()
@@ -1164,7 +1165,7 @@ class RecommendationEngine:
                 'avg_engagement': float(category_engagement.get(category, 0)),
                 'avg_engagement_rate': float(category_rate.get(category, 0)),
                 'std_deviation': float(std_value),
-                'percentage': float((category_counts[category] / len(self.processed_data)) * 100)
+                'percentage': float((category_counts[category] / len(self.processed_data)) * 100) if len(self.processed_data) > 0 else 0.0
             }
         return breakdown
 
@@ -1496,9 +1497,10 @@ class RecommendationEngine:
         total_posts = len(df)
         total_engagement = df['engagement_score'].sum()
         
+        avg_per_post = (total_engagement / total_posts) if total_posts > 0 else 0
         insights.append(
             f"📊 Across your {total_posts} posts, you've generated {total_engagement:,.0f} total interactions. "
-            f"That's an average of {(total_engagement / total_posts):,.0f} per post — let's work on pushing that higher!"
+            f"That's an average of {avg_per_post:,.0f} per post — let's work on pushing that higher!"
         )
         
         # Trend analysis - require at least 8 posts for meaningful trend comparison
@@ -2341,7 +2343,11 @@ class RecommendationService:
 
     def generate_recommendations(self, posts: List[PostData]) -> Dict[str, Any]:
         """Main entry point - generates full recommendation response"""
+        if not posts:
+            raise ValueError("No posts provided. Please select a date range that contains at least 1 post.")
         df = self.engine.process_data(posts)
+        if len(df) == 0:
+            raise ValueError("No posts found after processing. Please select a date range that contains at least 1 post.")
 
         content_perf = self.engine.analyze_content_performance()
         content_perf_rate = self.engine.analyze_content_performance_by_rate()
