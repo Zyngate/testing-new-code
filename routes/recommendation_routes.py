@@ -1,4 +1,6 @@
 # routes/recommendation_routes.py
+import traceback
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -22,6 +24,7 @@ from services.time_slot_service import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 service = RecommendationService()  # Uses .env key automatically
 
 class RecommendationRequest(BaseModel):
@@ -45,7 +48,10 @@ async def analyze_recommendation(request: RecommendationRequest):
         result = service.generate_recommendations(request.posts)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        tb = traceback.format_exc()
+        logger.error(f"[/analyze] Error: {e}\n{tb}")
+        print(f"[/analyze] TRACEBACK:\n{tb}")  # Always visible in Render logs
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
 
 
 @router.post("/save-analytics")
