@@ -2239,7 +2239,7 @@ class RecommendationEngine:
         platform_counts = df['platform'].value_counts()
         if len(platform_counts) > 0:
             top_platform = platform_counts.index[0]
-            top_platform_pct = (platform_counts.iloc[0] / total_posts) * 100
+            top_platform_pct = (platform_counts.iloc[0] / total_posts) * 100 if total_posts > 0 else 0
             
             if top_platform_pct > 70 and len(platform_counts) < 3:
                 suggestions = {
