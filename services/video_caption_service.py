@@ -513,6 +513,7 @@ def _get_fallback_result(platforms: List[str], error_msg: str = "") -> Dict[str,
         "keywords": ["video", "content", "viral"],
         "captions": {p: "Amazing content worth watching! 🔥" for p in platforms},
         "platform_hashtags": {p: ["#content", "#viral", "#trending"] for p in platforms},
+        "ctas": {p: "Check it out!" for p in platforms},
         "titles": {},
         "boards": {},
         "_error": error_msg,
@@ -801,6 +802,7 @@ Focus on ONE strong idea or reaction.
     ocr_text=ocr_text_combined,
     transcript=transcript
 )
+            logger.info(f"📝 Caption generation result: platforms={list(captions_result.get('captions', {}).keys())}, autoposting={autoposting}")
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
             logger.error(f"generate_caption_post failed: {e}", exc_info=True)
@@ -815,8 +817,9 @@ Focus on ONE strong idea or reaction.
         logger.error(f"Parallel task execution failed: {e}")
         all_results = [("instagram", [])] + [{"captions": {p: "Amazing content! 🔥" for p in platforms}}]
 
-    # Extract results (with safety checks)
+        # Extract results (with safety checks)
     platform_hashtags: Dict[str, List[str]] = {}
+
     try:
         for result in all_results[:-1]:  # All except last (captions)
             if isinstance(result, Exception):
@@ -827,25 +830,31 @@ Focus on ONE strong idea or reaction.
                 platform_hashtags[p] = tags if tags else []
     except Exception as e:
         logger.warning(f"Error extracting hashtags: {e}")
-    
-    # Extract captions data (with safety checks)
+
+    # ---- Extract captions safely ----
     captions = {}
     titles = {}
     boards = {}
-    
+    platform_ctas = {}
+
     try:
         captions_data = all_results[-1] if all_results else {}
-        
-        # Handle exception result
+        logger.info(f"📊 Extracting captions - type: {type(captions_data)}, is_exception: {isinstance(captions_data, Exception)}")
+
         if isinstance(captions_data, Exception):
-            logger.warning(f"Caption generation failed: {captions_data}")
+            logger.error(f"Caption task returned exception: {captions_data}")
             captions = {p: "Amazing content worth sharing! 🔥" for p in platforms}
+
         elif isinstance(captions_data, dict):
             captions = captions_data.get("captions", {})
             titles = captions_data.get("titles", {})
             boards = captions_data.get("boards", {})
+            platform_ctas = captions_data.get("ctas", {})
+            logger.info(f"📊 Extracted captions for platforms: {list(captions.keys())}")
+
         else:
             captions = captions_data if captions_data else {}
+
     except Exception as e:
         logger.warning(f"Error extracting captions: {e}")
         captions = {p: "Check out this content! 🔥" for p in platforms}
@@ -867,11 +876,10 @@ Focus on ONE strong idea or reaction.
         "keywords": keywords,
         "captions": captions,
         "platform_hashtags": platform_hashtags,
+        "ctas": platform_ctas,
         "titles": titles,
         "boards": boards,
     }
-
-
 # Example usage:
 # import asyncio
 # asyncio.run(caption_from_video_file(r"C:\path\to\video.mp4", ["instagram", "linkedin"]))

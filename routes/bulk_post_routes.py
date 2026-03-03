@@ -1,44 +1,35 @@
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from typing import List
 import tempfile
 import os
-import asyncio
-import cloudinary.uploader
 
-from services.post_creation_service import create_post_from_uploaded_video
+from services.bulk_post_creation_service import process_bulk_videos
 
-
-async def upload_to_cloudinary(file: UploadFile) -> str:
-    result = cloudinary.uploader.upload(
-        file.file,
-        resource_type="video",
-        folder="scheduler_videos"
-    )
-    return result["secure_url"]
+router = APIRouter(prefix="/posts", tags=["Bulk Video Scheduling"])
 
 
-async def process_bulk_videos(
-    user_id: str,
-    videos: list,
-    platforms: list[str]
+@router.post("/bulk-upload-videos")
+async def bulk_upload_videos(
+    videos: List[UploadFile] = File(...),
+    platforms: List[str] = Form(...),
+    userId: str = Form(...)
 ):
-    scheduled_posts = []
+    """
+    Upload 10–20 videos and schedule them across multiple platforms
+    """
 
-    for video in videos:
-        # 1️⃣ Upload video once
-        cloudinary_url = await upload_to_cloudinary(video)
+    if len(videos) > 20:
+        raise HTTPException(status_code=400, detail="Max 20 videos allowed")
 
-        # 2️⃣ Schedule same video across multiple platforms
-        for platform in platforms:
-            post = await create_post_from_uploaded_video(
-                user_id=user_id,
-                cloudinary_url=cloudinary_url,
-                platform=platform
-            )
+    results = await process_bulk_videos(
+        user_id=userId,
+        videos=videos,
+        platforms=platforms
+    )
 
-            scheduled_posts.append({
-                "video": video.filename,
-                "platform": platform,
-                "scheduledAt": post["scheduledAt"],
-                "reason": post["recommendationReason"]
-            })
-
-    return scheduled_posts
+    return {
+        "success": True,
+        "totalVideos": len(videos),
+        "platforms": platforms,
+        "scheduledPosts": results
+    }

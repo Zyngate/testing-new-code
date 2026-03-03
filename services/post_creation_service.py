@@ -191,6 +191,7 @@ async def create_post_from_uploaded_media(
                 hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
                 title = ai_result.get("titles", {}).get(p, "")
                 board = ai_result.get("boards", {}).get(p, "")
+                selected_cta = ai_result.get("ctas", {}).get(p, "")
 
                 # Handle rate limit failures gracefully
                 if not caption:
@@ -200,9 +201,12 @@ async def create_post_from_uploaded_media(
                 # For autoposting, always use only 3 hashtags (already handled by fetch_platform_hashtags with autoposting=True)
                 # No further filtering needed
                 
+                # ORDER: Caption → Hashtags → CTA
                 final_caption = caption
                 if hashtags:
                     final_caption += "\n\n" + " ".join(hashtags)
+                if selected_cta:
+                    final_caption += "\n\n" + selected_cta
 
                 now = datetime.now(timezone.utc)
 

@@ -52,8 +52,9 @@ async def generate_post(body: GeneratePostRequest):
     return {
     "status": "success",
     "keywords": keywords,
-    "captions": results["captions"],
-    "platform_hashtags": results["platform_hashtags"],
+    "captions": results.get("captions", {}),
+    "platform_hashtags": results.get("platform_hashtags", {}),
+    "ctas": results.get("ctas", {}),   # 👈 ADD THIS LINE
     "titles": results.get("titles", {
         "youtube": "",
         "pinterest": ""

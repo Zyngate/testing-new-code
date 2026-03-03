@@ -114,6 +114,7 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
     captions = captions_data.get("captions", {}) if isinstance(captions_data, dict) else captions_data
     titles = captions_data.get("titles", {}) if isinstance(captions_data, dict) else {}
     boards = captions_data.get("boards", {}) if isinstance(captions_data, dict) else {}
+    platform_ctas = captions_data.get("ctas", {}) if isinstance(captions_data, dict) else {}
 
     return {
         "caption_detected": caption,
@@ -125,6 +126,7 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
         "keywords": keywords,
         "captions": captions,
         "platform_hashtags": platform_hashtags,
+        "ctas": platform_ctas, 
         "titles": titles,
         "boards": boards,
     }

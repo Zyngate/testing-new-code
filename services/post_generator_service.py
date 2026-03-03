@@ -106,6 +106,77 @@ PLATFORM_STYLES = {
 }
 
 # ---------------------------
+# PLATFORM CTA SETTINGS
+# ---------------------------
+
+PLATFORM_CTAS = {
+    "instagram": [
+        "What are your thoughts?",
+        "Save this for later.",
+        "Follow for more insights.",
+        "Would love your perspective.",
+        "Comment your take below.",
+        "Share this with someone who needs it.",
+        "Food for thought.",
+        "Let that sink in."
+    ],
+    "threads": [
+        "Thoughts?",
+        "This says a lot.",
+        "Make it make sense.",
+        "Well then.",
+        "That’s something."
+    ],
+    "tiktok": [
+        "Would you try this?",
+        "Agree or disagree?",
+        "What would you do?",
+        "Is this accurate?",
+        "Real or not?",
+        "Too much or just right?",
+        "Tell me your take.",
+        "What’s your move?"
+    ],
+    "youtube": [
+        "Let me know your take in the comments.",
+        "More breakdowns coming soon.",
+        "Subscribe for more insights.",
+        "Share your thoughts below.",
+        "Stay tuned for the next one.",
+        "Drop your perspective below.",
+        "Curious to hear your view."
+    ],
+    "pinterest": [
+        "Save for later.",
+        "Pin this for inspiration.",
+        "Add to your board.",
+        "Worth saving.",
+        "Bookmark this idea."
+    ],
+    "facebook": [
+        "What do you think?",
+        "Tag someone who needs this.",
+        "Share your thoughts below.",
+        "Drop a comment.",
+        "React if you agree."
+    ],
+    "linkedin": [
+        "Thoughts?",
+        "What's your take on this?",
+        "Agree or disagree?",
+        "Share your experience.",
+        "Worth discussing."
+    ],
+    "twitter": [
+        "Thoughts?",
+        "RT if you agree.",
+        "Quote tweet your take.",
+        "What's your stance?",
+        "Discuss."
+    ]
+}
+
+# ---------------------------
 # GLOBAL SLANG BAN WORD LIST
 # ---------------------------
 BANNED_WORDS = [
@@ -1123,6 +1194,25 @@ def fix_dropped_first_char(text: str) -> str:
 
     return text
 
+# ---------------------------
+# CTA INJECTION ENGINE
+# ---------------------------
+
+def inject_platform_cta(platform: str, caption: str) -> tuple[str, str | None]:
+    import random
+
+    platform = platform.lower()
+
+    if platform not in PLATFORM_CTAS:
+        return caption, None
+
+    cta = random.choice(PLATFORM_CTAS[platform])
+
+    # Do NOT inject into caption
+    # Only return separately
+
+    return caption, cta
+
 async def _generate_caption_for_platform(
     p_norm: str,
     effective_query: str,
@@ -1196,7 +1286,8 @@ async def _generate_caption_for_platform(
 
     logger.info(f"Caption generated for {p_norm}: {len(caption_text)} characters")
 
-    return (p_norm, caption_text)
+    caption_text, selected_cta = inject_platform_cta(p_norm, caption_text)
+    return (p_norm, caption_text, selected_cta)
 
 
 
@@ -1307,25 +1398,48 @@ Return ONLY the title text.
             return (platform, "")
 
     # Only generate title tasks for YouTube and Pinterest, passing the generated caption for uniqueness
-    # Wait for captions to be generated first
+        # Wait for captions to be generated first
     caption_results = await asyncio.gather(*[
-    _generate_caption_for_platform(
-        p_norm,
-        effective_query,
-        detected_person,
-        ocr_text,
-        transcript
-    )
-    for p_norm in normalized_platforms
-])
-    captions = {p_norm: caption_text for p_norm, caption_text in caption_results}
+        _generate_caption_for_platform(
+            p_norm,
+            effective_query,
+            detected_person,
+            ocr_text,
+            transcript
+        )
+        for p_norm in normalized_platforms
+    ])
 
+    captions = {}
+    platform_ctas = {}
+
+    # Collect captions + CTAs
+    for result in caption_results:
+        if len(result) == 3:
+            p_norm, caption_text, selected_cta = result
+            captions[p_norm] = caption_text
+            
+            if autoposting and selected_cta:
+                # AUTOPOSTING: Return selected CTA separately (bulk service adds after hashtags)
+                platform_ctas[p_norm] = selected_cta
+        else:
+            p_norm, caption_text = result
+            captions[p_norm] = caption_text
+
+    # For NON-AUTOPOSTING: Return ALL CTAs per platform (full list to choose from)
+    if not autoposting:
+        for p_norm in normalized_platforms:
+            if p_norm in PLATFORM_CTAS:
+                platform_ctas[p_norm] = PLATFORM_CTAS[p_norm]
+
+    # Generate titles (after captions are ready)
     title_tasks = [
         generate_title(p_norm, effective_query, captions.get(p_norm, ""))
-        for p_norm in normalized_platforms if p_norm in ("youtube", "pinterest")
+        for p_norm in normalized_platforms
+        if p_norm in ("youtube", "pinterest")
     ]
 
-    # Run hashtag and title tasks in parallel (captions already generated above)
+    # Run hashtag + title tasks in parallel
     hashtag_results, title_results = await asyncio.gather(
         asyncio.gather(*hashtag_tasks),
         asyncio.gather(*title_tasks)
@@ -1335,12 +1449,14 @@ Return ONLY the title text.
         platform_hashtags[p_norm] = tags
 
     for p_norm, title in title_results:
-        # Always include YouTube and Pinterest in the titles dict, even if title is empty
         if p_norm in ("youtube", "pinterest"):
             titles[p_norm] = title
 
     return {
+        "status": "success",
+        "keywords": seed_keywords,
         "captions": captions,
         "platform_hashtags": platform_hashtags,
+        "ctas": platform_ctas,  # Selected CTA for autoposting, full list for non-autoposting
         "titles": titles
     }

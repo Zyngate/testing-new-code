@@ -328,6 +328,7 @@ async def process_bulk_media_urls(
                             platforms=platforms_lower,
                             autoposting=True
     )
+                        logger.info(f"📝 Video caption result for media {idx}: captions={list(result.get('captions', {}).keys())}")
                     else:
                         client = Groq(api_key=GROQ_API_KEY_CAPTION)
                         result = await caption_from_image_file(
@@ -336,6 +337,7 @@ async def process_bulk_media_urls(
                             client=client,
                             autoposting=True
                         )
+                        logger.info(f"📝 Image caption result for media {idx}: captions={list(result.get('captions', {}).keys())}")
                     return result
                 finally:
                     if os.path.exists(local_path):
@@ -355,6 +357,11 @@ async def process_bulk_media_urls(
     
     logger.info(f"✅ Generated captions for {len(caption_results)} media items")
     
+    # DEBUG: Log caption results to diagnose fallback issue
+    for idx, result in enumerate(caption_results):
+        caps = result.get("captions", {})
+        logger.info(f"📝 Media {idx} captions: platforms={list(caps.keys())}, lengths={[len(v) for v in caps.values()]}")
+    
     # Step 3: Create posts with allocated time slots
     all_posts = []
     posts_to_insert = []  # Deferred DB inserts
@@ -369,13 +376,19 @@ async def process_bulk_media_urls(
             caption = captions_dict.get(platform)
             if not caption:
                 # Fallback: use Pinterest or YouTube caption if available, else generic
+                logger.warning(f"⚠️ No caption for {platform} in media {media_idx}, using fallback. Available: {list(captions_dict.keys())}")
                 fallback_caption = captions_dict.get("pinterest") or captions_dict.get("youtube") or "Check out this content!"
                 caption = fallback_caption
             hashtags = hashtags_dict.get(platform, [])
+            ctas_dict = caption_result.get("ctas", {})
+            selected_cta = ctas_dict.get(platform, "")
             
+            # ORDER: Caption → Hashtags → CTA
             final_caption = caption
             if hashtags:
                 final_caption += "\n\n" + " ".join(hashtags)
+            if selected_cta:
+                final_caption += "\n\n" + selected_cta
 
             # Scheduling logic unchanged
             if schedule_mode == "MANUAL" and scheduled_at_manual:

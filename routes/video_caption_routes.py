@@ -24,6 +24,8 @@ def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
         "keywords": ["video", "content", "social"],
         "captions": {p: f"Check out this amazing content! 🔥" for p in platforms},
         "platform_hashtags": {p: ["#content", "#viral", "#trending"] for p in platforms},
+        "ctas": {p: "Check it out!" for p in platforms},
+        "titles": {},
     }
 
 @router.post("/generate_video_caption")
@@ -88,17 +90,18 @@ async def generate_video_caption(
     # -----------------------------
     try:
         return {
-            "message": "Video processed successfully",
-            "detected_person": result.get("detected_person"),
-            "transcript": result.get("transcript", ""),
-            "visual_summary": result.get("visual_summary", ""),
-            "text_summary": result.get("text_summary", ""),
-            "marketing_prompt": result.get("marketing_prompt", ""),
-            "keywords": result.get("keywords", []),
-            "captions": result.get("captions", {}),
-            "platform_hashtags": result.get("platform_hashtags", {}),
-            "titles": result.get("titles", {}),
-        }
+    "message": "Video processed successfully",
+    "detected_person": result.get("detected_person"),
+    "transcript": result.get("transcript", ""),
+    "visual_summary": result.get("visual_summary", ""),
+    "text_summary": result.get("text_summary", ""),
+    "marketing_prompt": result.get("marketing_prompt", ""),
+    "keywords": result.get("keywords", []),
+    "captions": result.get("captions", {}),
+    "platform_hashtags": result.get("platform_hashtags", {}),
+    "ctas": result.get("ctas", {}),   # 👈 ADD THIS LINE
+    "titles": result.get("titles", {}),
+}
     except Exception as e:
         logger.error(f"Failed to format response: {e}")
         return JSONResponse(
