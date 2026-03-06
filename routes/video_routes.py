@@ -49,7 +49,8 @@ async def video_caption_endpoint(
         result = await caption_from_video_file(
             str(out_path),
             requested_platforms,
-            client=client
+            client=client,
+            autoposting=False  # Non-autoposting returns combined format
         )
     except Exception as e:
         logger.error(f"Video caption pipeline failed: {e}", exc_info=True)
@@ -60,21 +61,14 @@ async def video_caption_endpoint(
         except Exception:
             pass
 
-    # 🔒 FILTERED PUBLIC RESPONSE
-    captions = result.get("captions", {})
-    hashtags = result.get("platform_hashtags", {})
-    keywords = result.get("keywords", [])
-
+    # Return combined format for non-autoposting
     return JSONResponse(
-    {
-        "status": "success",
-        "keywords": result.get("keywords", []),
-        "captions": result.get("captions", {}),
-        "platform_hashtags": result.get("platform_hashtags", {}),
-        "ctas": result.get("ctas", {}),
-        "titles": result.get("titles", {})
-    }
-)
+        {
+            "status": "success",
+            "keywords": result.get("keywords", []),
+            "platforms": result.get("platforms", {})  # Combined caption, hashtags, ctas, title per platform
+        }
+    )
 
 
     
