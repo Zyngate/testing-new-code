@@ -187,11 +187,23 @@ async def create_post_from_uploaded_media(
             # Create posts per platform
             # -----------------------------
             for p in platforms:
-                caption = ai_result.get("captions", {}).get(p, "")
-                hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
-                title = ai_result.get("titles", {}).get(p, "")
-                board = ai_result.get("boards", {}).get(p, "")
-                selected_cta = ai_result.get("ctas", {}).get(p, "")
+                # Handle both response formats:
+                # - Non-autoposting (new): {"platforms": {"instagram": {"caption", "hashtags", "ctas", ...}}}
+                # - Autoposting (old):     {"captions": {...}, "platform_hashtags": {...}, ...}
+                if "platforms" in ai_result:
+                    p_data = ai_result.get("platforms", {}).get(p, {})
+                    caption = p_data.get("caption", "")
+                    hashtags = p_data.get("hashtags", [])
+                    title = p_data.get("title", "") or ""
+                    board = ""
+                    ctas = p_data.get("ctas", [])
+                    selected_cta = ctas[0] if ctas else ""
+                else:
+                    caption = ai_result.get("captions", {}).get(p, "")
+                    hashtags = ai_result.get("platform_hashtags", {}).get(p, [])
+                    title = ai_result.get("titles", {}).get(p, "")
+                    board = ai_result.get("boards", {}).get(p, "")
+                    selected_cta = ai_result.get("ctas", {}).get(p, "")
 
                 # Handle rate limit failures gracefully
                 if not caption:
