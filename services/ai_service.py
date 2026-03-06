@@ -10,7 +10,8 @@ import numpy as np
 from typing import Union, Tuple, List, Dict, Any
 from groq import Groq, AsyncGroq
 from ratelimit import limits, sleep_and_retry
-from sentence_transformers import SentenceTransformer
+# sentence_transformers is imported lazily inside _get_embedding_model()
+# to avoid loading torch (~800MB) at startup which crashes Render free tier.
 
 from database import (
     doc_index,
@@ -74,7 +75,16 @@ def get_caption_client_sync() -> Groq:
 # 🔵 1. GLOBAL RESOURCES (key resolution + clients)
 # ============================================================
 
-local_embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+# Lazy-loaded embedding model — only initialized on first call to generate_text_embedding.
+# Loading at module level causes torch (~800MB) to be loaded at startup, OOM-ing Render.
+_local_embedding_model = None
+
+def _get_embedding_model():
+    global _local_embedding_model
+    if _local_embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+        _local_embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+    return _local_embedding_model
 
 # Resolve keys robustly from multiple possible env var names and config fallbacks.
 # This helps when .env uses either old names (INTERNET_CLIENT_KEY) or canonical names (GROQ_API_KEY_BROWSE).
@@ -284,7 +294,7 @@ async def generate_text_embedding(text: str | None) -> list:
         return []
     try:
         embedding = await asyncio.to_thread(
-            local_embedding_model.encode, text, convert_to_numpy=True
+            _get_embedding_model().encode, text, convert_to_numpy=True
         )
         embedding_list = embedding.tolist()
         if len(embedding_list) != FAISS_EMBEDDING_DIM:

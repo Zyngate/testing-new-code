@@ -24,7 +24,7 @@ loguru
 ratelimit
 html2image
 speechrecognition
-opencv-python       # ⭐ REQUIRED FOR VIDEO FRAME EXTRACTION
+opencv-python-headless  # ⭐ REQUIRED FOR VIDEO FRAME EXTRACTION (headless = no libGL needed on Linux/Render)
 pillow              # ⭐ For image processing
 moviepy             # ⭐ For video audio/frame handling
 ffmpeg-python       # ⭐ Needed for video processing
