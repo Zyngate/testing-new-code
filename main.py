@@ -4,6 +4,9 @@ import asyncio
 from datetime import datetime, timezone
 import os
 from fastapi import FastAPI, Request
+
+# Ensure required temp directories exist (Render has ephemeral filesystem)
+os.makedirs("tmp_stelle_video", exist_ok=True)
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import threading

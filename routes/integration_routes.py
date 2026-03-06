@@ -42,8 +42,7 @@ async def generate_caption_endpoint(body: dict):
         return {
             "status": "success",
             "keywords": keywords,
-            "captions": results["captions"],
-            "hashtags": results["platform_hashtags"]
+            "platforms": results.get("platforms", {})
         }
 
     except Exception as e:
@@ -78,8 +77,7 @@ async def websocket_generate_caption(websocket: WebSocket):
         await websocket.send_json({
             "status": "completed",
             "keywords": keywords,
-            "captions": results["captions"],
-            "hashtags": results["platform_hashtags"]
+            "platforms": results.get("platforms", {})
         })
 
     except Exception as e:

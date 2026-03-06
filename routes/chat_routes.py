@@ -1061,10 +1061,9 @@ async def ai_assist_endpoint(input_data: dict):
 
     return {
         "query": query,
-        "platforms": platforms,
+        "platforms_requested": platforms,
         "keywords": seed_keywords,
-        "captions": result["captions"],
-        "hashtags": result["platform_hashtags"]
+        "platforms": result.get("platforms", {})
     }
 
 # Store deepsearch requests temporarily
