@@ -885,21 +885,25 @@ Focus on ONE strong idea or reaction.
             platform_hashtags[p] = ["#content", "#viral", "#trending"]
 
     # For NON-AUTOPOSTING: Return only caption + optional title per platform.
-    # `caption` contains final composed text in strict order: caption -> hashtags -> CTA dump.
+    # `caption` contains final composed text in strict order: caption -> hashtags -> selected CTA.
     if not autoposting:
         platforms_combined = {}
         for p in platforms:
             caption_text = captions.get(p, "")
             hashtags_list = platform_hashtags.get(p, [])[:10]  # Exactly 10 hashtags
-            # Get ALL CTAs for the platform
-            all_ctas = PLATFORM_CTAS.get(p, [])
+            selected_cta = ""
+            cta_value = platform_ctas.get(p, "") if isinstance(platform_ctas, dict) else ""
+            if isinstance(cta_value, str):
+                selected_cta = cta_value
+            if not selected_cta and p in PLATFORM_CTAS and PLATFORM_CTAS[p]:
+                selected_cta = PLATFORM_CTAS[p][0]
             title_text = titles.get(p, "") if p in ("youtube", "pinterest") else ""
             
             # Use pre-composed caption if available from generate_caption_post
             if p in composed_captions and composed_captions[p]:
                 composed_caption = composed_captions[p]
             else:
-                # Build fully composed caption in strict order: caption -> hashtags -> CTA dump.
+                # Build fully composed caption in strict order: caption -> hashtags -> selected CTA.
                 composed_parts = []
                 if caption_text:
                     composed_parts.append(caption_text.strip())
@@ -909,11 +913,9 @@ Focus on ONE strong idea or reaction.
                     hashtags_str = " ".join(hashtags_list)
                     composed_parts.append(hashtags_str)
 
-                # Add full CTA dump at the end
-                if all_ctas:
-                    cta_dump = "\n".join([cta.strip() for cta in all_ctas if cta and cta.strip()])
-                    if cta_dump:
-                        composed_parts.append(cta_dump)
+                # Add selected CTA at the end
+                if selected_cta:
+                    composed_parts.append(selected_cta.strip())
                 
                 # Join with double newlines for clean separation
                 composed_caption = "\n\n".join(composed_parts)

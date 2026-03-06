@@ -1421,24 +1421,18 @@ Return ONLY the title text.
     captions = {}
     platform_ctas = {}
 
-    # Collect captions + CTAs
+    # Collect captions + selected CTA per platform
     for result in caption_results:
         if len(result) == 3:
             p_norm, caption_text, selected_cta = result
             captions[p_norm] = caption_text
-            
-            if autoposting and selected_cta:
-                # AUTOPOSTING: Return selected CTA separately (bulk service adds after hashtags)
+
+            if selected_cta:
+                # Keep one selected CTA per platform.
                 platform_ctas[p_norm] = selected_cta
         else:
             p_norm, caption_text = result
             captions[p_norm] = caption_text
-
-    # For NON-AUTOPOSTING: Return ALL CTAs per platform (full list to choose from)
-    if not autoposting:
-        for p_norm in normalized_platforms:
-            if p_norm in PLATFORM_CTAS:
-                platform_ctas[p_norm] = PLATFORM_CTAS[p_norm]
 
     # Generate titles (after captions are ready)
     title_tasks = [
@@ -1464,17 +1458,16 @@ Return ONLY the title text.
             titles[p_norm] = title
 
     # For NON-AUTOPOSTING: Return only caption + optional title per platform.
-    # `caption` contains final composed text in strict order: caption -> hashtags -> CTA dump.
+    # `caption` contains final composed text in strict order: caption -> hashtags -> selected CTA.
     if not autoposting:
         platforms_combined = {}
         for p_norm in normalized_platforms:
             caption_text = captions.get(p_norm, "")
             hashtags_list = platform_hashtags.get(p_norm, [])[:10]  # Exactly 10 hashtags
-            # Get ALL CTAs for the platform
-            all_ctas = PLATFORM_CTAS.get(p_norm, [])
+            selected_cta = platform_ctas.get(p_norm, "")
             title_text = titles.get(p_norm, "") if p_norm in ("youtube", "pinterest") else ""
-            
-            # Build fully composed caption in strict order: caption -> hashtags -> CTA dump.
+
+            # Build fully composed caption in strict order: caption -> hashtags -> selected CTA.
             composed_parts = []
             if caption_text:
                 composed_parts.append(caption_text.strip())
@@ -1484,11 +1477,9 @@ Return ONLY the title text.
                 hashtags_str = " ".join(hashtags_list)
                 composed_parts.append(hashtags_str)
 
-            # Add full CTA dump at the end
-            if all_ctas:
-                cta_dump = "\n".join([cta.strip() for cta in all_ctas if cta and cta.strip()])
-                if cta_dump:
-                    composed_parts.append(cta_dump)
+            # Add selected CTA at the end
+            if selected_cta:
+                composed_parts.append(selected_cta.strip())
             
             # Join with double newlines for clean separation
             composed_caption = "\n\n".join(composed_parts)

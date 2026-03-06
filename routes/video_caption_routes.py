@@ -19,8 +19,12 @@ def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
         caption = "Check out this amazing content! 🔥"
         hashtags = ["#content", "#viral", "#trending", "#video", "#amazing", "#share", "#follow", "#explore", "#foryou", "#fyp"][:10]
         all_ctas = PLATFORM_CTAS.get(p, ["Check it out!"])
-        # Compose fallback caption with first CTA and hashtag dump
-        composed_caption = f"{caption}\n\n{all_ctas[0] if all_ctas else ''}\n\n{' '.join(hashtags)}"
+        # Compose fallback caption in order: caption -> hashtags -> selected CTA
+        selected_cta = all_ctas[0] if all_ctas else ""
+        composed_parts = [caption, " ".join(hashtags)]
+        if selected_cta:
+            composed_parts.append(selected_cta)
+        composed_caption = "\n\n".join([part for part in composed_parts if part])
         platforms_combined[p] = {
             "caption": composed_caption,
             "title": None
