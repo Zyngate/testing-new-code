@@ -213,12 +213,16 @@ async def create_post_from_uploaded_media(
                 # For autoposting, always use only 3 hashtags (already handled by fetch_platform_hashtags with autoposting=True)
                 # No further filtering needed
                 
-                # ORDER: Caption → Hashtags → CTA
-                final_caption = caption
-                if hashtags:
-                    final_caption += "\n\n" + " ".join(hashtags)
-                if selected_cta:
-                    final_caption += "\n\n" + selected_cta
+                # For non-autoposting combined format, caption already includes CTA + hashtags.
+                if "platforms" in ai_result:
+                    final_caption = caption
+                else:
+                    # ORDER: Caption → Hashtags → CTA
+                    final_caption = caption
+                    if hashtags:
+                        final_caption += "\n\n" + " ".join(hashtags)
+                    if selected_cta:
+                        final_caption += "\n\n" + selected_cta
 
                 now = datetime.now(timezone.utc)
 

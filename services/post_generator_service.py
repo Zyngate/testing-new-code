@@ -1463,7 +1463,8 @@ Return ONLY the title text.
         if p_norm in ("youtube", "pinterest"):
             titles[p_norm] = title
 
-    # For NON-AUTOPOSTING: Return fully composed post per platform
+    # For NON-AUTOPOSTING: Return only caption + optional title per platform.
+    # `caption` contains final composed text in strict order: caption -> hashtags -> CTA dump.
     if not autoposting:
         platforms_combined = {}
         for p_norm in normalized_platforms:
@@ -1473,30 +1474,28 @@ Return ONLY the title text.
             all_ctas = PLATFORM_CTAS.get(p_norm, [])
             title_text = titles.get(p_norm, "") if p_norm in ("youtube", "pinterest") else ""
             
-            # Build the fully composed post: Caption + selected CTA + Hashtags
+            # Build fully composed caption in strict order: caption -> hashtags -> CTA dump.
             composed_parts = []
             if caption_text:
                 composed_parts.append(caption_text.strip())
-            
-            # Add first CTA for the composed post (user can swap with others from ctas list)
-            if all_ctas:
-                composed_parts.append(all_ctas[0].strip())
-            
-            # Add hashtags at the end (exactly 10, in order)
+
+            # Add hashtag dump after caption
             if hashtags_list:
                 hashtags_str = " ".join(hashtags_list)
                 composed_parts.append(hashtags_str)
+
+            # Add full CTA dump at the end
+            if all_ctas:
+                cta_dump = "\n".join([cta.strip() for cta in all_ctas if cta and cta.strip()])
+                if cta_dump:
+                    composed_parts.append(cta_dump)
             
             # Join with double newlines for clean separation
-            composed_post = "\n\n".join(composed_parts)
+            composed_caption = "\n\n".join(composed_parts)
             
             platforms_combined[p_norm] = {
-                "post": composed_post,  # Fully composed ready-to-use post
                 "title": title_text if title_text else None,  # For YouTube/Pinterest
-                # Raw components for editing flexibility
-                "caption": caption_text,
-                "hashtags": hashtags_list,  # Exactly 10 hashtags in order
-                "ctas": all_ctas  # ALL CTAs for the platform
+                "caption": composed_caption,
             }
         return {
             "status": "success",

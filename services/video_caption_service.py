@@ -837,7 +837,7 @@ Focus on ONE strong idea or reaction.
     titles = {}
     boards = {}
     platform_ctas = {}
-    composed_posts = {}  # Store fully composed posts
+    composed_captions = {}  # Store fully composed captions
 
     try:
         captions_data = all_results[-1] if all_results else {}
@@ -853,15 +853,15 @@ Focus on ONE strong idea or reaction.
                 platforms_data = captions_data.get("platforms", {})
                 for p, data in platforms_data.items():
                     captions[p] = data.get("caption", "")
-                    # Use hashtags from combined format (overrides separately generated ones)
+                    # Combined non-autoposting format may only contain caption + title.
                     if data.get("hashtags"):
                         platform_hashtags[p] = data["hashtags"]
                     platform_ctas[p] = data.get("ctas", [])
                     if data.get("title"):
                         titles[p] = data["title"]
-                    # Get the fully composed post if available
-                    if data.get("post"):
-                        composed_posts[p] = data["post"]
+                    # Get the fully composed caption if available
+                    if data.get("caption"):
+                        composed_captions[p] = data["caption"]
             else:
                 # Legacy format for autoposting
                 captions = captions_data.get("captions", {})
@@ -884,7 +884,8 @@ Focus on ONE strong idea or reaction.
         if p not in platform_hashtags:
             platform_hashtags[p] = ["#content", "#viral", "#trending"]
 
-    # For NON-AUTOPOSTING: Return fully composed post per platform
+    # For NON-AUTOPOSTING: Return only caption + optional title per platform.
+    # `caption` contains final composed text in strict order: caption -> hashtags -> CTA dump.
     if not autoposting:
         platforms_combined = {}
         for p in platforms:
@@ -894,34 +895,32 @@ Focus on ONE strong idea or reaction.
             all_ctas = PLATFORM_CTAS.get(p, [])
             title_text = titles.get(p, "") if p in ("youtube", "pinterest") else ""
             
-            # Use pre-composed post if available from generate_caption_post
-            if p in composed_posts and composed_posts[p]:
-                composed_post = composed_posts[p]
+            # Use pre-composed caption if available from generate_caption_post
+            if p in composed_captions and composed_captions[p]:
+                composed_caption = composed_captions[p]
             else:
-                # Build the fully composed post: Caption + CTA + Hashtags
+                # Build fully composed caption in strict order: caption -> hashtags -> CTA dump.
                 composed_parts = []
                 if caption_text:
                     composed_parts.append(caption_text.strip())
-                
-                # Add first CTA for composed post (user can swap with others from ctas list)
-                if all_ctas:
-                    composed_parts.append(all_ctas[0].strip())
-                
-                # Add hashtags at the end (exactly 10, in order)
+
+                # Add hashtag dump after caption
                 if hashtags_list:
                     hashtags_str = " ".join(hashtags_list)
                     composed_parts.append(hashtags_str)
+
+                # Add full CTA dump at the end
+                if all_ctas:
+                    cta_dump = "\n".join([cta.strip() for cta in all_ctas if cta and cta.strip()])
+                    if cta_dump:
+                        composed_parts.append(cta_dump)
                 
                 # Join with double newlines for clean separation
-                composed_post = "\n\n".join(composed_parts)
+                composed_caption = "\n\n".join(composed_parts)
             
             platforms_combined[p] = {
-                "post": composed_post,  # Fully composed ready-to-use post
                 "title": title_text if title_text else None,  # For YouTube/Pinterest
-                # Raw components for editing flexibility
-                "caption": caption_text,
-                "hashtags": hashtags_list,  # Exactly 10 hashtags in order
-                "ctas": all_ctas  # ALL CTAs for the platform
+                "caption": composed_caption,
             }
         return {
             "detected_person": detected_person,
