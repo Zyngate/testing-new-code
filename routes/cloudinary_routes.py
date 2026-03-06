@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from typing import List
+from typing import Annotated
 import asyncio
 import cloudinary.uploader
 from config import logger
@@ -40,8 +40,38 @@ async def _upload_single_file(file_content: bytes, filename: str, semaphore: asy
         }
 
 
-@router.post("/upload-media")
-async def upload_media(files: List[UploadFile] = File(...)):
+@router.post(
+    "/upload-media",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["files"],
+                        "properties": {
+                            "files": {
+                                "type": "array",
+                                "items": {"type": "string", "format": "binary"},
+                                "description": "Upload up to 10 image/video files.",
+                            }
+                        },
+                    },
+                    "encoding": {
+                        "files": {"style": "form", "explode": True}
+                    },
+                }
+            },
+        }
+    },
+)
+async def upload_media(
+    files: Annotated[
+        list[UploadFile],
+        File(description="Upload up to 10 image/video files."),
+    ]
+):
     """
     Upload up to 10 images/videos to Cloudinary in parallel.
     Returns Cloudinary URLs.
