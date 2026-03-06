@@ -276,7 +276,10 @@ async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> Lis
     if not client:
         try:
             fallback = await groq_generate_text(MODEL, f"Generate 3 short marketing keywords for: {effective_query}. Return comma-separated.")
+            if ":" in fallback:
+                fallback = fallback.split(":")[-1]
             kws = [k.strip() for k in fallback.replace("\n", ",").split(",") if k.strip()]
+            kws = [k for k in kws if len(k.split()) <= 3]
             return kws[:3] if kws else ["brand", "marketing", "content"]
         except:
             return ["brand", "marketing", "content"]
@@ -292,7 +295,12 @@ async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> Lis
             max_completion_tokens=40,
         )
         raw = resp.choices[0].message.content or ""
+        # Strip any prose prefix like "Here are three keywords: " before the actual keywords
+        if ":" in raw:
+            raw = raw.split(":")[-1]
         kws = [k.strip() for k in raw.replace("\n", ",").split(",") if k.strip()]
+        # Filter out any multi-word phrases that look like sentences (more than 3 words = prose)
+        kws = [k for k in kws if len(k.split()) <= 3]
         return kws[:3] if kws else ["brand", "marketing", "content"]
 
     except Exception as e:
@@ -1446,17 +1454,62 @@ Return ONLY the title text.
     )
 
     for p_norm, tags in hashtag_results:
+        # Ensure exactly 10 hashtags for non-autoposting
+        if not autoposting:
+            tags = tags[:10] if len(tags) >= 10 else tags
         platform_hashtags[p_norm] = tags
 
     for p_norm, title in title_results:
         if p_norm in ("youtube", "pinterest"):
             titles[p_norm] = title
 
+    # For NON-AUTOPOSTING: Return fully composed post per platform
+    if not autoposting:
+        platforms_combined = {}
+        for p_norm in normalized_platforms:
+            caption_text = captions.get(p_norm, "")
+            hashtags_list = platform_hashtags.get(p_norm, [])[:10]  # Exactly 10 hashtags
+            # Get ALL CTAs for the platform
+            all_ctas = PLATFORM_CTAS.get(p_norm, [])
+            title_text = titles.get(p_norm, "") if p_norm in ("youtube", "pinterest") else ""
+            
+            # Build the fully composed post: Caption + selected CTA + Hashtags
+            composed_parts = []
+            if caption_text:
+                composed_parts.append(caption_text.strip())
+            
+            # Add first CTA for the composed post (user can swap with others from ctas list)
+            if all_ctas:
+                composed_parts.append(all_ctas[0].strip())
+            
+            # Add hashtags at the end (exactly 10, in order)
+            if hashtags_list:
+                hashtags_str = " ".join(hashtags_list)
+                composed_parts.append(hashtags_str)
+            
+            # Join with double newlines for clean separation
+            composed_post = "\n\n".join(composed_parts)
+            
+            platforms_combined[p_norm] = {
+                "post": composed_post,  # Fully composed ready-to-use post
+                "title": title_text if title_text else None,  # For YouTube/Pinterest
+                # Raw components for editing flexibility
+                "caption": caption_text,
+                "hashtags": hashtags_list,  # Exactly 10 hashtags in order
+                "ctas": all_ctas  # ALL CTAs for the platform
+            }
+        return {
+            "status": "success",
+            "keywords": seed_keywords,
+            "platforms": platforms_combined
+        }
+
+    # For AUTOPOSTING: Keep original separate format (bulk service handles combining)
     return {
         "status": "success",
         "keywords": seed_keywords,
         "captions": captions,
         "platform_hashtags": platform_hashtags,
-        "ctas": platform_ctas,  # Selected CTA for autoposting, full list for non-autoposting
+        "ctas": platform_ctas,
         "titles": titles
     }

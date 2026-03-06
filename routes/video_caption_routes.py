@@ -5,6 +5,7 @@ import uuid
 import os
 from pathlib import Path
 from config import logger
+from services.post_generator_service import PLATFORM_CTAS
 
 router = APIRouter(tags=["Video Caption Generator"])
 
@@ -13,6 +14,20 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
     """Generate fallback response when video processing fails."""
+    platforms_combined = {}
+    for p in platforms:
+        caption = "Check out this amazing content! 🔥"
+        hashtags = ["#content", "#viral", "#trending", "#video", "#amazing", "#share", "#follow", "#explore", "#foryou", "#fyp"][:10]
+        all_ctas = PLATFORM_CTAS.get(p, ["Check it out!"])
+        # Compose the post with first CTA
+        composed_post = f"{caption}\n\n{all_ctas[0] if all_ctas else ''}\n\n{' '.join(hashtags)}"
+        platforms_combined[p] = {
+            "post": composed_post,
+            "caption": caption,
+            "hashtags": hashtags,  # 10 hashtags
+            "ctas": all_ctas,  # ALL CTAs for the platform
+            "title": None
+        }
     return {
         "message": "Video processing encountered an issue. Using fallback captions.",
         "error_info": error_msg,
@@ -22,10 +37,8 @@ def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
         "text_summary": "",
         "marketing_prompt": "",
         "keywords": ["video", "content", "social"],
-        "captions": {p: f"Check out this amazing content! 🔥" for p in platforms},
-        "platform_hashtags": {p: ["#content", "#viral", "#trending"] for p in platforms},
-        "ctas": {p: "Check it out!" for p in platforms},
-        "titles": {},
+        "platforms": platforms_combined,
+        "boards": {},
     }
 
 @router.post("/generate_video_caption")
@@ -90,18 +103,16 @@ async def generate_video_caption(
     # -----------------------------
     try:
         return {
-    "message": "Video processed successfully",
-    "detected_person": result.get("detected_person"),
-    "transcript": result.get("transcript", ""),
-    "visual_summary": result.get("visual_summary", ""),
-    "text_summary": result.get("text_summary", ""),
-    "marketing_prompt": result.get("marketing_prompt", ""),
-    "keywords": result.get("keywords", []),
-    "captions": result.get("captions", {}),
-    "platform_hashtags": result.get("platform_hashtags", {}),
-    "ctas": result.get("ctas", {}),   # 👈 ADD THIS LINE
-    "titles": result.get("titles", {}),
-}
+            "message": "Video processed successfully",
+            "detected_person": result.get("detected_person"),
+            "transcript": result.get("transcript", ""),
+            "visual_summary": result.get("visual_summary", ""),
+            "text_summary": result.get("text_summary", ""),
+            "marketing_prompt": result.get("marketing_prompt", ""),
+            "keywords": result.get("keywords", []),
+            "platforms": result.get("platforms", {}),  # Combined caption, hashtags, ctas, title per platform
+            "boards": result.get("boards", {}),
+        }
     except Exception as e:
         logger.error(f"Failed to format response: {e}")
         return JSONResponse(

@@ -24,7 +24,7 @@ async def generate_image_caption(
 
         client = Groq(api_key=GROQ_API_KEY_CAPTION)
 
-        result = await caption_from_image_file(temp_path, platforms_list, client)
+        result = await caption_from_image_file(temp_path, platforms_list, client, autoposting=False)
 
         os.remove(temp_path)
 

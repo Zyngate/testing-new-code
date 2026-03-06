@@ -49,17 +49,12 @@ async def generate_post(body: GeneratePostRequest):
         logger.error(f"Caption generation failed: {e}")
         raise HTTPException(status_code=500, detail="Caption generation failed.")
 
+    # Non-autoposting now returns combined format per platform
     return {
-    "status": "success",
-    "keywords": keywords,
-    "captions": results.get("captions", {}),
-    "platform_hashtags": results.get("platform_hashtags", {}),
-    "ctas": results.get("ctas", {}),   # 👈 ADD THIS LINE
-    "titles": results.get("titles", {
-        "youtube": "",
-        "pinterest": ""
-    })
-}
+        "status": "success",
+        "keywords": keywords,
+        "platforms": results.get("platforms", {})  # Combined caption, hashtags, ctas, title per platform
+    }
 
 
 
@@ -123,17 +118,10 @@ async def websocket_generate_post(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Hashtags
+        # Hashtags (now included in combined format from generate_caption_post)
         await websocket.send_json({"status": "processing", "message": "Generating platform hashtags..."})
-        platform_hashtags = {}
-        for p in platforms:
-            try:
-                platform_hashtags[p] = await fetch_platform_hashtags(None, keywords, p, query, autoposting=False)
-            except Exception as inner_e:
-                logger.error(f"Hashtag error for {p}: {inner_e}")
-                platform_hashtags[p] = []
 
-        # Captions
+        # Captions (includes hashtags, ctas, titles in combined format)
         await websocket.send_json({"status": "processing", "message": "Generating captions..."})
         try:
             results = await generate_caption_post(query, keywords, platforms)
@@ -143,14 +131,12 @@ async def websocket_generate_post(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Final Response
+        # Final Response - combined format per platform
         await websocket.send_json({
             "status": "completed",
             "message": "Post generated successfully",
             "keywords": keywords,
-            "captions": results.get("captions", {}),
-            "platform_hashtags": results.get("platform_hashtags", platform_hashtags),
-            "titles": results.get("titles", {})
+            "platforms": results.get("platforms", {})  # Combined caption, hashtags, ctas, title per platform
         })
 
     except WebSocketDisconnect:

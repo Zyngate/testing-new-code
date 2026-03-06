@@ -17,6 +17,7 @@ from services.post_generator_service import (
     generate_keywords_post,
     fetch_platform_hashtags,
     generate_caption_post,
+    PLATFORM_CTAS,
 )
 from services.video_cache_utils import compute_video_hash
 from services.video_cache_repo import get_cached_video_analysis, save_video_analysis
@@ -836,6 +837,7 @@ Focus on ONE strong idea or reaction.
     titles = {}
     boards = {}
     platform_ctas = {}
+    composed_posts = {}  # Store fully composed posts
 
     try:
         captions_data = all_results[-1] if all_results else {}
@@ -846,10 +848,26 @@ Focus on ONE strong idea or reaction.
             captions = {p: "Amazing content worth sharing! 🔥" for p in platforms}
 
         elif isinstance(captions_data, dict):
-            captions = captions_data.get("captions", {})
-            titles = captions_data.get("titles", {})
-            boards = captions_data.get("boards", {})
-            platform_ctas = captions_data.get("ctas", {})
+            # Handle new combined format for non-autoposting
+            if "platforms" in captions_data:
+                platforms_data = captions_data.get("platforms", {})
+                for p, data in platforms_data.items():
+                    captions[p] = data.get("caption", "")
+                    # Use hashtags from combined format (overrides separately generated ones)
+                    if data.get("hashtags"):
+                        platform_hashtags[p] = data["hashtags"]
+                    platform_ctas[p] = data.get("ctas", [])
+                    if data.get("title"):
+                        titles[p] = data["title"]
+                    # Get the fully composed post if available
+                    if data.get("post"):
+                        composed_posts[p] = data["post"]
+            else:
+                # Legacy format for autoposting
+                captions = captions_data.get("captions", {})
+                titles = captions_data.get("titles", {})
+                boards = captions_data.get("boards", {})
+                platform_ctas = captions_data.get("ctas", {})
             logger.info(f"📊 Extracted captions for platforms: {list(captions.keys())}")
 
         else:
@@ -866,6 +884,58 @@ Focus on ONE strong idea or reaction.
         if p not in platform_hashtags:
             platform_hashtags[p] = ["#content", "#viral", "#trending"]
 
+    # For NON-AUTOPOSTING: Return fully composed post per platform
+    if not autoposting:
+        platforms_combined = {}
+        for p in platforms:
+            caption_text = captions.get(p, "")
+            hashtags_list = platform_hashtags.get(p, [])[:10]  # Exactly 10 hashtags
+            # Get ALL CTAs for the platform
+            all_ctas = PLATFORM_CTAS.get(p, [])
+            title_text = titles.get(p, "") if p in ("youtube", "pinterest") else ""
+            
+            # Use pre-composed post if available from generate_caption_post
+            if p in composed_posts and composed_posts[p]:
+                composed_post = composed_posts[p]
+            else:
+                # Build the fully composed post: Caption + CTA + Hashtags
+                composed_parts = []
+                if caption_text:
+                    composed_parts.append(caption_text.strip())
+                
+                # Add first CTA for composed post (user can swap with others from ctas list)
+                if all_ctas:
+                    composed_parts.append(all_ctas[0].strip())
+                
+                # Add hashtags at the end (exactly 10, in order)
+                if hashtags_list:
+                    hashtags_str = " ".join(hashtags_list)
+                    composed_parts.append(hashtags_str)
+                
+                # Join with double newlines for clean separation
+                composed_post = "\n\n".join(composed_parts)
+            
+            platforms_combined[p] = {
+                "post": composed_post,  # Fully composed ready-to-use post
+                "title": title_text if title_text else None,  # For YouTube/Pinterest
+                # Raw components for editing flexibility
+                "caption": caption_text,
+                "hashtags": hashtags_list,  # Exactly 10 hashtags in order
+                "ctas": all_ctas  # ALL CTAs for the platform
+            }
+        return {
+            "detected_person": detected_person,
+            "transcript": transcript,
+            "visual_summary": visual_summary,
+            "visual_captions": visual_captions,
+            "detected_texts": detected_texts,
+            "marketing_prompt": marketing_prompt,
+            "keywords": keywords,
+            "platforms": platforms_combined,
+            "boards": boards,
+        }
+
+    # For AUTOPOSTING: Keep original separate format
     return {
         "detected_person": detected_person,
         "transcript": transcript,

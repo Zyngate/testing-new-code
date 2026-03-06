@@ -11,6 +11,7 @@ from services.post_generator_service import (
     generate_keywords_post,
     fetch_platform_hashtags,
     generate_caption_post,
+    PLATFORM_CTAS,
 )
 
 VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
@@ -94,7 +95,7 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
 
     async def get_captions():
         try:
-            captions_result = await generate_caption_post(marketing_prompt, keywords, platforms)
+            captions_result = await generate_caption_post(marketing_prompt, keywords, platforms, autoposting=autoposting)
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except:
             return {"captions": {p: caption for p in platforms}}
@@ -111,11 +112,73 @@ async def caption_from_image_file(image_filepath: str, platforms: List[str], cli
         platform_hashtags[p] = tags
     
     captions_data = all_results[-1]  # Last result is captions dict
+    
+    # Handle new combined format for non-autoposting
+    if "platforms" in captions_data:
+        # Already in combined format from generate_caption_post
+        return {
+            "caption_detected": caption,
+            "scene": scene_text,
+            "ocr_text": ocr_text,
+            "objects": visual.get("objects", []),
+            "actions": visual.get("actions", []),
+            "marketing_prompt": marketing_prompt,
+            "keywords": captions_data.get("keywords", keywords),
+            "platforms": captions_data.get("platforms", {}),
+        }
+    
+    # Legacy format handling for autoposting
     captions = captions_data.get("captions", {}) if isinstance(captions_data, dict) else captions_data
     titles = captions_data.get("titles", {}) if isinstance(captions_data, dict) else {}
     boards = captions_data.get("boards", {}) if isinstance(captions_data, dict) else {}
     platform_ctas = captions_data.get("ctas", {}) if isinstance(captions_data, dict) else {}
 
+    # For NON-AUTOPOSTING: Return fully composed post per platform
+    if not autoposting:
+        platforms_combined = {}
+        for p in platforms:
+            caption_text = captions.get(p, "")
+            hashtags_list = platform_hashtags.get(p, [])[:10]  # Exactly 10 hashtags
+            # Get ALL CTAs for the platform
+            all_ctas = PLATFORM_CTAS.get(p, [])
+            title_text = titles.get(p, "") if p in ("youtube", "pinterest") else ""
+            
+            # Build the fully composed post: Caption + CTA + Hashtags
+            composed_parts = []
+            if caption_text:
+                composed_parts.append(caption_text.strip())
+            
+            # Add first CTA for composed post (user can swap with others from ctas list)
+            if all_ctas:
+                composed_parts.append(all_ctas[0].strip())
+            
+            # Add hashtags at the end (exactly 10, in order)
+            if hashtags_list:
+                hashtags_str = " ".join(hashtags_list)
+                composed_parts.append(hashtags_str)
+            
+            # Join with double newlines for clean separation
+            composed_post = "\n\n".join(composed_parts)
+            
+            platforms_combined[p] = {
+                "post": composed_post,
+                "title": title_text if title_text else None,
+                "caption": caption_text,
+                "hashtags": hashtags_list,  # Exactly 10 hashtags in order
+                "ctas": all_ctas  # ALL CTAs for the platform
+            }
+        return {
+            "caption_detected": caption,
+            "scene": scene_text,
+            "ocr_text": ocr_text,
+            "objects": visual.get("objects", []),
+            "actions": visual.get("actions", []),
+            "marketing_prompt": marketing_prompt,
+            "keywords": keywords,
+            "platforms": platforms_combined,
+        }
+
+    # For AUTOPOSTING: Keep original separate format
     return {
         "caption_detected": caption,
         "scene": scene_text,
