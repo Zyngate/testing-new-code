@@ -269,6 +269,74 @@ def rotating_hashtag_picker(pool: list, k: int = 4):
     while True:
         yield [next(cycle) for _ in range(k)]
 
+
+KEYWORD_PREFIX_PATTERNS = [
+    r"^\s*here\s+are\s+(?:exactly\s+)?(?:three|3)\s+(?:short\s+)?(?:marketing\s+)?key\s*words?\s*[:\-]?",
+    r"^\s*generate\s+(?:exactly\s+)?(?:three|3)\s+(?:short\s+)?(?:marketing\s+)?key\s*words?\s*[:\-]?",
+    r"^\s*keywords?\s*[:\-]?",
+]
+
+INSTRUCTIONAL_QUERY_PATTERNS = [
+    r"\bhere\s+are\s+(?:exactly\s+)?(?:three|3)\s+(?:short\s+)?(?:marketing\s+)?key\s*words?\b[:\-]?",
+    r"\bgenerate\s+(?:exactly\s+)?(?:three|3)\s+(?:short\s+)?(?:marketing\s+)?key\s*words?\b[:\-]?",
+    r"\bbased\s+on\s+the\s+conversation\b[:\-]?",
+    r"\bfocus\s*:\s*[\w\s]*",
+]
+
+INSTRUCTIONAL_HINTS = (
+    "here are",
+    "marketing keywords",
+    "keyword",
+    "generate",
+    "return only",
+    "based on the conversation",
+)
+
+
+def _extract_keywords_from_text(raw: str) -> List[str]:
+    cleaned = raw.strip()
+    for pattern in KEYWORD_PREFIX_PATTERNS:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"[\n;|]+", ",", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    keywords: List[str] = []
+    for chunk in cleaned.split(","):
+        kw = re.sub(r"[^A-Za-z0-9\s&+\-]", "", chunk).strip().lower()
+        if not kw:
+            continue
+        if len(kw.split()) > 3:
+            continue
+        if kw in keywords:
+            continue
+        keywords.append(kw)
+
+    return keywords[:3]
+
+
+def _sanitize_query_for_suggestions(effective_query: str, seed_keywords: List[str]) -> str:
+    clean_query = effective_query
+    for pattern in INSTRUCTIONAL_QUERY_PATTERNS:
+        clean_query = re.sub(pattern, " ", clean_query, flags=re.IGNORECASE)
+
+    clean_query = re.sub(r"[^A-Za-z0-9\s]", " ", clean_query)
+    clean_query = re.sub(r"\s+", " ", clean_query).strip()
+    clean_query = " ".join(clean_query.split()[:12]).strip()
+
+    if len(clean_query.split()) < 2:
+        clean_query = " ".join(seed_keywords).strip()
+
+    return clean_query
+
+
+def _is_instructional_suggestion(suggestion: str) -> bool:
+    normalized = re.sub(r"[^A-Za-z\s]", " ", suggestion.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return True
+    return any(hint in normalized for hint in INSTRUCTIONAL_HINTS)
+
 # ---------------------------
 # 1) keyword generation
 # ---------------------------
@@ -276,10 +344,7 @@ async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> Lis
     if not client:
         try:
             fallback = await groq_generate_text(MODEL, f"Generate 3 short marketing keywords for: {effective_query}. Return comma-separated.")
-            if ":" in fallback:
-                fallback = fallback.split(":")[-1]
-            kws = [k.strip() for k in fallback.replace("\n", ",").split(",") if k.strip()]
-            kws = [k for k in kws if len(k.split()) <= 3]
+            kws = _extract_keywords_from_text(fallback or "")
             return kws[:3] if kws else ["brand", "marketing", "content"]
         except:
             return ["brand", "marketing", "content"]
@@ -295,12 +360,7 @@ async def generate_keywords_post(client: AsyncGroq, effective_query: str) -> Lis
             max_completion_tokens=40,
         )
         raw = resp.choices[0].message.content or ""
-        # Strip any prose prefix like "Here are three keywords: " before the actual keywords
-        if ":" in raw:
-            raw = raw.split(":")[-1]
-        kws = [k.strip() for k in raw.replace("\n", ",").split(",") if k.strip()]
-        # Filter out any multi-word phrases that look like sentences (more than 3 words = prose)
-        kws = [k for k in kws if len(k.split()) <= 3]
+        kws = _extract_keywords_from_text(raw)
         return kws[:3] if kws else ["brand", "marketing", "content"]
 
     except Exception as e:
@@ -420,6 +480,9 @@ def build_relevant_from_suggestions(
     seen = set()
 
     for suggestion in suggestions:
+        if _is_instructional_suggestion(suggestion):
+            continue
+
         words = re.findall(r"[A-Za-z]+", suggestion)
 
         # Skip very short suggestions
@@ -499,26 +562,7 @@ async def fetch_platform_hashtags(
     platform = platform.lower()
 
     # 1️⃣ Suggestion-based relevant tags
-    # Remove instruction-style sentences aggressively
-    clean_query = effective_query
-
-    # Remove common instruction patterns
-    instruction_patterns = [
-    r"here are .*?keywords.*?:",
-    r"generate .*?keywords.*?:",
-    r"based on the conversation.*?:",
-    r"focus\s*:?[\w\s]*",
-]
-
-    for pattern in instruction_patterns:
-        clean_query = re.sub(pattern, "", clean_query, flags=re.IGNORECASE)
-
-    # Keep only first 12 words max
-    clean_query = " ".join(clean_query.split()[:12]).strip()
-
-    # Fallback protection
-    if len(clean_query.split()) < 2:
-        clean_query = " ".join(seed_keywords)
+    clean_query = _sanitize_query_for_suggestions(effective_query, seed_keywords)
 
     suggestions = await fetch_search_suggestions(clean_query, platform)
     relevant_tags = build_relevant_from_suggestions(
