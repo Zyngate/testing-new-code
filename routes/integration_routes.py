@@ -33,11 +33,7 @@ async def generate_caption_endpoint(body: dict):
         keywords = await generate_keywords_post(client, prompt)
 
         # 2. captions + hashtags
-        results = await generate_caption_post(
-            query=prompt,
-            seed_keywords=keywords,
-            platforms=platforms
-        )
+        results = await generate_caption_post(prompt, keywords, platforms)
 
         return {
             "status": "success",
