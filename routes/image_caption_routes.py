@@ -28,7 +28,7 @@ async def generate_image_caption(
 
         os.remove(temp_path)
 
-        return {"status": "success", "data": result}
+        return {"status": "success", **result}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
