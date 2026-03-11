@@ -179,7 +179,7 @@ async def analyze_images_endpoint(
     # Use AsyncGroq client
     client_async = await get_groq_client()
     response = await client_async.chat.completions.create(
-        model="meta-llama/llama-4-maverick-17b-128e-instruct",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": "Return response in plain english. Do not use LaTeX"},
             {"role": "user", "content": content},
