@@ -705,50 +705,54 @@ async def generate_thinking_steps(prompt: str) -> list[str]:
     Generates user-visible reflective thinking.
     Not a plan. Not instructions. Just interpretation.
     """
+    try:
+        client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
 
-    client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are simulating a natural inner monologue.\n\n"
+                        "Rules:\n"
+                        "- Write in first-person.\n"
+                        "- Sound thoughtful and human.\n"
+                        "- Reflect on scope and intent.\n"
+                        "- Convert ambiguity into confident framing.\n"
+                        "- Do NOT ask questions (no question marks).\n"
+                        "- Do NOT describe actions or plans.\n"
+                        "- Do NOT provide answers or conclusions.\n"
+                        "- This is internal reflection, not a conversation.\n\n"
+                        "Style example:\n"
+                        "\"The topic is broad and complex. A structured, high-level framing "
+                        "helps capture its essence without oversimplifying. Balancing context "
+                        "and nuance creates clarity while leaving room for deeper exploration.\""
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.35,
+            max_completion_tokens=220,
+        )
 
-    response = await client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are simulating a natural inner monologue.\n\n"
-                    "Rules:\n"
-                    "- Write in first-person.\n"
-                    "- Sound thoughtful and human.\n"
-                    "- Reflect on scope and intent.\n"
-                    "- Convert ambiguity into confident framing.\n"
-                    "- Do NOT ask questions (no question marks).\n"
-                    "- Do NOT describe actions or plans.\n"
-                    "- Do NOT provide answers or conclusions.\n"
-                    "- This is internal reflection, not a conversation.\n\n"
-                    "Style example:\n"
-                    "\"The topic is broad and complex. A structured, high-level framing "
-                    "helps capture its essence without oversimplifying. Balancing context "
-                    "and nuance creates clarity while leaving room for deeper exploration.\""
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0.35,
-        max_completion_tokens=220,
-    )
+        text = response.choices[0].message.content.strip()
 
-    text = response.choices[0].message.content.strip()
+        # HARD CHARACTER CONTROL
+        MIN_CHARS = 600
+        MAX_CHARS = 900
 
-    # HARD CHARACTER CONTROL
-    MIN_CHARS = 600
-    MAX_CHARS = 900
+        if len(text) > MAX_CHARS:
+            text = text[:MAX_CHARS].rsplit(" ", 1)[0]
 
-    if len(text) > MAX_CHARS:
-        text = text[:MAX_CHARS].rsplit(" ", 1)[0]
+        return [text]
 
-    return [text]
+    except Exception as e:
+        logger.error(f"generate_thinking_steps failed: {e}")
+        return ["Analyzing the question and gathering relevant context..."]
 
 
 
