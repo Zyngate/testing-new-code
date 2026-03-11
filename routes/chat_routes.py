@@ -577,7 +577,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         stream = await client_generate.chat.completions.create(
             messages=messages,
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            model="llama-3.3-70b-versatile",
             max_completion_tokens=4000,
             temperature=0.7,
             stream=True,
@@ -764,7 +764,7 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
 
         stream = await client_generate.chat.completions.create(
             messages=final_messages,
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            model="llama-3.3-70b-versatile",
             max_completion_tokens=4000,
             temperature=0.7,
             stream=True,
