@@ -733,9 +733,30 @@ IMPORTANT:
 """
     else:
         identity_hook_rule = """
-- Do NOT begin with: "A conversation", "The video", or "A speaker".
-- The hook must begin with a concrete action or statement from the video.
-- Do NOT use the word "speaker".
+STRICT RULE:
+- No person was detected in the video.
+- Do NOT invent or describe any person.
+
+FORBIDDEN PHRASES:
+- "a person"
+- "a man"
+- "a woman"
+- "someone"
+- "the speaker"
+- "a presenter"
+- "a guy"
+- "a lady"
+
+START the caption using:
+- a quote
+- an action
+- an object
+- a key moment from the video
+
+Example openings:
+"One sentence changes the entire discussion."
+"The phrase 'build systems, not tasks' shifts the tone immediately."
+"A whiteboard fills with three ideas that reshape the argument."
 """
     
     if p_norm == "instagram":
@@ -1290,6 +1311,15 @@ async def _generate_caption_for_platform(
 
     if not caption_text:
         caption_text = ""
+    
+    # 🚫 Prevent hallucinated people when no detection exists
+    if not detected_person and caption_text:
+        caption_text = re.sub(
+            r"\b(a person|a man|a woman|someone|the speaker|a presenter|a guy|a lady)\b",
+        "",
+        caption_text,
+        flags=re.IGNORECASE
+    )
 
     # -------- HARD CLEANUP (Fix dropped prefixes safely) --------
     caption_text = re.sub(r"[ \t]+", " ", caption_text)
