@@ -4,7 +4,7 @@ import itertools
 import random
 import re
 import httpx
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
 from groq import AsyncGroq
 from enum import Enum
 from config import logger, HASHTAG_API_KEYS
@@ -476,8 +476,8 @@ def build_relevant_from_suggestions(
 ) -> List[str]:
 
     max_tags = 3
-    final = []
-    seen = set()
+    final: List[str] = []
+    seen: Set[str] = set()
 
     for suggestion in suggestions:
         if _is_instructional_suggestion(suggestion):
@@ -511,8 +511,9 @@ def build_relevant_from_suggestions(
             if len(tag) > 25:
                 continue
 
-            if tag.lower() not in seen:
-                seen.add(tag.lower())
+            lowered = tag.lower()
+            if lowered not in seen:
+                seen.add(lowered)
                 final.append(tag)
 
         if len(final) >= max_tags:
@@ -594,32 +595,43 @@ async def fetch_platform_hashtags(
         broad_limit = 3
         trending_limit = 4
 
-    ordered_tags = []
+    ordered_tags: List[str] = []
+    ordered_lower: Set[str] = set()
 
     # 1️⃣ RELEVANT (max 3)
     for tag in relevant_tags:
         if len(ordered_tags) >= relevant_limit:
             break
-        if tag not in ordered_tags:
+        if tag and tag.lower() not in ordered_lower:
             ordered_tags.append(tag)
+            ordered_lower.add(tag.lower())
 
     # 2️⃣ BROAD (max 3 unique)
-    broad_tags = []
+    broad_tags: List[str] = []
+    broad_lower: Set[str] = set()
 
     # Add AI broad first
-    if broad_tag and broad_tag not in ordered_tags:
-        broad_tags.append(broad_tag)
+    if broad_tag:
+        lowered = broad_tag.lower()
+        if lowered not in ordered_lower and lowered not in broad_lower:
+            broad_tags.append(broad_tag)
+            broad_lower.add(lowered)
 
     # Add from seed keywords (unique only)
     for kw in set(seed_keywords):
         candidate = f"#{kw.replace(' ', '').lower()}"
-        if candidate not in ordered_tags and candidate not in broad_tags:
+        lowered = candidate.lower()
+        if lowered not in ordered_lower and lowered not in broad_lower:
             broad_tags.append(candidate)
+            broad_lower.add(lowered)
         if len(broad_tags) >= broad_limit:
             break
 
     for tag in broad_tags[:broad_limit]:
-        ordered_tags.append(tag)
+        lowered = tag.lower()
+        if lowered not in ordered_lower:
+            ordered_tags.append(tag)
+            ordered_lower.add(lowered)
 
     # 3️⃣ TRENDING (max 4 unique)
     # 3️⃣ TRENDING
@@ -631,14 +643,16 @@ async def fetch_platform_hashtags(
     else:
         pool = TRENDING_POOLS.get(platform, [])
 
+    pool = pool[:]  # avoid mutating global pool
     random.shuffle(pool)
 
     trending_added = 0
     for tag in pool:
         if trending_added >= trending_limit:
             break
-        if tag not in ordered_tags:
+        if tag and tag.lower() not in ordered_lower:
             ordered_tags.append(tag)
+            ordered_lower.add(tag.lower())
             trending_added += 1
 
     return ordered_tags[:10]
@@ -1043,6 +1057,11 @@ Describe actions, visuals, or sequences shown.
 Do not write abstract commentary about the topic.
 The caption should reflect the flow of the video, not just the theme.
 
+PARAPHRASE RULE:
+- Reference at most two concrete elements from the source.
+- Never copy full sentences or long phrases (6+ consecutive words) from the transcript, OCR, or topic text.
+- Summarize the visual moment in fresh language so it reads like an interpretation, not a transcript.
+
 AVOID:
 - First-person (no I, me, my, we)
 - Emojis
@@ -1228,12 +1247,12 @@ async def _generate_hashtags_for_platform(
     """Generate hashtags for a single platform. Returns (platform, hashtags)."""
     try:
         tags = await fetch_platform_hashtags(
-    client=None,
-    seed_keywords=seed_keywords,
-    platform=p_norm,
-    effective_query=effective_query,
-    autoposting=autoposting
-)
+            client=None,
+            seed_keywords=seed_keywords,
+            platform=p_norm,
+            effective_query=effective_query,
+            autoposting=autoposting,
+        )
     except Exception as e:
         logger.error(f"Hashtag generation failed for {p_norm}: {e}")
         tags = []
@@ -1296,12 +1315,12 @@ async def _generate_caption_for_platform(
     """Generate caption for a single platform. Returns (platform, caption)."""
 
     caption_prompt = _build_caption_prompt(
-    p_norm,
-    effective_query,
-    detected_person,
-    ocr_text,
-    transcript
-)
+        p_norm,
+        effective_query,
+        detected_person,
+        ocr_text,
+        transcript,
+    )
 
     # 1️⃣ Generate caption (single pass only)
     caption_text = await safe_generate_caption(
