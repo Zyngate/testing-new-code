@@ -1,5 +1,7 @@
 # stelle_backend/routes/post_routes.py
 
+from unittest import result
+
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 from typing import Dict, Any, List
@@ -160,15 +162,6 @@ async def upload_video_and_schedule(payload: dict):
 
     if not all([user_id, cloudinary_url, platform]):
         raise HTTPException(status_code=400, detail="Missing fields")
-
-    result = await create_post_from_uploaded_media(
-    user_id=user_id,
-    cloudinary_url=cloudinary_url,
-    platform=platform,
-    schedule_mode=schedule_mode,
-    scheduled_at=scheduled_at
-)
-
 
     return result
 
@@ -368,17 +361,24 @@ async def bulk_preview(payload: dict):
     # - Daily and weekly limit enforcement
     # - Optional startDate to begin scheduling from a future date
     result = await process_bulk_media_urls(
-        user_id=user_id,
-        media_urls=media_urls,
-        platforms=platforms,
-        schedule_mode="AUTO",
-        growth_mode=growth_mode,
-        content_type=content_type,
-        preview_only=True,  # Don't save to database
-        start_date=start_date,
-    )
+    user_id=user_id,
+    media_urls=media_urls,
+    platforms=platforms,
+    schedule_mode="AUTO",
+    growth_mode=growth_mode,
+    content_type=content_type,
+    preview_only=True,
+    start_date=start_date
+)
+
+    for post in result.get("results", []):
+        if post.get("platform", "").lower() == "threads":
+            if "topic" not in post:
+                post["topic"] = result.get("topic", "General")
 
     return result
+
+    
 
 @router.post("/bulk-confirm")
 async def bulk_confirm(payload: dict):

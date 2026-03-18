@@ -61,14 +61,19 @@ async def video_caption_endpoint(
         except Exception:
             pass
 
-    # Return combined format for non-autoposting
-    return JSONResponse(
-        {
-            "status": "success",
-            "keywords": result.get("keywords", []),
-            "platforms": result.get("platforms", {})  # Combined caption, hashtags, ctas, title per platform
-        }
-    )
+    platforms_data = result.get("platforms", {})
 
+
+    if "threads" in platforms_data:
+        if "topic" not in platforms_data["threads"]:
+            platforms_data["threads"]["topic"] = result.get("topic", "General")
+
+    return JSONResponse(
+    {
+        "status": "success",
+        "keywords": result.get("keywords", []),
+        "platforms": platforms_data
+    }
+)
 
     

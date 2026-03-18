@@ -885,6 +885,8 @@ RULES:
 - Make the product sound DESIRABLE
 - Make customers sound SMART for using it
 - NEVER use: "still needs", "apparently", "trying to", "outsourcing", "can't manage"
+- NEVER default to "Because..."
+- If the sentence starts with "Because", rewrite internally
 
 EXAMPLES:
 ✅ "Manual post scheduling: Because who needs sleep or sanity."
@@ -910,6 +912,9 @@ RULES:
 - MAXIMUM 15 words
 - Mock the mystery/debate, NOT the thing itself
 - Sound tired and unimpressed
+- NEVER default to "Because..."
+- If the sentence starts with "Because", rewrite internally
+
 
 EXAMPLES:
 ✅ "Built centuries ago. Still arguing about it in 2026. Very productive."
@@ -1390,7 +1395,26 @@ async def _generate_caption_for_platform(
     caption_text, selected_cta = inject_platform_cta(p_norm, caption_text)
     return (p_norm, caption_text, selected_cta)
 
+async def generate_topic(effective_query: str, seed_keywords: List[str]) -> str:
+    prompt = f"""
+Extract ONE clear topic (1–2 words max) from this content.
 
+Rules:
+- Must be a category (not a sentence)
+- Human-readable (no #)
+- Examples: Politics, AI, Marketing, Fitness
+
+Content:
+{effective_query}
+
+Return ONLY the topic.
+"""
+    try:
+        text = await groq_generate_text(MODEL, prompt)
+        topic = text.strip().split("\n")[0]
+        return topic
+    except:
+        return seed_keywords[0].capitalize()
 
 async def generate_caption_post(
     effective_query: str,
@@ -1410,6 +1434,7 @@ async def generate_caption_post(
     # Normalize platforms
     normalized_platforms = [p.lower().strip() for p in platforms]
 
+    topic = await generate_topic(effective_query, seed_keywords)
     # Create all tasks for parallel execution
     hashtag_tasks = [
     _generate_hashtags_for_platform(
@@ -1541,6 +1566,20 @@ Return ONLY the title text.
     )
 
     for p_norm, tags in hashtag_results:
+        topic_tag = f"#{topic.replace(' ', '')}"
+
+    # Ensure topic is FIRST hashtag
+        if topic_tag not in tags:
+            tags.insert(0, topic_tag)
+        else:
+            tags.remove(topic_tag)
+            tags.insert(0, topic_tag)
+
+    # OPTIONAL: limit Threads hashtags
+        if p_norm == "threads":
+            tags = tags[:10]
+
+        platform_hashtags[p_norm] = tags
         # Ensure exactly 10 hashtags for non-autoposting
         if not autoposting:
             tags = tags[:10] if len(tags) >= 10 else tags
@@ -1577,10 +1616,15 @@ Return ONLY the title text.
             # Join with double newlines for clean separation
             composed_caption = "\n\n".join(composed_parts)
             
-            platforms_combined[p_norm] = {
-                "title": title_text if title_text else None,  # For YouTube/Pinterest
+            platform_data = {
+                "title": title_text if title_text else None,
                 "caption": composed_caption,
             }
+
+            # Only add topic for Threads
+            if p_norm == "threads":
+                platform_data["topic"] = topic
+            platforms_combined[p_norm] = platform_data
         return {
             "status": "success",
             "keywords": seed_keywords,
@@ -1592,6 +1636,7 @@ Return ONLY the title text.
         "status": "success",
         "keywords": seed_keywords,
         "captions": captions,
+        "topic": topic,
         "platform_hashtags": platform_hashtags,
         "ctas": platform_ctas,
         "titles": titles

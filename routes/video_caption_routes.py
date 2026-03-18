@@ -25,10 +25,17 @@ def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
         if selected_cta:
             composed_parts.append(selected_cta)
         composed_caption = "\n\n".join([part for part in composed_parts if part])
-        platforms_combined[p] = {
+        platform_data = {
             "caption": composed_caption,
             "title": None
         }
+
+        # ✅ ADD THIS
+        if p == "threads":
+            platform_data["topic"] = "General"
+
+        platforms_combined[p] = platform_data
+        
     return {
         "message": "Video processing encountered an issue. Using fallback captions.",
         "error_info": error_msg,
