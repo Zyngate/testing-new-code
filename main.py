@@ -44,8 +44,12 @@ from routes import (
     integration_routes, 
     post_generation_routes,
     plan_routes,
-    cloudinary_routes
+    cloudinary_routes,
+    engagement_routes,
 )
+
+# Autonomous Engagement (comment poller)
+from services.comment_poller import comment_poller_loop
 
 app = FastAPI(
     title="Stelle Backend API",
@@ -186,6 +190,13 @@ app.include_router(
     tags=["Caption & Hashtag Generator"]
 )
 
+# ✅ Autonomous Engagement Module
+app.include_router(
+    engagement_routes.router,
+    prefix="/engagement",
+    tags=["Autonomous Engagement"]
+)
+
 # -------------------------
 #   STARTUP EVENTS
 # -------------------------
@@ -206,6 +217,8 @@ async def startup():
     # 🚫 DO NOT run schedulers on web service
     if os.getenv("ENABLE_SCHEDULERS") == "true":
         start_task_scheduler()
+        # Start autonomous engagement comment poller
+        asyncio.create_task(comment_poller_loop())
 # -------------------------
 #   ROOT ENDPOINT
 # -------------------------
