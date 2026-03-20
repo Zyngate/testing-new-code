@@ -128,14 +128,9 @@ PLATFORM_CTAS = {
         "That’s something."
     ],
     "tiktok": [
-        "Would you try this?",
-        "Agree or disagree?",
-        "What would you do?",
-        "Is this accurate?",
-        "Real or not?",
-        "Too much or just right?",
-        "Tell me your take.",
-        "What’s your move?"
+        "Follow for more",
+        "Like & share",
+        "Comment your thoughts"
     ],
     "youtube": [
         "Let me know your take in the comments.",
@@ -1181,16 +1176,6 @@ Line 2–3 — CONTEXT
 - Keep it clear, not abstract
 - No storytelling, no fluff
 
-━━━━━━━━━━━━━━━━━━━━━━━
-FINAL LINE — CTA
-━━━━━━━━━━━━━━━━━━━━━━━
-
-- MUST include a direct call to action
-- Use variations like:
-  • Follow for more
-  • Like & share
-  • Comment your thoughts
-- Be clear and specific
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 CONTENT RULES
