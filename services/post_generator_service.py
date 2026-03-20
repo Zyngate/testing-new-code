@@ -1155,54 +1155,88 @@ Return ONLY the description text.
 
     elif p_norm == "tiktok":
         return f"""
-Write a LONG-FORM TikTok caption (800–1000 characters).
+Write a TikTok caption (MAX 250 characters).
 
-STRUCTURE (MANDATORY):
+━━━━━━━━━━━━━━━━━━━━━━━
+STRUCTURE (STRICT)
+━━━━━━━━━━━━━━━━━━━━━━━
 
-PARAGRAPH 1 — HOOK (CRITICAL)
+Line 1 — HOOK (MOST IMPORTANT)
+- The strongest sentence
+- Must grab attention immediately (before "more")
+- Can be:
+  • a bold claim
+  • a sharp question
+  • a relatable pain point
 
-- Must reference a specific phrase from:
-  • OCR text
-  • Transcript
+DO NOT start with:
+"The phrase", "This phrase", "That phrase", "The line"
 
-+ DO NOT start with:
-+ - "The phrase"
-+ - "This phrase"
-+ - "That phrase"
-+ - "The line"
-+ - "This line"
+━━━━━━━━━━━━━━━━━━━━━━━
+Line 2–3 — CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━
 
-- If a strong quote exists, paraphrase it.
-- Do NOT invent drama.
-- Do NOT exaggerate tone.
-- The hook must feel extracted from the video.
+- Explain what the video delivers in simple, natural language
+- MUST include 1–2 strong keywords from the content
+- Keep it clear, not abstract
+- No storytelling, no fluff
 
-PARAGRAPH 2 — CORE IDEA
-- Focus on ONE strong reaction, thought, or insight
-- Explain why this moment matters
-- Human, creator-style tone
-- This should be the longest paragraph
+━━━━━━━━━━━━━━━━━━━━━━━
+FINAL LINE — CTA
+━━━━━━━━━━━━━━━━━━━━━━━
 
-PARAGRAPH 3 — CTA
-- Invite engagement (comment, share, reflect)
-- End with a direct or thoughtful question
+- MUST include a direct call to action
+- Use variations like:
+  • Follow for more
+  • Like & share
+  • Comment your thoughts
+- Be clear and specific
 
-RULES:
-- STRICTLY NO first-person language (no I, me, my, we, our)
-- Do NOT describe scenes or actions
-- Do NOT summarize the video
-- Sound like a real creator, not a brand
+━━━━━━━━━━━━━━━━━━━━━━━
+CONTENT RULES
+━━━━━━━━━━━━━━━━━━━━━━━
+
+- Keep it punchy and concise
+- Focus on ONE clear idea
+- No surreal, poetic, or vague writing
+- No exaggeration or fake drama
+
+━━━━━━━━━━━━━━━━━━━━━━━
+PLATFORM SAFETY (MANDATORY)
+━━━━━━━━━━━━━━━━━━━━━━━
+
+- Follow TikTok Community Guidelines
+- No misleading claims
+- No aggressive or insulting tone
+- No harmful or sensitive topics
+- No engagement bait tricks
+
+Tone:
+→ clear
+→ real
+→ direct
+
+━━━━━━━━━━━━━━━━━━━━━━━
+GLOBAL RULES
+━━━━━━━━━━━━━━━━━━━━━━━
+
+- STRICTLY NO first-person (no I, me, my, we)
 - No emojis
-- No hashtags inside the text
+- No hashtags inside caption
 
-CONTEXT ANCHOR (MANDATORY):
+━━━━━━━━━━━━━━━━━━━━━━━
+FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━
 
-Base the caption on what specifically happens in the video.
-Describe actions, visuals, or sequences shown.
-Do not write abstract commentary about the topic.
-The caption should reflect the flow of the video, not just the theme.
+- Must be under 250 characters
+- Hook must be in first line
+- Keywords must appear naturally
+- CTA must be present
 
-CONTEXT (for understanding only):
+━━━━━━━━━━━━━━━━━━━━━━━
+CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━
+
 {effective_query}
 
 Return ONLY the caption text.
