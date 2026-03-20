@@ -10,6 +10,7 @@ import numpy as np
 from typing import Union, Tuple, List, Dict, Any
 from groq import Groq, AsyncGroq
 from ratelimit import limits, sleep_and_retry
+from sentence_transformers import SentenceTransformer
 # sentence_transformers is imported lazily inside _get_embedding_model()
 # to avoid loading torch (~800MB) at startup which crashes Render free tier.
 
@@ -180,6 +181,13 @@ async def rate_limited_groq_call(
         client_to_use = client_or_model
         model = kwargs.pop("model", "llama-3.1-8b-instant")
 
+    # Groq Python SDK expects max_tokens. Some call sites still pass
+    # max_completion_tokens, so normalize it here for compatibility.
+    if "max_completion_tokens" in kwargs and "max_tokens" not in kwargs:
+        kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
+    elif "max_completion_tokens" in kwargs:
+        kwargs.pop("max_completion_tokens")
+
     is_async = isinstance(client_to_use, AsyncGroq)
 
     try:
@@ -226,6 +234,7 @@ async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are
     Returns empty string on failure (caller should fallback).
     """
     max_retries = 6  # Try multiple keys if needed
+    max_tokens = kwargs.pop("max_tokens", kwargs.pop("max_completion_tokens", 700))
     
     for attempt in range(max_retries):
         try:
@@ -237,7 +246,7 @@ async def groq_generate_text(model: str, prompt: str, system_msg: str = "You are
                     {"role": "user", "content": prompt}
                 ],
                 temperature=kwargs.get("temperature", 0.8),
-                max_completion_tokens=kwargs.get("max_completion_tokens", 700),
+                max_tokens=max_tokens,
                 top_p=kwargs.get("top_p", 0.95),
                 stream=False,
                 timeout=60.0,  # Increased timeout
