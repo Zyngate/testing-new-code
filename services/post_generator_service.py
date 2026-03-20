@@ -789,6 +789,12 @@ PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
 - Must reference a specific phrase from:
   • OCR text
   • Transcript
++ DO NOT start with:
++ - "The phrase"
++ - "This phrase"
++ - "That phrase"
++ - "The line"
++ - "This line"
 
 PARAGRAPH 2 — CONTEXT & INSIGHT  
 - Explain what's happening in the video  
@@ -1158,6 +1164,14 @@ PARAGRAPH 1 — HOOK (CRITICAL)
 - Must reference a specific phrase from:
   • OCR text
   • Transcript
+
++ DO NOT start with:
++ - "The phrase"
++ - "This phrase"
++ - "That phrase"
++ - "The line"
++ - "This line"
+
 - If a strong quote exists, paraphrase it.
 - Do NOT invent drama.
 - Do NOT exaggerate tone.
