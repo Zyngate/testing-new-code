@@ -141,6 +141,18 @@ ASYNC_CLIENT_KEY = BASE_GROQ_KEY
 GENERATION_KEY_PREFIX = "GROQ_API_KEY_GENERATE_"
 GENERATE_API_KEYS = get_groq_keys(GENERATION_KEY_PREFIX) or [BASE_GROQ_KEY]
 
+# --- Meta (Facebook / Instagram) App Credentials ---
+# Required for long-lived token exchange and token inspection.
+# Get these from https://developers.facebook.com/apps/ -> Settings -> Basic
+META_APP_ID = os.getenv("META_APP_ID", "")
+META_APP_SECRET = os.getenv("META_APP_SECRET", "")
+if not META_APP_ID or not META_APP_SECRET:
+    logger.warning(
+        "META_APP_ID / META_APP_SECRET missing. "
+        "Instagram long-lived token exchange will not work. "
+        "Add them to your .env file."
+    )
+
 # --- OpenAI API Key ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
