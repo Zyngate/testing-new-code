@@ -39,6 +39,12 @@ user_profiles_collection = db["user_profiles"]
 user_post_analytics_collection = db["user_post_analytics"]  # For caching user post analytics
 video_analysis_cache_collection = db["video_analysis_cache"]  # Cache for video vision/STT analysis
 
+# --- Autonomous Engagement Collections ---
+user_tone_profiles_collection = db["user_tone_profiles"]          # Tone DNA profiles per user
+post_content_cache_collection = db["post_content_cache"]          # AI analysis of each published post
+comment_replies_log_collection = db["comment_replies_log"]        # Audit trail of all auto-replies
+engagement_settings_collection = db["engagement_settings"]        # Per-user engagement config
+
 # ----------------------------------------------------------------------
 # --- Synchronous MongoDB Setup (Lazy & Robust Initialization) ---
 # ----------------------------------------------------------------------
