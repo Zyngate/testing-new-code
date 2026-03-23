@@ -21,7 +21,7 @@ HASHTAG_LIMITS = {
     "linkedin": 10,
     "facebook": 10,
     "pinterest": 10,
-    "tiktok": 10,
+    "tiktok": 5,  # TikTok Community Guidelines: exactly 5 hashtags
     "youtube": 10,
     "threads": 10,
     "twitter": 10,
@@ -556,6 +556,38 @@ async def fetch_platform_hashtags(
 ) -> List[str]:
 
     platform = platform.lower()
+
+    # 🎯 TikTok Community Guidelines Hashtag Strategy
+    # Structure: 1×Tier1 (broad) + 2×Tier2 (mid-size) + 1×Tier3 (niche) + 1×Branded = 5 tags
+    if platform == "tiktok":
+        tags = []
+
+        # Ensure at least 3 keywords for Tier 1 & 2
+        kws = seed_keywords + ["content", "growth"]
+        kws = kws[:3]
+
+        # 1️⃣ Tier 1 — Broad category (1 tag)
+        # High volume, general discovery tag
+        tags.append(f"#{kws[0].replace(' ', '').lower()}")
+
+        # 2️⃣ Tier 2 — Mid-size, topic-specific (2 tags)
+        tags.append(f"#{kws[1].replace(' ', '').lower()}")
+        tags.append(f"#{kws[2].replace(' ', '').lower()}")
+
+        # 3️⃣ Tier 3 — Niche, highly specific (1 tag)
+        # Build from effective_query words for maximum specificity
+        words = re.findall(r"[A-Za-z]+", effective_query)
+        if len(words) >= 2:
+            niche = "#" + "".join(w.capitalize() for w in words[:2])
+        else:
+            niche = f"#{kws[0]}Tips"
+        tags.append(niche)
+
+        # 4️⃣ Branded/Community tag (1 tag)
+        tags.append("#StelleAI")
+
+        # Return exactly 5 hashtags (CEO rule)
+        return tags[:5]
 
     # 1️⃣ Suggestion-based relevant tags
     clean_query = _sanitize_query_for_suggestions(effective_query, seed_keywords)
@@ -1592,23 +1624,28 @@ Return ONLY the title text.
         if p_norm in ("youtube", "pinterest")
     ]
 
-    # Run hashtag + title tasks in parallel
+        # Run hashtag + title tasks in parallel
     hashtag_results, title_results = await asyncio.gather(
         asyncio.gather(*hashtag_tasks),
         asyncio.gather(*title_tasks)
     )
 
     for p_norm, tags in hashtag_results:
+        # 🚀 Skip topic tag modification for TikTok (CEO rule: exact 5 tags)
+        if p_norm == "tiktok":
+            platform_hashtags[p_norm] = tags
+            continue
+
         topic_tag = f"#{topic.replace(' ', '')}"
 
-    # Ensure topic is FIRST hashtag
+        # Ensure topic is FIRST hashtag
         if topic_tag not in tags:
             tags.insert(0, topic_tag)
         else:
             tags.remove(topic_tag)
             tags.insert(0, topic_tag)
 
-    # OPTIONAL: limit Threads hashtags
+        # OPTIONAL: limit Threads hashtags
         if p_norm == "threads":
             tags = tags[:10]
 
@@ -1628,7 +1665,9 @@ Return ONLY the title text.
         platforms_combined = {}
         for p_norm in normalized_platforms:
             caption_text = captions.get(p_norm, "")
-            hashtags_list = platform_hashtags.get(p_norm, [])[:10]  # Exactly 10 hashtags
+            # TikTok: exactly 5 hashtags (CEO rule), others: up to 10
+            hashtag_limit = 5 if p_norm == "tiktok" else 10
+            hashtags_list = platform_hashtags.get(p_norm, [])[:hashtag_limit]
             selected_cta = platform_ctas.get(p_norm, "")
             title_text = titles.get(p_norm, "") if p_norm in ("youtube", "pinterest") else ""
 
