@@ -37,6 +37,7 @@ async def safe_generate_caption(prompt: str, platform: str, retries: int = 2) ->
                 max_completion_tokens=600,
                 temperature=0.7
 )
+            
             if text and text.strip():
                 return text.strip()
         except Exception as e:
