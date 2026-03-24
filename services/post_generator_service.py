@@ -569,7 +569,11 @@ async def fetch_platform_hashtags(
 
         # 1️⃣ Tier 1 — Broad category (1 tag)
         # High volume, general discovery tag
-        tags.append(f"#{kws[0].replace(' ', '').lower()}")
+        # 🎯 High-volume TikTok discovery tags (rotate for variety)
+        high_volume_tags = ["#fyp", "#foryou", "#viral", "#foryoupage"]
+
+        # Pick one randomly (prevents repetition)
+        tags.append(random.choice(high_volume_tags))
 
         # 2️⃣ Tier 2 — Mid-size, topic-specific (2 tags)
         tags.append(f"#{kws[1].replace(' ', '').lower()}")
@@ -585,7 +589,7 @@ async def fetch_platform_hashtags(
         tags.append(niche)
 
         # 4️⃣ Branded/Community tag (1 tag)
-        tags.append("#StelleAI")
+        tags.append("#StelleWorld")
 
         # Return exactly 5 hashtags (CEO rule)
         return tags[:5]
@@ -1220,19 +1224,27 @@ CONTENT RULES
 - No exaggeration or fake drama
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-PLATFORM SAFETY (MANDATORY)
+PLATFORM SAFETY (STRICT ENFORCEMENT)
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-- Follow TikTok Community Guidelines
-- No misleading claims
-- No aggressive or insulting tone
-- No harmful or sensitive topics
-- No engagement bait tricks
+The caption MUST strictly follow TikTok Community Guidelines.
 
-Tone:
-→ clear
-→ real
-→ direct
+If ANY violation occurs, the output is INVALID and MUST be rewritten internally BEFORE returning.
+
+STRICTLY FORBIDDEN:
+- Misleading or exaggerated claims (e.g., "guaranteed", "100%", "you won’t believe")
+- Engagement bait (e.g., "wait till the end", "like for part 2")
+- Aggressive, insulting, or rude tone
+- Harmful, sensitive, or controversial topics
+
+ZERO TOLERANCE RULE:
+If even ONE violation appears → rewrite the caption silently.
+
+FINAL OUTPUT MUST BE:
+✔ Safe
+✔ Neutral
+✔ Non-manipulative
+✔ Platform-compliant
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 GLOBAL RULES
