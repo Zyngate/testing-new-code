@@ -581,7 +581,15 @@ async def fetch_platform_hashtags(
 
         # 3️⃣ Tier 3 — Niche, highly specific (1 tag)
         # Build from effective_query words for maximum specificity
-        words = re.findall(r"[A-Za-z]+", effective_query)
+        safe_query = re.sub(
+            r"(pedophilia|child abuse|sexual abuse|rape|molestation)",
+            "",
+            effective_query,
+            flags=re.IGNORECASE
+        )
+
+        words = re.findall(r"[A-Za-z]+", safe_query)
+        
         if len(words) >= 2:
             niche = "#" + "".join(w.capitalize() for w in words[:2])
         else:
@@ -1388,6 +1396,20 @@ def inject_platform_cta(platform: str, caption: str) -> tuple[str, str | None]:
 
     return caption, cta
 
+def contains_sensitive_topic(text: str) -> bool:
+    risky_topics = [
+        "pedophilia",
+        "child abuse",
+        "sexual abuse",
+        "rape",
+        "minor exploitation",
+        "abuse allegations",
+        "molestation"
+    ]
+
+    text = text.lower()
+    return any(topic in text for topic in risky_topics)
+
 async def _generate_caption_for_platform(
     p_norm: str,
     effective_query: str,
@@ -1404,13 +1426,26 @@ async def _generate_caption_for_platform(
         ocr_text,
         transcript,
     )
+    # 🚨 HARD BLOCK: Sensitive topics (TikTok only)
+    if p_norm == "tiktok" and contains_sensitive_topic(effective_query):
+        logger.warning("Blocked unsafe TikTok topic")
 
+        return (
+            p_norm,
+        "A serious discussion around safety and accountability in the industry\n\nKey concerns and perspectives are highlighted clearly\n\nComment your thoughts",
+        "Comment your thoughts"
+    )
     # 1️⃣ Generate caption (single pass only)
     caption_text = await safe_generate_caption(
         caption_prompt,
         platform=p_norm
     )
-
+    # 🚨 POST SAFETY CHECK
+    if p_norm == "tiktok" and caption_text:
+        if contains_sensitive_topic(caption_text):
+            logger.warning("Unsafe caption detected. Rewriting...")
+            caption_text = "A serious discussion around safety and accountability in the industry\n\nKey concerns are explained with clarity and context\n\nComment your thoughts"
+    
     if not caption_text:
         caption_text = ""
     
