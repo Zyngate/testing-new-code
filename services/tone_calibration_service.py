@@ -73,7 +73,7 @@ async def get_active_tone_profile(user_id: str) -> Optional[Dict[str, Any]]:
         doc = await tone_profiles_col.find_one({
             "user_id": user_id,
             "is_active": True
-        })
+        }, sort=[("updated_at", -1), ("created_at", -1)])
         if doc:
             doc["_id"] = str(doc["_id"])
         return doc
@@ -118,8 +118,8 @@ async def calibrate_tone_from_form(
     
     1. Saves raw form data
     2. Sends it to Groq LLM to extract Tone DNA traits
-    3. Stores complete profile in user_tone_profiles
-    4. Returns the created profile
+    3. Upserts complete profile in user_tone_profiles
+    4. Returns the saved profile
 
     form_data expected keys:
       - style: str              (e.g. "casual", "professional", "witty", "warm", "blunt")
@@ -131,21 +131,20 @@ async def calibrate_tone_from_form(
       - additional_notes: str   (optional free text)
     """
     try:
-        # 1. Get current version number
-        current = await get_active_tone_profile(user_id)
+        now = datetime.now(timezone.utc)
+
+        # 1. Find most recent profile (active or archived) so recalibration updates existing entry.
+        current = await tone_profiles_col.find_one(
+            {"user_id": user_id},
+            sort=[("updated_at", -1), ("created_at", -1)]
+        )
         new_version = (current.get("version", 0) + 1) if current else 1
 
-        # 2. If an active profile exists, deactivate it (archive)
-        if current:
-            await tone_profiles_col.update_one(
-                {"user_id": user_id, "is_active": True},
-                {"$set": {"is_active": False, "archived_at": datetime.now(timezone.utc)}}
-            )
-
-        # 3. Extract Tone DNA via LLM
+        # 2. Extract Tone DNA via LLM
         extracted_traits = await _extract_tone_from_form(form_data)
 
-        # 4. Build the profile document
+        # 3. Build the profile payload
+        created_at = current.get("created_at", now) if current else now
         profile_doc = {
             "user_id": user_id,
             "version": new_version,
@@ -163,28 +162,51 @@ async def calibrate_tone_from_form(
             "extracted_traits": extracted_traits,
             "calibration_pairs": [],  # Empty — Method A doesn't use calibration pairs
             "is_active": True,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": created_at,
+            "updated_at": now,
         }
 
-        # 5. Insert
-        result = await tone_profiles_col.insert_one(profile_doc)
-        profile_doc["_id"] = str(result.inserted_id)
+        # 4. Update existing profile if present; otherwise create first profile.
+        if current:
+            target_id = current["_id"]
+            await tone_profiles_col.update_one(
+                {"_id": target_id},
+                {
+                    "$set": profile_doc,
+                    "$unset": {"archived_at": ""}
+                }
+            )
 
-        logger.info(f"✅ Tone profile created for user {user_id} (v{new_version}) via form")
+            # Defensive cleanup: keep exactly one active profile per user.
+            await tone_profiles_col.update_many(
+                {"user_id": user_id, "_id": {"$ne": target_id}},
+                {"$set": {"is_active": False, "archived_at": now, "updated_at": now}}
+            )
 
-        # 6. Ensure engagement_settings exists with defaults
+            saved_profile = await tone_profiles_col.find_one({"_id": target_id})
+            logger.info(f"✅ Tone profile updated for user {user_id} (v{new_version}) via form")
+        else:
+            result = await tone_profiles_col.insert_one(profile_doc)
+            saved_profile = await tone_profiles_col.find_one({"_id": result.inserted_id})
+            logger.info(f"✅ Tone profile created for user {user_id} (v{new_version}) via form")
+
+        if not saved_profile:
+            raise RuntimeError("Failed to load saved tone profile")
+
+        saved_profile["_id"] = str(saved_profile["_id"])
+
+        # 5. Ensure engagement_settings exists with defaults
         await _ensure_engagement_settings(user_id)
 
-        # 7. Build tone_dna object matching frontend ToneDNA interface
-        profile_doc["tone_dna"] = _build_tone_dna(extracted_traits)
+        # 6. Build tone_dna object matching frontend ToneDNA interface
+        saved_profile["tone_dna"] = _build_tone_dna(extracted_traits)
 
         # Convert datetime fields to ISO strings for JSON serialization
         for dt_key in ("created_at", "updated_at"):
-            if hasattr(profile_doc.get(dt_key), "isoformat"):
-                profile_doc[dt_key] = profile_doc[dt_key].isoformat()
+            if hasattr(saved_profile.get(dt_key), "isoformat"):
+                saved_profile[dt_key] = saved_profile[dt_key].isoformat()
 
-        return profile_doc
+        return saved_profile
 
     except Exception as e:
         logger.error(f"❌ Error calibrating tone for {user_id}: {e}", exc_info=True)
