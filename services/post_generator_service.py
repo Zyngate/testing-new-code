@@ -547,6 +547,19 @@ Return EXACTLY ONE hashtag."""
         return f"#{seed_keywords[0].replace(' ', '').lower()}"
     return None
 
+def is_safe_hashtag(tag: str) -> bool:
+    banned_words = [
+        "pedophilia",
+        "abuse",
+        "rape",
+        "molestation",
+        "sexual",
+        "minor",
+        "exploit"
+    ]
+
+    tag_lower = tag.lower()
+    return not any(word in tag_lower for word in banned_words)
 
 async def fetch_platform_hashtags(
     client: AsyncGroq,
@@ -963,14 +976,22 @@ RULES:
 
 
 EXAMPLES:
-✅ "Built centuries ago. Still arguing about it in 2026. Very productive."
-✅ "Ancient structure. Zero clue who made it. Humans peaked then forgot everything."
-✅ "Science: We figured it out. Also science: Actually no we didn't."
+"Built centuries ago. Still arguing about it in 2026."
+"Ancient structure. Zero clue who made it."
+"Science: We figured it out. Also science: Actually no we didn't."
+"Centuries passed. Still no agreement."
+"Ancient structure. Zero clue who made it. Humans peaked then forgot everything."
+"Science: We figured it out. Also science: Actually no we didn't."
+
+
 
 FORBIDDEN:
 ❌ "Great, another mystery." (generic sarcasm)
 ❌ "Someone's hobby." (dismissive of subject)
 
+ANTI-REPETITION RULE:
+- DO NOT use overused words like "hidden", "secret", or "truth"
+- Avoid repeating the same Example style across outputs
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 FINAL CHECK BEFORE RESPONDING:
@@ -1230,6 +1251,13 @@ CONTENT RULES
 - Focus on ONE clear idea
 - No surreal, poetic, or vague writing
 - No exaggeration or fake drama
+
+STYLE BOOST (MANDATORY):
+
+- Sound like a real human, not a report
+- Avoid formal phrases like "a discussion around", "highlights", "explores"
+- Use simple, natural language
+- First line must feel like a real thought someone would say out loud
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 PLATFORM SAFETY (STRICT ENFORCEMENT)
@@ -1529,6 +1557,24 @@ Return ONLY the topic.
     except:
         return seed_keywords[0].capitalize()
 
+def clean_youtube_title(title: str) -> str:
+    import re
+
+    banned_patterns = [
+        r"\bhidden\b",
+        r"\bthe hidden\b",
+        r"\bhidden reason\b",
+        r"\bhidden truth\b"
+    ]
+
+    for pattern in banned_patterns:
+        title = re.sub(pattern, "", title, flags=re.IGNORECASE)
+
+    # Clean spacing issues
+    title = re.sub(r"\s+", " ", title).strip()
+
+    return title
+
 async def generate_caption_post(
     effective_query: str,
     seed_keywords: List[str],
@@ -1579,6 +1625,10 @@ PSYCHOLOGICAL TRIGGERS (Use at least ONE):
 - An unexpected outcome
 - A contrast between belief vs reality
 - A system behind the scenes
+
+ANTI-REPETITION RULE:
+- DO NOT use overused words like "hidden", "secret", or "truth"
+- Avoid repeating the same trigger style across outputs
 
 REQUIREMENTS:
 - 45–65 characters
@@ -1632,6 +1682,7 @@ Return ONLY the title text.
         try:
             text = await groq_generate_text(MODEL, prompt)
             title = text.split("\n")[0].replace('"', '').strip()
+            title = clean_youtube_title(title)
             return (platform, title)
         except Exception:
             return (platform, "")
