@@ -64,7 +64,13 @@ TONE PROFILE:
 POST CONTEXT (what this post is about):
 - Content: {content_summary}
 - Topics: {key_topics}
+- Post sentiment: {post_sentiment}
+- Likely comment themes: {likely_comment_themes}
 - Platform: {platform}
+
+COMMENT CONTEXT:
+- Comment type: {comment_type}
+- Inferred commenter tone: {comment_tone}
 
 STRICT RULES:
 1. Match the tone profile EXACTLY — this must sound like the real person
@@ -74,7 +80,9 @@ STRICT RULES:
 5. NEVER be rude, offensive, political, or controversial
 6. NEVER reveal you are an AI or automated system
 7. Do NOT use generic stock phrases like "Great content!" or "Thanks for sharing!"
-8. Reply ONLY with the reply text — nothing else, no quotes, no prefix
+8. NEVER disagree, argue, or contradict the commenter. Stay supportive, appreciative, or neutral.
+9. If comment_type is emoji_only, your reply MUST be emoji-only (no words, no hashtags, no punctuation), with 1-4 emojis that fit post context and user tone.
+10. Reply ONLY with the reply text — nothing else, no quotes, no prefix
 """
 
 
@@ -106,7 +114,7 @@ async def generate_reply_for_comment(
         Dict with reply details including status.
     """
     comment_id = comment.get("comment_id", "")
-    comment_text = comment.get("text", "")
+    comment_text = (comment.get("text", "") or "").strip()
     comment_author = comment.get("author", "unknown")
 
     try:
@@ -126,25 +134,44 @@ async def generate_reply_for_comment(
 
         reply_mode = settings.get("reply_mode", "automatic")
 
-        # ── 3. Spam check ──
+        # ── 3. Blank comment check (always treated as spam) ──
+        if _is_blank_comment(comment_text):
+            logger.info(f"🚫 Blank comment detected, skipping comment {comment_id}")
+            await _log_reply(
+                user_id,
+                post_id,
+                comment_id,
+                comment_author,
+                comment_text,
+                "[SPAM: BLANK_COMMENT]",
+                platform,
+                0,
+                "spam_skipped",
+            )
+            return {"status": "spam_skipped", "reason": "blank_comment"}
+
+        # ── 4. Spam check ──
         if await _is_spam(comment_text, settings):
             logger.info(f"🚫 Spam detected, skipping comment {comment_id}")
             await _log_reply(user_id, post_id, comment_id, comment_author,
                              comment_text, "[SPAM DETECTED]", platform, 0, "spam_skipped")
             return {"status": "spam_skipped"}
 
-        # ── 4. Load Tone DNA ──
+        # ── 5. Load Tone DNA ──
         tone = await get_active_tone_profile(user_id)
         if not tone:
             return {"status": "skipped", "reason": "no_tone_profile"}
 
-        # ── 5. Load post context ──
+        # ── 6. Load post context ──
         post_ctx = await get_post_context(post_id, user_id)
 
-        # ── 6. Select model ──
+        comment_type = "emoji_only" if _is_emoji_only_comment(comment_text) else "text"
+        comment_tone = _infer_comment_tone(comment_text)
+
+        # ── 7. Select model ──
         model = select_model_for_comment(comment_text)
 
-        # ── 7. Build prompt & generate ──
+        # ── 8. Build prompt & generate ──
         reply_text = await _generate_reply(
             tone_profile=tone,
             post_context=post_ctx,
@@ -153,7 +180,27 @@ async def generate_reply_for_comment(
             platform=platform,
             model=model,
             user_name=user_name,
+            comment_type=comment_type,
+            comment_tone=comment_tone,
         )
+
+        if reply_text and comment_type == "emoji_only" and not _is_emoji_only_comment(reply_text):
+            # Hard guardrail: emoji-only comments must receive emoji-only replies.
+            reply_text = _build_contextual_emoji_reply(post_ctx, tone)
+
+        if reply_text and _is_disagreeing_reply(reply_text):
+            reply_text = await _rewrite_non_disagreeing_reply(
+                model=model,
+                tone_profile=tone,
+                post_context=post_ctx,
+                comment_text=comment_text,
+                comment_author=comment_author,
+                platform=platform,
+                user_name=user_name,
+                draft_reply=reply_text,
+                comment_type=comment_type,
+                comment_tone=comment_tone,
+            )
 
         if not reply_text:
             await _log_reply(user_id, post_id, comment_id, comment_author,
@@ -161,7 +208,7 @@ async def generate_reply_for_comment(
                              tone.get("version", 1), "failed")
             return {"status": "failed", "reason": "llm_generation_failed"}
 
-        # ── 8. Handle based on reply_mode ──
+        # ── 9. Handle based on reply_mode ──
         tone_version = tone.get("version", 1)
 
         if reply_mode == "automatic":
@@ -190,7 +237,7 @@ async def generate_reply_for_comment(
         else:
             status = "pending_review"  # Default to safe mode
 
-        # ── 9. Log ──
+        # ── 10. Log ──
         log_doc = await _log_reply(
             user_id, post_id, comment_id, comment_author,
             comment_text, reply_text, platform,
@@ -408,6 +455,8 @@ async def _generate_reply(
     platform: str,
     model: str,
     user_name: str = "the user",
+    comment_type: str = "text",
+    comment_tone: str = "neutral",
 ) -> str:
     """Build the LLM prompt and generate the reply."""
 
@@ -426,7 +475,11 @@ async def _generate_reply(
         avoid_topics=", ".join(traits.get("avoid_topics", [])) or "none",
         content_summary=post_context.get("content_summary", "Social media post") if post_context else "Social media post",
         key_topics=", ".join(post_context.get("key_topics", [])) if post_context else "general",
+        post_sentiment=post_context.get("sentiment", "neutral") if post_context else "neutral",
+        likely_comment_themes=", ".join(post_context.get("likely_comment_themes", [])) if post_context else "general audience reactions",
         platform=platform,
+        comment_type=comment_type,
+        comment_tone=comment_tone,
     )
 
     # Build user prompt
@@ -451,11 +504,71 @@ async def _generate_reply(
     return reply
 
 
+async def _rewrite_non_disagreeing_reply(
+    model: str,
+    tone_profile: Dict[str, Any],
+    post_context: Optional[Dict[str, Any]],
+    comment_text: str,
+    comment_author: str,
+    platform: str,
+    user_name: str,
+    draft_reply: str,
+    comment_type: str,
+    comment_tone: str,
+) -> str:
+    """One-pass rewrite when a draft sounds contradictory or argumentative."""
+    rewrite_system = REPLY_SYSTEM_PROMPT + "\n11. Never include correctional language like 'you are wrong', 'actually', or 'I disagree'."
+
+    traits = tone_profile.get("extracted_traits", {})
+    rewrite_system = rewrite_system.format(
+        user_name=user_name,
+        tone_label=tone_profile.get("tone_label", "Friendly"),
+        formality=traits.get("formality", 0.3),
+        emoji_frequency=traits.get("emoji_frequency", 0.5),
+        avg_reply_length=traits.get("avg_reply_length_words", 18),
+        humor_level=traits.get("humor_level", "subtle"),
+        confrontation_style=traits.get("confrontation_style", "polite_correction"),
+        signature_phrases=", ".join(traits.get("signature_phrases", [])) or "none",
+        avoid_topics=", ".join(traits.get("avoid_topics", [])) or "none",
+        content_summary=post_context.get("content_summary", "Social media post") if post_context else "Social media post",
+        key_topics=", ".join(post_context.get("key_topics", [])) if post_context else "general",
+        post_sentiment=post_context.get("sentiment", "neutral") if post_context else "neutral",
+        likely_comment_themes=", ".join(post_context.get("likely_comment_themes", [])) if post_context else "general audience reactions",
+        platform=platform,
+        comment_type=comment_type,
+        comment_tone=comment_tone,
+    )
+
+    rewrite_prompt = (
+        f'Original comment from @{comment_author}: "{comment_text}"\n'
+        f'Draft reply: "{draft_reply}"\n\n'
+        "Rewrite this so it does not disagree with the commenter while staying relevant to the post context and user tone. "
+        "Return reply text only."
+    )
+
+    rewritten = await groq_generate_text(
+        model=model,
+        prompt=rewrite_prompt,
+        system_msg=rewrite_system,
+        temperature=0.6,
+        max_completion_tokens=120,
+    )
+
+    if rewritten:
+        cleaned = rewritten.strip().strip('"').strip("'")
+        if not _is_disagreeing_reply(cleaned):
+            return cleaned
+    return draft_reply
+
+
 async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
     """
     Check if a comment is spam using keyword matching.
     Combines default keywords + user's blacklisted words.
     """
+    if _is_blank_comment(comment_text):
+        return True
+
     if not settings.get("spam_filter_enabled", True):
         return False
 
@@ -468,17 +581,113 @@ async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
         if keyword.lower() in text_lower:
             return True
 
-    # Emoji-only spam (5+ consecutive emojis with no text)
+    # Emoji-only spam: allow normal emoji reactions, block excessive bursts.
+    emoji_pattern = re.compile(
+        r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
+        r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF'
+        r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000026FF]'
+    )
     text_no_emoji = re.sub(
         r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
         r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF'
         r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000026FF]+',
         '', comment_text
     ).strip()
-    if not text_no_emoji and len(comment_text) > 10:
-        return True  # Pure emoji spam
+    emoji_count = len(emoji_pattern.findall(comment_text))
+    if not text_no_emoji and emoji_count >= 8:
+        return True
 
     return False
+
+
+def _is_blank_comment(comment_text: str) -> bool:
+    return not (comment_text or "").strip()
+
+
+def _is_emoji_only_comment(text: str) -> bool:
+    """True when text contains emoji/symbol reactions only (no words or digits)."""
+    if _is_blank_comment(text):
+        return False
+
+    emoji_pattern = re.compile(
+        r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
+        r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF'
+        r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000026FF]+'
+    )
+    has_emoji = bool(emoji_pattern.search(text))
+    stripped = emoji_pattern.sub("", text)
+    stripped = re.sub(r"[\s\.,!?~#@&*+\-_/\\|:;'\"()\[\]{}<>]+", "", stripped)
+
+    return has_emoji and stripped == ""
+
+
+def _infer_comment_tone(comment_text: str) -> str:
+    text = (comment_text or "").lower()
+    if not text:
+        return "neutral"
+    if "?" in text:
+        return "curious"
+    if any(w in text for w in ["love", "awesome", "great", "amazing", "🔥", "😍", "👏"]):
+        return "positive"
+    if any(w in text for w in ["bad", "hate", "worst", "boring", "terrible", "not good"]):
+        return "critical"
+    return "neutral"
+
+
+def _is_disagreeing_reply(reply_text: str) -> bool:
+    text = (reply_text or "").lower()
+    patterns = [
+        r"\bi disagree\b",
+        r"\byou(?:\s+are|'re)\s+wrong\b",
+        r"\bthat(?:'s| is)\s+wrong\b",
+        r"\bnot true\b",
+        r"\bactually,?\b",
+    ]
+    return any(re.search(p, text) for p in patterns)
+
+
+def _build_contextual_emoji_reply(
+    post_context: Optional[Dict[str, Any]],
+    tone_profile: Optional[Dict[str, Any]],
+) -> str:
+    """Build a context-aware emoji-only fallback reply."""
+    context_text = ""
+    if post_context:
+        context_text = (
+            f"{post_context.get('content_summary', '')} "
+            f"{' '.join(post_context.get('key_topics', []))} "
+            f"{post_context.get('sentiment', '')}"
+        ).lower()
+
+    topic_map = [
+        (["workout", "fitness", "gym", "training"], ["💪", "🔥", "🏋️"]),
+        (["food", "recipe", "cooking", "meal"], ["😋", "🍽️", "🔥"]),
+        (["travel", "trip", "vacation", "adventure"], ["✈️", "🌍", "✨"]),
+        (["music", "song", "beat", "dance"], ["🎵", "🎶", "💃"]),
+        (["business", "startup", "marketing", "sales"], ["📈", "🚀", "🙌"]),
+        (["tech", "ai", "code", "software"], ["🤖", "💡", "🚀"]),
+        (["fashion", "style", "outfit", "beauty"], ["✨", "💅", "😍"]),
+        (["pet", "dog", "cat", "puppy"], ["🐾", "❤️", "🥹"]),
+    ]
+
+    emoji_pool = ["🔥", "👏", "🙌", "✨", "❤️"]
+    for keywords, candidates in topic_map:
+        if any(k in context_text for k in keywords):
+            emoji_pool = candidates
+            break
+
+    emoji_frequency = (
+        (tone_profile or {}).get("extracted_traits", {}).get("emoji_frequency", 0.5)
+    )
+    if emoji_frequency >= 0.8:
+        count = 4
+    elif emoji_frequency >= 0.4:
+        count = 3
+    else:
+        count = 2
+
+    chosen = [random.choice(emoji_pool) for _ in range(count)]
+    return "".join(chosen)
 
 
 async def _log_reply(
