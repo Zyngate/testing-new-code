@@ -117,21 +117,25 @@ async def calibrate_tone_from_form(
     Method A — Tone Calibration via Form.
     
     1. Saves raw form data
-    2. Sends it to Groq LLM to extract Tone DNA traits
-    3. Upserts complete profile in user_tone_profiles
-    4. Returns the saved profile
+        2. Sends it to Groq LLM to extract Tone DNA traits
+        3. Upserts complete profile in user_tone_profiles
+        4. Returns the saved profile
 
-    form_data expected keys:
+        form_data expected keys:
       - style: str              (e.g. "casual", "professional", "witty", "warm", "blunt")
       - emoji_usage: str        (e.g. "heavy", "moderate", "none")
       - reply_length: str       (e.g. "short_punchy", "medium", "detailed")
       - language: str           (e.g. "gen_z", "business", "friendly", "technical")
-      - signature_phrases: str  (free text, comma-separated)
-      - avoid_words: str        (free text, comma-separated)
+            - signature_phrases: list[str] | str  (array preferred, comma-separated string accepted)
+            - avoid_words: list[str] | str        (array preferred, comma-separated string accepted)
       - additional_notes: str   (optional free text)
     """
     try:
         now = datetime.now(timezone.utc)
+
+        # Normalize list-like fields for consistent storage.
+        normalized_signature_phrases = _normalize_text_list(form_data.get("signature_phrases", []))
+        normalized_avoid_words = _normalize_text_list(form_data.get("avoid_words", []))
 
         # 1. Find most recent profile (active or archived) so recalibration updates existing entry.
         current = await tone_profiles_col.find_one(
@@ -155,8 +159,8 @@ async def calibrate_tone_from_form(
                 "emoji_usage": form_data.get("emoji_usage", ""),
                 "reply_length": form_data.get("reply_length", ""),
                 "language": form_data.get("language", ""),
-                "signature_phrases": form_data.get("signature_phrases", ""),
-                "avoid_words": form_data.get("avoid_words", ""),
+                "signature_phrases": normalized_signature_phrases,
+                "avoid_words": normalized_avoid_words,
                 "additional_notes": form_data.get("additional_notes", ""),
             },
             "extracted_traits": extracted_traits,
@@ -306,8 +310,8 @@ async def _extract_tone_from_form(form_data: Dict[str, Any]) -> Dict[str, Any]:
         emoji_usage=form_data.get("emoji_usage", "moderate"),
         reply_length=form_data.get("reply_length", "medium"),
         language=form_data.get("language", "friendly"),
-        signature_phrases=form_data.get("signature_phrases", "none specified"),
-        avoid_words=form_data.get("avoid_words", "none specified"),
+        signature_phrases=_join_text_list_for_prompt(form_data.get("signature_phrases", [])),
+        avoid_words=_join_text_list_for_prompt(form_data.get("avoid_words", [])),
         additional_notes=form_data.get("additional_notes", "none"),
     )
 
@@ -358,11 +362,8 @@ def _default_traits_from_form(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "gen_z": 0.1, "business": 0.8, "technical": 0.7,
     }
 
-    sig_text = form_data.get("signature_phrases", "")
-    phrases = [p.strip() for p in sig_text.split(",") if p.strip()] if sig_text else []
-
-    avoid_text = form_data.get("avoid_words", "")
-    avoid = [w.strip() for w in avoid_text.split(",") if w.strip()] if avoid_text else []
+    phrases = _normalize_text_list(form_data.get("signature_phrases", []))
+    avoid = _normalize_text_list(form_data.get("avoid_words", []))
 
     return {
         "tone_label": f"{style.title()} Communicator",
@@ -428,3 +429,35 @@ def _build_tone_dna(extracted_traits: Dict[str, Any]) -> Dict[str, Any]:
         "signature_phrases": extracted_traits.get("signature_phrases", []),
         "avoid_patterns": extracted_traits.get("avoid_topics", []),
     }
+
+
+def _normalize_text_list(value: Any) -> List[str]:
+    """Accept list or comma/newline-separated text and return a clean unique list."""
+    if value is None:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        text = str(value)
+        raw_items = [part for part in text.replace("\n", ",").split(",")]
+
+    cleaned: List[str] = []
+    seen = set()
+    for item in raw_items:
+        token = str(item).strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(token)
+
+    return cleaned
+
+
+def _join_text_list_for_prompt(value: Any) -> str:
+    items = _normalize_text_list(value)
+    return ", ".join(items) if items else "none specified"
