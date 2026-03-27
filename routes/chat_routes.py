@@ -44,6 +44,16 @@ router = APIRouter(tags=["Chat"])
 visualize_queries = {}
 visualize_jobs = {}
 deepsearch_queries = {}
+
+def is_small_talk(message: str) -> bool:
+    msg = message.lower().strip()
+    return msg in ["hi", "hello", "hey", "yo"]
+
+
+def is_simple_query(message: str) -> bool:
+    msg = message.lower()
+    return "date" in msg or "time" in msg
+
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
 # -------------------------
@@ -396,7 +406,20 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         user_id, session_id, user_message, filenames = req.user_id, req.session_id, req.prompt, req.filenames
         if not user_id or not session_id or not user_message:
             raise HTTPException(status_code=400, detail="Invalid request parameters.")
+        # 🚀 SHORT-CIRCUIT RESPONSES (FIX WONKY CHAT)
 
+        # 1. Small talk
+        if is_small_talk(user_message):
+            return JSONResponse(content={
+                "response": "Hello. How can I assist you?"
+    })
+
+        # 2. Simple queries
+        if is_simple_query(user_message):
+            from datetime import datetime
+            return JSONResponse(content={
+                "response": f"Today's date is {datetime.now().strftime('%B %d, %Y')}."
+    })
         # --- 1. Gather Context (Goals, Files, URLs, Memory) ---
 
         # a) Goal Context
@@ -431,12 +454,12 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
        
 
         # --- 2. Construct Unified Prompt ---
-        unified_prompt = f"User Query: {user_message}\n"
+        unified_prompt = user_message
         if external_content:
             unified_prompt += f"\n[External Content]:\n{external_content}\n"
         if multimodal_context:
             unified_prompt += f"\n[Retrieved File & Code Context]:\n{multimodal_context}\n"
-        unified_prompt += f"\nCurrent Date/Time: {current_date}\n\nProvide a detailed and context-aware response."
+        unified_prompt += "\n\nRespond appropriately based on the query."
 
         # e) Dynamic Research
         research_needed = await classify_prompt(user_message)
