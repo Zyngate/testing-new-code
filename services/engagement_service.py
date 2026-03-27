@@ -23,12 +23,14 @@ from config import logger
 from services.ai_service import groq_generate_text
 from services.tone_calibration_service import get_active_tone_profile
 from services.post_content_analyzer import get_post_context
+from services.video_cache_repo import get_cached_video_analysis
 from services.social_engagement_api import post_reply
 
 
 # ── Collections ──────────────────────────────────────────────
 replies_log_col = db["comment_replies_log"]
 engagement_settings_col = db["engagement_settings"]
+scheduled_posts_col = db["scheduledposts"]
 
 
 # ── Constants ────────────────────────────────────────────────
@@ -38,6 +40,7 @@ COMPLEX_MODEL = "llama-3.3-70b-versatile"
 # Human-like pacing: random delay between replies (seconds)
 MIN_REPLY_DELAY = 15
 MAX_REPLY_DELAY = 45
+FACT_CHECK_MODEL = "llama-3.3-70b-versatile"
 
 # Spam detection keywords (basic — can be extended per user via blacklisted_words)
 DEFAULT_SPAM_KEYWORDS = [
@@ -58,7 +61,7 @@ TONE PROFILE:
 - Average reply length: ~{avg_reply_length} words
 - Humor level: {humor_level}
 - When someone says something negative: {confrontation_style}
-- Signature phrases they use: {signature_phrases}
+- Signature phrases/expressions (use ONLY when natural & context-appropriate): {signature_phrases}
 - Words/topics to AVOID: {avoid_topics}
 
 POST CONTEXT (what this post is about):
@@ -72,6 +75,12 @@ COMMENT CONTEXT:
 - Comment type: {comment_type}
 - Inferred commenter tone: {comment_tone}
 
+FACT CONTEXT:
+- Video summary: {video_summary}
+- Transcript highlights: {transcript_highlights}
+- Verified anchors: {fact_anchors}
+- Lexical sync words: {lexical_sync_words}
+
 STRICT RULES:
 1. Match the tone profile EXACTLY — this must sound like the real person
 2. Keep reply around {avg_reply_length} words (can be ±5 words)
@@ -83,6 +92,9 @@ STRICT RULES:
 8. NEVER disagree, argue, or contradict the commenter. Stay supportive, appreciative, or neutral.
 9. If comment_type is emoji_only, your reply MUST be emoji-only (no words, no hashtags, no punctuation), with 1-4 emojis that fit post context and user tone.
 10. Reply ONLY with the reply text — nothing else, no quotes, no prefix
+11. IMPORTANT: Signature phrases should ONLY appear if they fit naturally into the conversation. Do NOT force them in. Omit them entirely if context doesn't support their use.
+12. If FACT CONTEXT is available, keep the reply fact-grounded and never invent details.
+13. Use 2-5 lexical sync words naturally (when available) so wording aligns with the commenter and post/video context.
 """
 
 
@@ -164,6 +176,8 @@ async def generate_reply_for_comment(
 
         # ── 6. Load post context ──
         post_ctx = await get_post_context(post_id, user_id)
+        video_cache_ctx = await _load_video_cache_context(user_id, post_id, post_ctx)
+        fact_bundle = _build_fact_bundle(post_ctx, video_cache_ctx, comment_text)
 
         comment_type = "emoji_only" if _is_emoji_only_comment(comment_text) else "text"
         comment_tone = _infer_comment_tone(comment_text)
@@ -175,6 +189,7 @@ async def generate_reply_for_comment(
         reply_text = await _generate_reply(
             tone_profile=tone,
             post_context=post_ctx,
+            fact_bundle=fact_bundle,
             comment_text=comment_text,
             comment_author=comment_author,
             platform=platform,
@@ -193,6 +208,7 @@ async def generate_reply_for_comment(
                 model=model,
                 tone_profile=tone,
                 post_context=post_ctx,
+                fact_bundle=fact_bundle,
                 comment_text=comment_text,
                 comment_author=comment_author,
                 platform=platform,
@@ -200,6 +216,16 @@ async def generate_reply_for_comment(
                 draft_reply=reply_text,
                 comment_type=comment_type,
                 comment_tone=comment_tone,
+            )
+
+        if reply_text and fact_bundle.get("has_facts"):
+            reply_text = await _fact_align_reply(
+                model=FACT_CHECK_MODEL,
+                comment_text=comment_text,
+                comment_author=comment_author,
+                draft_reply=reply_text,
+                fact_bundle=fact_bundle,
+                comment_type=comment_type,
             )
 
         if not reply_text:
@@ -437,19 +463,51 @@ async def get_reply_stats(user_id: str) -> Dict[str, Any]:
 def select_model_for_comment(comment_text: str) -> str:
     """Route to appropriate model based on comment complexity."""
     words = comment_text.split()
-    has_question = "?" in comment_text
-    is_short = len(words) <= 6
+    word_count = len(words)
 
-    # Simple: short positive comments, emojis only, etc.
-    if is_short and not has_question:
+    # Complexity indicators
+    has_question = "?" in comment_text
+    has_multiple_sentences = comment_text.count(".") + comment_text.count("!") > 1
+    has_negation = any(neg in comment_text.lower() for neg in ["not", "don't", "can't", "won't", "shouldn't"])
+    all_caps_words = sum(1 for w in words if w.isupper() and len(w) > 1)
+    exclamation_count = comment_text.count("!")
+
+    # SIMPLE MODEL: use for straightforward, short, positive engagement
+    if word_count <= 5 and not has_question and not has_negation:
         return SIMPLE_MODEL
-    # Complex: questions, long text, or potentially sensitive
-    return COMPLEX_MODEL
+
+    # SIMPLE MODEL: emoji-only or very short affirmations
+    if word_count <= 3:
+        return SIMPLE_MODEL
+
+    # COMPLEX MODEL: triggers
+    # - Questions require thoughtful responses
+    if has_question:
+        return COMPLEX_MODEL
+    # - Long comments need nuanced replies
+    if word_count > 15:
+        return COMPLEX_MODEL
+    # - Critical/negative comments need careful handling
+    if has_negation or all_caps_words > 1:
+        return COMPLEX_MODEL
+    # - Highly emotional comments (multiple exclamations)
+    if exclamation_count > 2:
+        return COMPLEX_MODEL
+    # - Multi-sentence discussions
+    if has_multiple_sentences:
+        return COMPLEX_MODEL
+
+    # Default to complex for safety with moderate length
+    if word_count >= 8:
+        return COMPLEX_MODEL
+
+    return SIMPLE_MODEL
 
 
 async def _generate_reply(
     tone_profile: Dict[str, Any],
     post_context: Optional[Dict[str, Any]],
+    fact_bundle: Optional[Dict[str, Any]],
     comment_text: str,
     comment_author: str,
     platform: str,
@@ -463,6 +521,7 @@ async def _generate_reply(
     traits = tone_profile.get("extracted_traits", {})
 
     # Build system prompt
+    fact_bundle = fact_bundle or {}
     system_msg = REPLY_SYSTEM_PROMPT.format(
         user_name=user_name,
         tone_label=tone_profile.get("tone_label", "Friendly"),
@@ -480,6 +539,10 @@ async def _generate_reply(
         platform=platform,
         comment_type=comment_type,
         comment_tone=comment_tone,
+        video_summary=fact_bundle.get("video_summary", "none"),
+        transcript_highlights=fact_bundle.get("transcript_highlights", "none"),
+        fact_anchors=fact_bundle.get("fact_anchors", "none"),
+        lexical_sync_words=fact_bundle.get("lexical_sync_words", "none"),
     )
 
     # Build user prompt
@@ -489,8 +552,8 @@ async def _generate_reply(
         model=model,
         prompt=user_prompt,
         system_msg=system_msg,
-        temperature=0.8,
-        max_completion_tokens=150,
+        temperature=0.7,
+        max_completion_tokens=160,
     )
 
     # Clean up: remove quotes, prefixes like "Reply:" etc.
@@ -508,6 +571,7 @@ async def _rewrite_non_disagreeing_reply(
     model: str,
     tone_profile: Dict[str, Any],
     post_context: Optional[Dict[str, Any]],
+    fact_bundle: Optional[Dict[str, Any]],
     comment_text: str,
     comment_author: str,
     platform: str,
@@ -520,6 +584,7 @@ async def _rewrite_non_disagreeing_reply(
     rewrite_system = REPLY_SYSTEM_PROMPT + "\n11. Never include correctional language like 'you are wrong', 'actually', or 'I disagree'."
 
     traits = tone_profile.get("extracted_traits", {})
+    fact_bundle = fact_bundle or {}
     rewrite_system = rewrite_system.format(
         user_name=user_name,
         tone_label=tone_profile.get("tone_label", "Friendly"),
@@ -537,6 +602,10 @@ async def _rewrite_non_disagreeing_reply(
         platform=platform,
         comment_type=comment_type,
         comment_tone=comment_tone,
+        video_summary=fact_bundle.get("video_summary", "none"),
+        transcript_highlights=fact_bundle.get("transcript_highlights", "none"),
+        fact_anchors=fact_bundle.get("fact_anchors", "none"),
+        lexical_sync_words=fact_bundle.get("lexical_sync_words", "none"),
     )
 
     rewrite_prompt = (
@@ -550,8 +619,8 @@ async def _rewrite_non_disagreeing_reply(
         model=model,
         prompt=rewrite_prompt,
         system_msg=rewrite_system,
-        temperature=0.6,
-        max_completion_tokens=120,
+        temperature=0.5,
+        max_completion_tokens=130,
     )
 
     if rewritten:
@@ -559,6 +628,56 @@ async def _rewrite_non_disagreeing_reply(
         if not _is_disagreeing_reply(cleaned):
             return cleaned
     return draft_reply
+
+
+async def _fact_align_reply(
+    model: str,
+    comment_text: str,
+    comment_author: str,
+    draft_reply: str,
+    fact_bundle: Dict[str, Any],
+    comment_type: str,
+) -> str:
+    """Final fact-consistency pass using post/video context without becoming argumentative."""
+    if not fact_bundle.get("has_facts"):
+        return draft_reply
+
+    prompt = (
+        f'Comment from @{comment_author}: "{comment_text}"\n'
+        f'Draft reply: "{draft_reply}"\n\n'
+        "Verified context:\n"
+        f"- Video summary: {fact_bundle.get('video_summary', 'none')}\n"
+        f"- Transcript highlights: {fact_bundle.get('transcript_highlights', 'none')}\n"
+        f"- Anchors: {fact_bundle.get('fact_anchors', 'none')}\n"
+        f"- Lexical sync words: {fact_bundle.get('lexical_sync_words', 'none')}\n\n"
+        "Task:\n"
+        "Rewrite only if needed so the reply is fact-consistent with verified context, supportive/non-argumentative, and naturally uses sync words. "
+        "If already fine, return the draft reply unchanged.\n"
+        "Return reply text only."
+    )
+
+    rewrite = await groq_generate_text(
+        model=model,
+        prompt=prompt,
+        system_msg=(
+            "You are a factual safety layer for social reply generation. "
+            "Never add facts not present in verified context. "
+            "Never disagree with the commenter; keep a warm, neutral, or appreciative tone. "
+            "For emoji_only comments, output must remain emoji-only."
+        ),
+        temperature=0.2,
+        max_completion_tokens=140,
+    )
+
+    if not rewrite:
+        return draft_reply
+
+    cleaned = rewrite.strip().strip('"').strip("'")
+    if comment_type == "emoji_only" and not _is_emoji_only_comment(cleaned):
+        return draft_reply
+    if _is_disagreeing_reply(cleaned):
+        return draft_reply
+    return cleaned or draft_reply
 
 
 async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
@@ -644,6 +763,132 @@ def _is_disagreeing_reply(reply_text: str) -> bool:
         r"\bactually,?\b",
     ]
     return any(re.search(p, text) for p in patterns)
+
+
+async def _load_video_cache_context(
+    user_id: str,
+    post_id: str,
+    post_context: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Best-effort lookup of video cache for this post."""
+    media_type = (post_context or {}).get("media_type", "")
+    if media_type and media_type.lower() not in ("video", "reel", "reels"):
+        return None
+
+    post_doc = None
+    try:
+        from bson import ObjectId
+
+        try:
+            post_doc = await scheduled_posts_col.find_one(
+                {"_id": ObjectId(post_id), "userId": user_id},
+                {"videoHash": 1, "mediaType": 1},
+            )
+        except Exception:
+            post_doc = None
+
+    except Exception:
+        post_doc = None
+
+    if not post_doc:
+        post_doc = await scheduled_posts_col.find_one(
+            {"postId": post_id, "userId": user_id},
+            {"videoHash": 1, "mediaType": 1},
+        )
+
+    video_hash = (post_doc or {}).get("videoHash") or (post_context or {}).get("video_hash")
+    if not video_hash:
+        return None
+
+    return await get_cached_video_analysis(video_hash)
+
+
+def _build_fact_bundle(
+    post_context: Optional[Dict[str, Any]],
+    video_cache: Optional[Dict[str, Any]],
+    comment_text: str,
+) -> Dict[str, Any]:
+    """Create compact fact/context payload for grounded reply generation."""
+    summary = (post_context or {}).get("content_summary", "").strip()
+    transcript = (video_cache or {}).get("transcript", "").strip()
+    visual_summary = (video_cache or {}).get("visual_summary", "").strip()
+    objects = (video_cache or {}).get("objects", [])[:6]
+    actions = (video_cache or {}).get("actions", [])[:6]
+    person = (video_cache or {}).get("detected_person")
+
+    anchors = []
+    if summary:
+        anchors.append(f"Post: {summary}")
+    if visual_summary:
+        anchors.append(f"Visual: {visual_summary[:180]}")
+    if person:
+        anchors.append(f"Person: {person}")
+    if objects:
+        anchors.append("Objects: " + ", ".join(str(x) for x in objects))
+    if actions:
+        anchors.append("Actions: " + ", ".join(str(x) for x in actions))
+
+    sync_words = _extract_sync_words(comment_text, " ".join(anchors), transcript)
+
+    return {
+        "has_facts": bool(summary or transcript or visual_summary or anchors),
+        "video_summary": visual_summary or summary or "none",
+        "transcript_highlights": _first_sentences(transcript, max_chars=280) or "none",
+        "fact_anchors": " | ".join(anchors[:5]) if anchors else "none",
+        "lexical_sync_words": ", ".join(sync_words) if sync_words else "none",
+    }
+
+
+def _extract_sync_words(comment_text: str, anchors_text: str, transcript_text: str) -> List[str]:
+    """Pick high-signal shared words to keep phrasing in sync with comment + video context."""
+    comment_words = _extract_keywords(comment_text)
+    video_words = _extract_keywords(f"{anchors_text} {transcript_text[:500]}")
+    video_set = set(video_words)
+
+    shared = [w for w in comment_words if w in video_set]
+    if shared:
+        return shared[:6]
+
+    merged = comment_words + [w for w in video_words if w not in comment_words]
+    return merged[:6]
+
+
+def _extract_keywords(text: str) -> List[str]:
+    stop_words = {
+        "this", "that", "with", "from", "your", "have", "about", "just",
+        "really", "very", "there", "their", "them", "they", "what", "when",
+        "where", "which", "will", "would", "could", "should", "into", "also",
+        "thanks", "thank", "great", "awesome", "video", "post", "comment",
+    }
+    words = re.findall(r"[a-zA-Z][a-zA-Z']{2,}", (text or "").lower())
+    deduped = []
+    seen = set()
+    for w in words:
+        if w in stop_words or w in seen:
+            continue
+        seen.add(w)
+        deduped.append(w)
+    return deduped
+
+
+def _first_sentences(text: str, max_chars: int = 280) -> str:
+    if not text:
+        return ""
+    chunks = re.split(r"(?<=[.!?])\s+", text.strip())
+    out = []
+    length = 0
+    for chunk in chunks:
+        c = chunk.strip()
+        if not c:
+            continue
+        next_len = length + len(c) + (1 if out else 0)
+        if next_len > max_chars:
+            break
+        out.append(c)
+        length = next_len
+    if out:
+        return " ".join(out)
+    return text[:max_chars].strip()
 
 
 def _build_contextual_emoji_reply(
