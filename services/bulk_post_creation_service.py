@@ -326,7 +326,8 @@ async def process_bulk_media_urls(
                         result = await caption_from_video_file(
                             video_filepath=video_to_process,
                             platforms=platforms_lower,
-                            autoposting=True
+                            autoposting=True,
+                            user_id=user_id,
     )
                         logger.info(f"📝 Video caption result for media {idx}: captions={list(result.get('captions', {}).keys())}")
                     else:

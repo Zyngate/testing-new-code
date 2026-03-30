@@ -855,6 +855,10 @@ PARAGRAPH 2 — CONTEXT & INSIGHT
 - Human, conversational tone  
 - Grounded in the actual video content  
 - This should be the longest paragraph
+- Never ever say what the human wore in the video 
+
+Example:
+-The guy in black suite
 
 PARAGRAPH 3 — REFLECTION / CTA  
 - Invite the viewer to think, react, or comment  

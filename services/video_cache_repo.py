@@ -7,6 +7,7 @@ Does NOT cache: captions, hashtags, titles (cheap to regenerate, platform-specif
 
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from bson import ObjectId
 from database import db
 from config import logger
 
@@ -41,7 +42,21 @@ async def get_cached_video_analysis(video_hash: str) -> Optional[Dict[str, Any]]
         return None
 
 
-async def save_video_analysis(video_hash: str, data: Dict[str, Any]) -> bool:
+def _safe_object_id(value: Any) -> Optional[ObjectId]:
+    """Convert a candidate value to ObjectId when valid, else return None."""
+    if isinstance(value, ObjectId):
+        return value
+    if isinstance(value, str) and ObjectId.is_valid(value):
+        return ObjectId(value)
+    return None
+
+
+async def save_video_analysis(
+    video_hash: str,
+    data: Dict[str, Any],
+    user_id: Optional[str] = None,
+    scheduled_post_id: Optional[str] = None,
+) -> bool:
     """
     Save video analysis to cache.
     Uses upsert to handle both insert and update.
@@ -49,6 +64,12 @@ async def save_video_analysis(video_hash: str, data: Dict[str, Any]) -> bool:
     try:
         cache_collection = db["video_analysis_cache"]
         
+        now = datetime.now(timezone.utc)
+        resolved_user_id = user_id or data.get("user_id")
+        # Strict source of truth: scheduledposts._id must be passed explicitly
+        # by caller (e.g., comment poller/analyzer flow). Avoid payload fallback.
+        resolved_scheduled_post_id = _safe_object_id(scheduled_post_id)
+
         doc = {
             "video_hash": video_hash,
             "transcript": data.get("transcript", ""),
@@ -60,13 +81,17 @@ async def save_video_analysis(video_hash: str, data: Dict[str, Any]) -> bool:
             "marketing_prompt": data.get("marketing_prompt", ""),
             "objects": data.get("objects", []),
             "actions": data.get("actions", []),
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "updated_at": now,
         }
+
+        if resolved_user_id:
+            doc["user_id"] = resolved_user_id
+        if resolved_scheduled_post_id:
+            doc["scheduled_post_id"] = resolved_scheduled_post_id
         
         await cache_collection.update_one(
             {"video_hash": video_hash},
-            {"$set": doc},
+            {"$set": doc, "$setOnInsert": {"created_at": now}},
             upsert=True
         )
         

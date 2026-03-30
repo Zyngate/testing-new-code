@@ -9,10 +9,13 @@ uvicorn main:app --reload
 uvicorn test1:app --reload
 
 {
-  "userId": "test_user_1",
-  "cloudinaryUrl": "https://res.cloudinary.com/ddkdwltiz/video/upload/v1766556503/scheduler_videos/acmhtme9jm8kxtjpxlg2.mp4",
-  "https://res.cloudinary.com/ddkdwltiz/image/upload/v1769581069/scheduler_media/orvojqypxdifacvmjj8s.png"
-  "platform": ["instagram", "youtube", "tiktok"]
+  "userId": "test_user",
+  "mediaUrls": [
+    "https://res.cloudinary.com/ds6lukcqi/video/upload/v1774327171/scheduler_media/trti9ylcl17onhsindem.mp4",
+    "https://res.cloudinary.com/ds6lukcqi/image/upload/v1771596718/scheduler_media/njzjfdfkvtije2awzpq1.png"
+  ],
+  "platform": ["instagram","tiktok","threads"],
+  "scheduleMode": "AUTO"
 }
 
 

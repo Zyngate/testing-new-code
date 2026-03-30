@@ -157,7 +157,8 @@ async def create_post_from_uploaded_media(
                         return await caption_from_video_file(
                             video_filepath=video_to_process,
                             platforms=platforms,
-                            autoposting=is_autopost
+                            autoposting=is_autopost,
+                            user_id=user_id,
                     )   
                     else:
                         client = Groq(api_key=GROQ_API_KEY_CAPTION)

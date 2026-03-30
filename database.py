@@ -104,11 +104,15 @@ async def create_otp_ttl_index():
     except Exception as e:
         logger.warning(f"Failed to create OTP TTL index: {e}")
 
-# Run OTP TTL index creation safely on startup
+# Run OTP TTL index creation only when an event loop is already active.
+# This avoids binding Motor internals to a short-lived loop during module import.
 try:
-    asyncio.get_event_loop().create_task(create_otp_ttl_index())
+    running_loop = asyncio.get_running_loop()
+    running_loop.create_task(create_otp_ttl_index())
 except RuntimeError:
-    asyncio.run(create_otp_ttl_index())
+    # No running loop at import time (common in scripts/tests).
+    # The index can be created later when app startup initializes async context.
+    pass
 
 # --- FAISS Index Loader ---
 async def load_faiss_indices():

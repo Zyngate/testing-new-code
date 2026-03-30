@@ -521,20 +521,41 @@ def _get_fallback_result(platforms: List[str], error_msg: str = "") -> Dict[str,
     }
 
 
-async def caption_from_video_file(video_filepath: str, platforms: List[str], client: Optional[Groq] = None, autoposting: bool = False) -> Dict[str, Any]:
+async def caption_from_video_file(
+    video_filepath: str,
+    platforms: List[str],
+    client: Optional[Groq] = None,
+    autoposting: bool = False,
+    user_id: Optional[str] = None,
+    scheduled_post_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Main video caption pipeline. NEVER crashes - always returns valid result.
     """
     # 🔐 MASTER TRY-EXCEPT: Ensures we NEVER crash
     try:
-        return await _caption_from_video_file_inner(video_filepath, platforms, client, autoposting)
+        return await _caption_from_video_file_inner(
+            video_filepath,
+            platforms,
+            client,
+            autoposting,
+            user_id=user_id,
+            scheduled_post_id=scheduled_post_id,
+        )
     except Exception as e:
         logger.error(f"🚨 CRITICAL: Video caption pipeline failed completely: {e}", exc_info=True)
         # Return fallback instead of crashing
         return _get_fallback_result(platforms or ["instagram"], str(e)[:200])
 
 
-async def _caption_from_video_file_inner(video_filepath: str, platforms: List[str], client: Optional[Groq] = None, autoposting: bool = False) -> Dict[str, Any]:
+async def _caption_from_video_file_inner(
+    video_filepath: str,
+    platforms: List[str],
+    client: Optional[Groq] = None,
+    autoposting: bool = False,
+    user_id: Optional[str] = None,
+    scheduled_post_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Inner implementation - can throw exceptions, caught by wrapper."""
     
     # 🔒 Defensive: Normalize platforms
@@ -702,7 +723,7 @@ async def _caption_from_video_file_inner(video_filepath: str, platforms: List[st
                     "marketing_prompt": marketing_prompt,
                     "objects": objects_detected,
                     "actions": actions_detected,
-                })
+                }, user_id=user_id, scheduled_post_id=scheduled_post_id)
             except Exception as e:
                 logger.warning(f"Cache save failed (non-fatal): {e}")
         

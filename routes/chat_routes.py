@@ -4,7 +4,7 @@ import json
 import re
 import random
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Union, Tuple
+from typing import List, Dict, Any, Union, Tuple, Optional, cast
 from groq import Groq, AsyncGroq
 import uuid
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks, Query, WebSocket,WebSocketDisconnect
@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import numpy as np
 
 from models.common_models import (
-    GenerateRequest,
     GenerateResponse,
     RegenerateRequest,
     NLPRequest,
@@ -51,8 +50,44 @@ def is_small_talk(message: str) -> bool:
 
 
 def is_simple_query(message: str) -> bool:
-    msg = message.lower()
-    return "date" in msg or "time" in msg
+    msg = message.lower().strip()
+    patterns = [
+        r"^(what(?:'s| is)?\s+)?(the\s+)?time(\s+now)?\??$",
+        r"^(what(?:'s| is)?\s+)?(the\s+)?date(\s+today|\s+now)?\??$",
+        r"^(today'?s\s+date)\??$",
+        r"^(current\s+time|current\s+date)\??$",
+    ]
+    return any(re.match(p, msg) for p in patterns)
+
+
+def _clean_chat_response_text(text: str) -> str:
+    """Remove internal control artifacts from model output shown to users."""
+    if not text:
+        return ""
+
+    cleaned = re.sub(r"<plan>.*?</plan>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"```(?:[\w+-]+)?\n?", "", cleaned)
+    cleaned = cleaned.replace("```", "")
+
+    clean_lines = []
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if re.match(r"^\[[A-Z_]+\s*:\s*.*\]$", stripped):
+            continue
+        clean_lines.append(line)
+
+    cleaned = "\n".join(clean_lines)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def _extract_text_from_research_result(result: Any) -> str:
+    """Normalize query_internet_via_groq output to plain text."""
+    if isinstance(result, tuple) and result:
+        head = result[0]
+        return head if isinstance(head, str) else ""
+    return result if isinstance(result, str) else ""
 
 # -------------------------
 # Helper: normalize platform names and detect chosen platform field
@@ -394,6 +429,85 @@ async def handle_goal_updates_and_cleanup(reply_content: str, user_id: str, sess
 
 
 
+# ---------------------------------------------------------------------------
+# Persistence helpers (called via asyncio.create_task — outside stream scope)
+# ---------------------------------------------------------------------------
+
+async def _persist_turn(user_id: str, session_id: str, user_message: str, reply: str):
+    """Persist a single user/assistant turn to chat history."""
+    try:
+        user_embedding = await generate_text_embedding(user_message)
+        assistant_embedding = await generate_text_embedding(reply)
+        new_messages = [
+            {"role": "user", "content": user_message, **(({"embedding": user_embedding}) if user_embedding else {})},
+            {"role": "assistant", "content": reply, **(({"embedding": assistant_embedding}) if assistant_embedding else {})},
+        ]
+        chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
+        if chat_entry:
+            await chats_collection.update_one(
+                {"_id": chat_entry["_id"]},
+                {"$push": {"messages": {"$each": new_messages}}, "$set": {"last_updated": datetime.now(timezone.utc)}},
+            )
+        else:
+            await chats_collection.insert_one({
+                "user_id": user_id, "session_id": session_id,
+                "messages": new_messages, "last_updated": datetime.now(timezone.utc),
+            })
+    except Exception as e:
+        logger.error(f"_persist_turn error: {e}")
+
+
+async def _post_stream_persist(
+    user_id: str,
+    session_id: str,
+    user_message: str,
+    reply_content: str,
+    reply_content_clean: str,
+    chat_entry: Optional[dict],
+    used_filenames: set,
+):
+    """All DB work that happens after the stream finishes."""
+    try:
+        # 1. Goal/task command parsing
+        await handle_goal_updates_and_cleanup(reply_content, user_id, session_id)
+
+        # 2. Embeddings
+        user_embedding = await generate_text_embedding(user_message)
+        assistant_embedding = await generate_text_embedding(reply_content_clean)
+
+        new_messages = [
+            {"role": "user", "content": user_message, **(({"embedding": user_embedding}) if user_embedding else {})},
+            {"role": "assistant", "content": reply_content_clean, **(({"embedding": assistant_embedding}) if assistant_embedding else {})},
+        ]
+
+        # 3. Persist to DB
+        if chat_entry:
+            await chats_collection.update_one(
+                {"_id": chat_entry["_id"]},
+                {"$push": {"messages": {"$each": new_messages}}, "$set": {"last_updated": datetime.now(timezone.utc)}},
+            )
+            updated_messages = chat_entry.get("messages", []) + new_messages
+        else:
+            await chats_collection.insert_one({
+                "user_id": user_id, "session_id": session_id,
+                "messages": new_messages, "last_updated": datetime.now(timezone.utc),
+            })
+            updated_messages = new_messages
+
+        # 4. Long-term memory
+        if len(updated_messages) >= 10:
+            asyncio.create_task(store_long_term_memory(user_id, session_id, updated_messages[-10:]))
+
+        # 5. RAG usage count
+        for filename in used_filenames:
+            await uploads_collection.update_many(
+                {"user_id": user_id, "session_id": session_id, "filename": filename},
+                {"$inc": {"query_count": 1}},
+            )
+    except Exception as e:
+        logger.error(f"_post_stream_persist error: {e}")
+
+
 # --- Endpoints ---
 
 
@@ -402,27 +516,52 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
     try:
         current_date = get_current_datetime()
         data = await request.json()
-        req = GenerateRequest(**data)
-        user_id, session_id, user_message, filenames = req.user_id, req.session_id, req.prompt, req.filenames
+
+        # Accept both snake_case and camelCase payload styles used by different frontend builds.
+        user_id = str((data.get("user_id") or data.get("userId") or "")).strip()
+        session_id = str((data.get("session_id") or data.get("sessionId") or "")).strip()
+        user_message = str((data.get("prompt") or data.get("message") or "")).strip()
+
+        filenames_raw = data.get("filenames")
+        if filenames_raw is None:
+            filenames_raw = data.get("files")
+        if isinstance(filenames_raw, str):
+            filenames = [f.strip() for f in re.split(r"[,\n]+", filenames_raw) if f.strip()]
+        elif isinstance(filenames_raw, list):
+            filenames = [str(f).strip() for f in filenames_raw if str(f).strip()]
+        else:
+            filenames = []
+
         if not user_id or not session_id or not user_message:
-            raise HTTPException(status_code=400, detail="Invalid request parameters.")
-        # 🚀 SHORT-CIRCUIT RESPONSES (FIX WONKY CHAT)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid request parameters. Required fields: "
+                    "user_id/session_id/prompt (or userId/sessionId/message)."
+                ),
+            )
 
-        # 1. Small talk
+        # --- Short-circuit: small talk ---
         if is_small_talk(user_message):
-            return JSONResponse(content={
-                "response": "Hello. How can I assist you?"
-    })
+            reply = "Hello. How can I assist you?"
+            asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
+            async def _small_talk_stream():
+                yield reply
+            return StreamingResponse(_small_talk_stream(), media_type="text/plain")
 
-        # 2. Simple queries
+        # --- Short-circuit: simple date/time query ---
         if is_simple_query(user_message):
-            from datetime import datetime
-            return JSONResponse(content={
-                "response": f"Today's date is {datetime.now().strftime('%B %d, %Y')}."
-    })
-        # --- 1. Gather Context (Goals, Files, URLs, Memory) ---
+            lower_msg = user_message.lower()
+            if "time" in lower_msg:
+                reply = f"Current time is {datetime.now().strftime('%I:%M %p')} on {datetime.now().strftime('%B %d, %Y')}."
+            else:
+                reply = f"Today is {datetime.now().strftime('%B %d, %Y')}."
+            asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
+            async def _simple_query_stream():
+                yield reply
+            return StreamingResponse(_simple_query_stream(), media_type="text/plain")
 
-        # a) Goal Context
+        # --- 1. Gather Context (Goals, Files, URLs, Memory) ---
         active_goals = await goals_collection.find({"user_id": user_id, "status": {"$in": ["active", "in progress"]}}).to_list(None)
         goals_context = ""
         if active_goals:
@@ -432,26 +571,26 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 for task in goal.get("tasks", []):
                     goals_context += f"  - Task: {task['title']} ({task['status']})\n"
 
-        # b) File Mention Context
         uploaded_files = await uploads_collection.distinct("filename", {"session_id": session_id})
         mentioned_filenames = [fn for fn in uploaded_files if fn.lower() in user_message.lower()]
         hooked_filenames = filenames if filenames else mentioned_filenames
 
-        # c) URL/External Content Context
         external_content = ""
         url_match = re.search(r"https?://[^\s]+", user_message)
         if url_match:
             url = url_match.group(0)
             if "youtube.com" in url or "youtu.be" in url:
-                summary = await query_internet_via_groq(f"Summarize the content of the YouTube video at {url}")
-                external_content = await detailed_explanation(summary)
+                summary_raw = await query_internet_via_groq(f"Summarize the content of the YouTube video at {url}")
+                summary = _extract_text_from_research_result(summary_raw)
+                if summary:
+                    external_content = await detailed_explanation(summary)
             else:
-                summary = await query_internet_via_groq(f"Summarize the content of the webpage at {url}")
-                external_content = await content_for_website(summary)
+                summary_raw = await query_internet_via_groq(f"Summarize the content of the webpage at {url}")
+                summary = _extract_text_from_research_result(summary_raw)
+                if summary:
+                    external_content = await content_for_website(summary)
 
-        # d) Multimodal RAG Context
         multimodal_context, used_filenames = await retrieve_multimodal_context(user_message, session_id, hooked_filenames)
-       
 
         # --- 2. Construct Unified Prompt ---
         unified_prompt = user_message
@@ -461,10 +600,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             unified_prompt += f"\n[Retrieved File & Code Context]:\n{multimodal_context}\n"
         unified_prompt += "\n\nRespond appropriately based on the query."
 
-        # e) Dynamic Research
         research_needed = await classify_prompt(user_message)
         if research_needed == "research" and not multimodal_context:
-            # Prefer DeepSearch -> fallback to internet/groq
             try:
                 ds_content, ds_sources = await query_deepsearch(user_message)
                 if ds_content and "Error" not in ds_content and "unavailable" not in ds_content:
@@ -472,20 +609,20 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     if ds_sources:
                         unified_prompt += "\nSources:\n" + "\n".join([f"- {s['title']}: {s['url']}" for s in ds_sources])
                 else:
-                    research_results = await query_internet_via_groq(user_message)
+                    research_results_raw = await query_internet_via_groq(user_message)
+                    research_results = _extract_text_from_research_result(research_results_raw)
                     if research_results and research_results != "Error accessing internet information.":
                         unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
             except Exception as e:
                 logger.warning(f"DeepSearch failed in /generate, falling back: {e}")
-                research_results = await query_internet_via_groq(user_message)
+                research_results_raw = await query_internet_via_groq(user_message)
+                research_results = _extract_text_from_research_result(research_results_raw)
                 if research_results and research_results != "Error accessing internet information.":
                     unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
 
-        # Visualization integration: if there's multimodal content and user asked for visual or analysis
         if multimodal_context and any(k in user_message.lower() for k in ("visual", "visualize", "analyze", "analysis", "insight")):
             try:
                 viz = await visualize_content(multimodal_context)
-                # Attach a short summary into the LLM prompt so it can reference visualization findings
                 unified_prompt += (
                     f"\n\n[Visualization Summary]:\nSummary: {viz.get('summary','')}\n"
                     f"Themes: {', '.join(viz.get('themes',[]))}\n"
@@ -493,7 +630,6 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             except Exception as e:
                 logger.warning(f"visualize_content failed in /generate: {e}")
 
-        # --- 3. Build Message History (Retrieval Augmented) ---
         chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
         past_messages = chat_entry.get("messages", []) if chat_entry else []
         past_messages = sanitize_chat_history(past_messages)
@@ -524,51 +660,23 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             else:
                 chat_history = filter_think_messages(past_messages[-5:])
 
-        # Long-term memory
         long_term_memory = await memory_collection.find_one({"user_id": user_id})
         long_term_memory_summary = long_term_memory.get("summary", "") if long_term_memory else ""
 
         system_prompt = (
-    "You are Stelle, a mature, professional, and neutral conversational AI assistant.\n\n"
-    "Your role:\n"
-    "- Respond with clarity, conciseness, and professionalism.\n"
-    "- Avoid childish, overly friendly, or casual language.\n"
-    "- Never use emojis, jokes, or filler.\n"
-    "- Never suggest random topics or make assumptions about the user's interests.\n"
-    "- Never use exclamation marks unless quoting.\n"
-    "- Never use phrases like 'Hey!', 'Hi there!', or similar.\n"
-    "- Never use slang or informal expressions.\n"
-    "- Never use markdown formatting.\n"
-    "- Never mention the current date/time unless explicitly asked.\n\n"
-
-    "Formatting instructions:\n"
-    "- Use plain text only.\n"
-    "- For lists, use numbers (1., 2., 3.) or dashes (-) for each item.\n"
-    "- Never use asterisks, markdown bullets, or markdown formatting.\n"
-    "- Ensure all lists are readable as plain text.\n\n"
-
-    "For greetings (hi, hello, hey, etc.):\n"
-    "- Respond with a brief, neutral greeting and ask how you can assist.\n"
-    "- Example: 'Hello. How can I assist you?'\n\n"
-
-    "When answering:\n"
-    "- Use a neutral, informative, and direct tone.\n"
-    "- Structure responses with clear sections or lists only if the question is complex.\n"
-    "- Avoid unnecessary elaboration or repetition.\n"
-    "- Never sound like a coach, consultant, or motivational speaker.\n"
-    "- Never use childish, playful, or overly friendly language.\n"
-    "- Never ask follow-up questions unless the user requests more information.\n"
-    "- Never use phrases like 'I'm here to help!' or 'Let me know if you need anything else.'\n\n"
-
-    "If the user asks something simple, keep the answer simple and direct.\n"
-    "If the user asks something deep, provide a thoughtful, well-structured answer, but remain concise and neutral.\n\n"
-
-    "Never mention internal systems, plans, tasks, or tools.\n"
-    "If a response sounds generic or like a textbook answer, rewrite it to sound more human and mature.\n\n"
-    f"Current date and time: {current_date}"
-)
-
-
+            "You are Stelle, a production-grade conversational assistant.\n\n"
+            "Response contract:\n"
+            "- Return plain text only.\n"
+            "- Be accurate, concise, and directly useful.\n"
+            "- Do not include markdown, XML tags, internal planning, chain-of-thought, or control tokens.\n"
+            "- Never output bracketed command lines like [TASK: ...] or [GOAL: ...].\n"
+            "- If uncertain, state the uncertainty briefly and provide the best actionable answer.\n"
+            "- Keep tone professional and natural.\n"
+            "- For short questions, answer in 1-3 sentences.\n"
+            "- For complex requests, use short numbered steps.\n"
+            "- Mention date/time only when user asks.\n\n"
+            f"Current date and time: {current_date}"
+        )
 
         messages = [{"role": "system", "content": system_prompt}]
         if long_term_memory_summary:
@@ -585,84 +693,55 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
         messages.append({"role": "user", "content": unified_prompt})
         logger.info(f"LLM prompt messages prepared, count: {len(messages)}")
 
-        # --- 4. Stream Response and Handle Persistence ---
         selected_key = random.choice(GENERATE_API_KEYS)
         client_generate = AsyncGroq(api_key=selected_key)
 
-        stream = await client_generate.chat.completions.create(
-            messages=messages,
-            model="llama-3.3-70b-versatile",
-            max_completion_tokens=4000,
-            temperature=0.7,
-            stream=True,
-        )
-
         async def generate_stream():
             full_reply = ""
-            
-            async for chunk in stream:
-                delta = chunk.choices[0].delta.content or ""
-                full_reply += delta
-                visible_delta = re.sub(
-                    r"<plan>.*?</plan>",
-                    "",
-                    delta,
-                    flags=re.DOTALL
+            last_visible = ""
+            try:
+                stream = await client_generate.chat.completions.create(
+                    messages=cast(Any, messages),
+                    model="llama-3.3-70b-versatile",
+                    max_completion_tokens=2000,
+                    temperature=0.35,
+                    stream=True,
                 )
-                if visible_delta.strip():
-                    yield visible_delta
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta.content or ""
+                    full_reply += delta
+                    visible = _clean_chat_response_text(full_reply)
+                    if len(visible) > len(last_visible):
+                        new_text = visible[len(last_visible):]
+                        if new_text:
+                            yield new_text
+                        last_visible = visible
+            except Exception as stream_err:
+                logger.error(f"Stream error in /generate: {stream_err}")
+                fallback = "I encountered a temporary response issue. Please try again."
+                yield fallback
+                asyncio.create_task(_persist_turn(user_id, session_id, user_message, fallback))
+                return
 
-
-            # --- Persistence and Background Tasks after stream ends ---
             reply_content = full_reply.strip()
+            reply_content_clean = _clean_chat_response_text(reply_content)
 
-            # a) Process LLM commands (Goal/Task updates)
-            await handle_goal_updates_and_cleanup(reply_content, user_id, session_id)
+            if not reply_content_clean:
+                reply_content_clean = "I could not generate a usable response. Please rephrase and try again."
+                if len(reply_content_clean) > len(last_visible):
+                    yield reply_content_clean[len(last_visible):]
 
-            # b) Clean reply content for storage
-            lines = reply_content.split("\n")
-            clean_lines = [line for line in lines if not re.match(r"\[.*?: .*?\]", line.strip())]
-            reply_content_clean = re.sub(
-                r"<plan>.*?</plan>",
-                "",
-                "\n".join(clean_lines),
-                flags=re.DOTALL
-            ).strip()
-
-
-            # c) Generate embeddings and save to chat history
-            user_embedding = await generate_text_embedding(user_message)
-            assistant_embedding = await generate_text_embedding(reply_content_clean)
-
-            new_messages = [
-                {"role": "user", "content": user_message, **({"embedding": user_embedding} if user_embedding else {})},
-                {"role": "assistant", "content": reply_content_clean, **({"embedding": assistant_embedding} if assistant_embedding else {})},
-            ]
-
-            update_fields = {
-                "$push": {"messages": {"$each": new_messages}},
-                "$set": {"last_updated": datetime.now(timezone.utc)},
-            }
-            if chat_entry:
-                await chats_collection.update_one({"_id": chat_entry["_id"]}, update_fields)
-                updated_messages = chat_entry.get("messages", []) + new_messages
-            else:
-                new_chat_entry = {"user_id": user_id, "session_id": session_id, "messages": new_messages, "last_updated": datetime.now(timezone.utc)}
-                await chats_collection.insert_one(new_chat_entry)
-                updated_messages = new_messages
-
-            # d) Update Long-Term Memory (in background if chat is long)
-            if len(updated_messages) >= 10:
-                background_tasks.add_task(
-                    store_long_term_memory, user_id, session_id, updated_messages[-10:]
+            asyncio.create_task(
+                _post_stream_persist(
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_message=user_message,
+                    reply_content=reply_content,
+                    reply_content_clean=reply_content_clean,
+                    chat_entry=chat_entry,
+                    used_filenames=used_filenames,
                 )
-
-            # e) Update RAG usage count for files actually used in this query
-            for filename in used_filenames:
-                await uploads_collection.update_many(
-                    {"user_id": user_id, "session_id": session_id, "filename": filename},
-                    {"$inc": {"query_count": 1}},
-                )
+            )
 
         return StreamingResponse(generate_stream(), media_type="text/plain")
 
@@ -783,7 +862,7 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
         client_generate = AsyncGroq(api_key=selected_key)
 
         stream = await client_generate.chat.completions.create(
-            messages=final_messages,
+            messages=cast(Any, final_messages),
             model="llama-3.3-70b-versatile",
             max_completion_tokens=4000,
             temperature=0.7,
@@ -897,11 +976,15 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
             if url_match:
                 url = url_match.group(0)
                 if "youtube.com" in url or "youtu.be" in url:
-                    summary = await query_internet_via_groq(f"Summarize the content of the YouTube video at {url}")
-                    external_content = await detailed_explanation(summary)
+                    summary_raw = await query_internet_via_groq(f"Summarize the content of the YouTube video at {url}")
+                    summary = _extract_text_from_research_result(summary_raw)
+                    if summary:
+                        external_content = await detailed_explanation(summary)
                 else:
-                    summary = await query_internet_via_groq(f"Summarize the content of the webpage at {url}")
-                    external_content = await content_for_website(summary)
+                    summary_raw = await query_internet_via_groq(f"Summarize the content of the webpage at {url}")
+                    summary = _extract_text_from_research_result(summary_raw)
+                    if summary:
+                        external_content = await content_for_website(summary)
 
             multimodal_context, used_filenames = await retrieve_multimodal_context(user_message, session_id, hooked_filenames)
 
@@ -924,12 +1007,14 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
                         if ds_sources:
                             unified_prompt += "\nSources:\n" + "\n".join([f"- {s['title']}: {s['url']}" for s in ds_sources])
                     else:
-                        research_results = await query_internet_via_groq(user_message)
+                        research_results_raw = await query_internet_via_groq(user_message)
+                        research_results = _extract_text_from_research_result(research_results_raw)
                         if research_results and research_results != "Error accessing internet information.":
                             unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
                 except Exception as e:
                     logger.warning(f"DeepSearch failed in /nlp, falling back: {e}")
-                    research_results = await query_internet_via_groq(user_message)
+                    research_results_raw = await query_internet_via_groq(user_message)
+                    research_results = _extract_text_from_research_result(research_results_raw)
                     if research_results and research_results != "Error accessing internet information.":
                         unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
 
@@ -977,7 +1062,7 @@ async def nlp_websocket_endpoint(websocket: WebSocket):
             client_generate = AsyncGroq(api_key=selected_key)
 
             stream = await client_generate.chat.completions.create(
-                messages=messages,
+                messages=cast(Any, messages),
                 model="deepseek-r1-distill-llama-70b",
                 max_completion_tokens=4000,
                 temperature=0.7,
@@ -1074,7 +1159,8 @@ async def ai_assist_endpoint(input_data: dict):
         raise HTTPException(status_code=400, detail="Missing 'query' field.")
 
     # 1️⃣ Generate keywords
-    seed_keywords = await generate_keywords_post(None, query)
+    keyword_client = AsyncGroq(api_key=random.choice(GENERATE_API_KEYS))
+    seed_keywords = await generate_keywords_post(keyword_client, query)
 
     # 2️⃣ Generate captions & hashtags (your updated function returns both)
     result = await generate_caption_post(query, seed_keywords, platforms)
@@ -1175,7 +1261,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
 
         stream = await client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
+            messages=cast(Any, [
                 {
                     "role": "system",
                     "content": (
@@ -1188,7 +1274,7 @@ async def ws_deepsearch(websocket: WebSocket, query_id: str):
                     "role": "user",
                     "content": prompt
                 }
-            ],
+            ]),
             temperature=0.4,
             max_completion_tokens=1500,
             stream=True,

@@ -136,6 +136,8 @@ async def analyze_post_content(
                 analysis_result = await _analyze_video_from_url(
                     media_urls=media_urls,
                     existing_video_hash=video_hash,
+                    user_id=user_id,
+                    scheduled_post_id=post_id,
                 )
                 if analysis_result:
                     additional_context = _build_video_context(analysis_result)
@@ -256,6 +258,8 @@ async def _download_video(url: str) -> Optional[str]:
 async def _analyze_video_from_url(
     media_urls: List[str] = None,
     existing_video_hash: str = None,
+    user_id: Optional[str] = None,
+    scheduled_post_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Download a video from its URL, run the full STT + Vision pipeline,
@@ -402,7 +406,12 @@ async def _analyze_video_from_url(
             "objects": objects_detected,
             "actions": actions_detected,
         }
-        await save_video_analysis(video_hash, analysis_data)
+        await save_video_analysis(
+            video_hash,
+            analysis_data,
+            user_id=user_id,
+            scheduled_post_id=scheduled_post_id,
+        )
         logger.info(f"✅ Video analyzed and cached (hash={video_hash[:16]}…)")
 
         return analysis_data
