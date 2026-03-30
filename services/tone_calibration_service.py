@@ -42,6 +42,11 @@ USER FORM DATA:
 - Words/Topics to Avoid: {avoid_words}
 - Additional Notes: {additional_notes}
 
+Important constraints:
+- Keep signature_phrases strictly grounded in user input. Do not invent new phrases.
+- Keep avoid_topics strictly grounded in user input. Do not add inferred topics.
+- Return ONLY valid JSON, with no markdown fences.
+
 Based on these preferences, produce the following JSON (no extra text):
 {{
   "tone_label": "<2-4 word label e.g. 'Warm & Witty Professional'>",
@@ -53,7 +58,7 @@ Based on these preferences, produce the following JSON (no extra text):
   "confrontation_style": "<ignore|deflect_with_humor|polite_correction|direct_rebuttal>",
   "exclamation_rate": <0.0-1.0>,
   "question_rate": <0.0-1.0 how often they ask questions back>,
-  "signature_phrases": [<list of phrases from user input plus inferred ones>],
+    "signature_phrases": [<list of phrases from user input only>],
   "vocabulary_level": "<simple|conversational|sophisticated|technical>",
   "avoid_topics": [<from user input>]
 }}
@@ -133,10 +138,6 @@ async def calibrate_tone_from_form(
     try:
         now = datetime.now(timezone.utc)
 
-        # Normalize list-like fields for consistent storage.
-        normalized_signature_phrases = _normalize_text_list(form_data.get("signature_phrases", []))
-        normalized_avoid_words = _normalize_text_list(form_data.get("avoid_words", []))
-
         # 1. Find most recent profile (active or archived) so recalibration updates existing entry.
         current = await tone_profiles_col.find_one(
             {"user_id": user_id},
@@ -144,8 +145,18 @@ async def calibrate_tone_from_form(
         )
         new_version = (current.get("version", 0) + 1) if current else 1
 
+        # Merge partial recalibration payload with previous form data to avoid drift.
+        effective_form_data = _merge_form_data_with_current(form_data, current)
+
+        # Normalize list-like fields for consistent storage.
+        normalized_signature_phrases = _normalize_text_list(effective_form_data.get("signature_phrases", []))
+        normalized_avoid_words = _normalize_text_list(effective_form_data.get("avoid_words", []))
+        effective_form_data["signature_phrases"] = normalized_signature_phrases
+        effective_form_data["avoid_words"] = normalized_avoid_words
+
         # 2. Extract Tone DNA via LLM
-        extracted_traits = await _extract_tone_from_form(form_data)
+        extracted_traits = await _extract_tone_from_form(effective_form_data)
+        extracted_traits = _sanitize_extracted_traits(extracted_traits, effective_form_data)
 
         # 3. Build the profile payload
         created_at = current.get("created_at", now) if current else now
@@ -155,13 +166,13 @@ async def calibrate_tone_from_form(
             "tone_label": extracted_traits.get("tone_label", "Custom Tone"),
             "calibration_method": "form",
             "form_data": {
-                "style": form_data.get("style", ""),
-                "emoji_usage": form_data.get("emoji_usage", ""),
-                "reply_length": form_data.get("reply_length", ""),
-                "language": form_data.get("language", ""),
+                "style": effective_form_data.get("style", ""),
+                "emoji_usage": effective_form_data.get("emoji_usage", ""),
+                "reply_length": effective_form_data.get("reply_length", ""),
+                "language": effective_form_data.get("language", ""),
                 "signature_phrases": normalized_signature_phrases,
                 "avoid_words": normalized_avoid_words,
-                "additional_notes": form_data.get("additional_notes", ""),
+                "additional_notes": effective_form_data.get("additional_notes", ""),
             },
             "extracted_traits": extracted_traits,
             "calibration_pairs": [],  # Empty — Method A doesn't use calibration pairs
@@ -379,6 +390,150 @@ def _default_traits_from_form(form_data: Dict[str, Any]) -> Dict[str, Any]:
         "vocabulary_level": "conversational",
         "avoid_topics": avoid,
     }
+
+
+def _merge_form_data_with_current(
+    incoming_form_data: Dict[str, Any],
+    current_profile: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Merge partial recalibration input with existing profile form data."""
+    incoming_form_data = incoming_form_data or {}
+    current_form_data = (current_profile or {}).get("form_data", {}) if current_profile else {}
+
+    merged: Dict[str, Any] = {}
+
+    def _pick_text(field: str, default: str = "") -> str:
+        if field in incoming_form_data:
+            value = str(incoming_form_data.get(field, "")).strip()
+            if value:
+                return value
+            if field == "additional_notes":
+                return ""
+        current_value = str(current_form_data.get(field, "")).strip()
+        return current_value or default
+
+    merged["style"] = _pick_text("style", "friendly")
+    merged["emoji_usage"] = _pick_text("emoji_usage", "moderate")
+    merged["reply_length"] = _pick_text("reply_length", "medium")
+    merged["language"] = _pick_text("language", "friendly")
+    merged["additional_notes"] = _pick_text("additional_notes", "")
+
+    if "signature_phrases" in incoming_form_data:
+        merged["signature_phrases"] = _normalize_text_list(incoming_form_data.get("signature_phrases", []))
+    else:
+        merged["signature_phrases"] = _normalize_text_list(current_form_data.get("signature_phrases", []))
+
+    if "avoid_words" in incoming_form_data:
+        merged["avoid_words"] = _normalize_text_list(incoming_form_data.get("avoid_words", []))
+    else:
+        merged["avoid_words"] = _normalize_text_list(current_form_data.get("avoid_words", []))
+
+    return merged
+
+
+def _sanitize_extracted_traits(
+    extracted_traits: Dict[str, Any],
+    form_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Clamp and normalize LLM traits while preserving exact user form intent."""
+    extracted_traits = extracted_traits or {}
+
+    style = str(form_data.get("style", "friendly")).strip().lower() or "friendly"
+    emoji_usage = str(form_data.get("emoji_usage", "moderate")).strip().lower() or "moderate"
+    reply_length = str(form_data.get("reply_length", "medium")).strip().lower() or "medium"
+    language = str(form_data.get("language", "friendly")).strip().lower() or "friendly"
+    signature_phrases = _normalize_text_list(form_data.get("signature_phrases", []))
+    avoid_words = _normalize_text_list(form_data.get("avoid_words", []))
+
+    emoji_map = {"none": 0.0, "moderate": 0.5, "heavy": 0.8}
+    length_map = {"short_punchy": 12, "medium": 22, "detailed": 40}
+    language_vocab_map = {
+        "gen_z": "conversational",
+        "friendly": "conversational",
+        "business": "sophisticated",
+        "technical": "technical",
+    }
+    style_formality_map = {
+        "casual": 0.2,
+        "friendly": 0.3,
+        "warm": 0.3,
+        "witty": 0.3,
+        "professional": 0.75,
+        "blunt": 0.55,
+    }
+    language_formality_map = {
+        "gen_z": 0.15,
+        "friendly": 0.3,
+        "business": 0.85,
+        "technical": 0.7,
+    }
+
+    def _to_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    def _to_int(value: Any, default: int) -> int:
+        try:
+            return int(float(value))
+        except Exception:
+            return default
+
+    def _clamp(value: float, min_v: float, max_v: float) -> float:
+        return max(min_v, min(max_v, value))
+
+    humor = str(extracted_traits.get("humor_level", "subtle")).strip().lower()
+    if humor not in {"none", "subtle", "moderate", "heavy"}:
+        humor = "moderate" if style in {"witty", "casual"} else "subtle"
+
+    confrontation_style = str(extracted_traits.get("confrontation_style", "polite_correction")).strip().lower()
+    if confrontation_style not in {
+        "ignore",
+        "deflect_with_humor",
+        "polite_correction",
+        "direct_rebuttal",
+    }:
+        confrontation_style = "polite_correction" if style == "professional" else "deflect_with_humor"
+
+    tone_label = str(extracted_traits.get("tone_label", "")).strip()
+    if not tone_label:
+        tone_label = f"{style.title()} {language.title()}"
+
+    vocab = str(extracted_traits.get("vocabulary_level", "")).strip().lower()
+    if vocab not in {"simple", "conversational", "sophisticated", "technical"}:
+        vocab = language_vocab_map.get(language, "conversational")
+
+    sanitized = {
+        "tone_label": tone_label,
+        # Keep core cadence deterministic from explicit form controls.
+        "avg_reply_length_words": length_map.get(reply_length, 22),
+        "emoji_frequency": emoji_map.get(emoji_usage, 0.5),
+        "formality": _to_float(
+            extracted_traits.get(
+                "formality",
+                style_formality_map.get(style, language_formality_map.get(language, 0.3)),
+            ),
+            style_formality_map.get(style, language_formality_map.get(language, 0.3)),
+        ),
+        "humor_level": humor,
+        "gratitude_pattern": bool(extracted_traits.get("gratitude_pattern", style in {"warm", "friendly"})),
+        "confrontation_style": confrontation_style,
+        "exclamation_rate": _to_float(extracted_traits.get("exclamation_rate", 0.3), 0.3),
+        "question_rate": _to_float(extracted_traits.get("question_rate", 0.2), 0.2),
+        # Keep these exact to user intent for precision and predictable recalibration.
+        "signature_phrases": signature_phrases,
+        "vocabulary_level": vocab,
+        "avoid_topics": avoid_words,
+    }
+
+    sanitized["avg_reply_length_words"] = _to_int(_clamp(float(sanitized["avg_reply_length_words"]), 5, 60), 22)
+    sanitized["emoji_frequency"] = _clamp(sanitized["emoji_frequency"], 0.0, 1.0)
+    sanitized["formality"] = _clamp(sanitized["formality"], 0.0, 1.0)
+    sanitized["exclamation_rate"] = _clamp(sanitized["exclamation_rate"], 0.0, 1.0)
+    sanitized["question_rate"] = _clamp(sanitized["question_rate"], 0.0, 1.0)
+
+    return sanitized
 
 
 async def _ensure_engagement_settings(user_id: str):
