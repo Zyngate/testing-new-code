@@ -62,7 +62,8 @@ TONE PROFILE:
 - Humor level: {humor_level}
 - When someone says something negative: {confrontation_style}
 - Signature phrases/expressions (use ONLY when natural & context-appropriate): {signature_phrases}
-- Words/topics to AVOID: {avoid_topics}
+- Exact words/phrases to AVOID using in final reply: {avoid_words_exact}
+- Topics to avoid mentioning: {avoid_topics}
 
 POST CONTEXT (what this post is about):
 - Content: {content_summary}
@@ -95,6 +96,7 @@ STRICT RULES:
 11. IMPORTANT: Signature phrases should ONLY appear if they fit naturally into the conversation. Do NOT force them in. Omit them entirely if context doesn't support their use.
 12. If FACT CONTEXT is available, keep the reply fact-grounded and never invent details.
 13. Use 2-5 lexical sync words naturally (when available) so wording aligns with the commenter and post/video context.
+14. Never use any exact word/phrase listed in the avoid list, even if it appears in the incoming comment.
 """
 
 
@@ -228,6 +230,11 @@ async def generate_reply_for_comment(
                 comment_type=comment_type,
             )
 
+        # Final deterministic pass: forbidden terms must never appear in output.
+        forbidden_terms = _get_exact_avoid_words(tone, tone.get("extracted_traits", {}))
+        if reply_text and forbidden_terms and _contains_forbidden_terms(reply_text, forbidden_terms):
+            reply_text = _hard_remove_forbidden_terms(reply_text, forbidden_terms)
+
         if not reply_text:
             await _log_reply(user_id, post_id, comment_id, comment_author,
                              comment_text, "", platform,
@@ -236,6 +243,16 @@ async def generate_reply_for_comment(
 
         # ── 9. Handle based on reply_mode ──
         tone_version = tone.get("version", 1)
+
+        # Defensive re-check: if another worker already logged/posted this comment,
+        # skip to avoid duplicate queue cards and double posting.
+        already_after_generation = await replies_log_col.find_one({
+            "comment_id": comment_id,
+            "user_id": user_id,
+            "status": {"$in": ["posted", "approved_posted", "pending_review", "draft"]}
+        })
+        if already_after_generation:
+            return {"status": "skipped", "reason": "already_replied"}
 
         if reply_mode == "automatic":
             # Post immediately via platform API
@@ -361,12 +378,21 @@ async def get_reply_queue(user_id: str, status: str = "pending_review", limit: i
     Maps DB field names to frontend QueuedReply interface.
     """
     try:
+        # Fetch extra rows because duplicate logs for the same comment can exist;
+        # we collapse them by comment_id before returning to the UI.
+        fetch_limit = max(limit * 5, limit)
         cursor = replies_log_col.find(
             {"user_id": user_id, "status": status}
-        ).sort("created_at", -1).limit(limit)
+        ).sort("created_at", -1).limit(fetch_limit)
 
         items = []
+        seen_comment_keys = set()
         async for doc in cursor:
+            comment_key = str(doc.get("comment_id", "")).strip() or str(doc.get("_id", ""))
+            if comment_key in seen_comment_keys:
+                continue
+            seen_comment_keys.add(comment_key)
+
             doc["_id"] = str(doc["_id"])
             # Map DB field 'generated_reply' to frontend field 'reply_text'
             doc["reply_text"] = doc.pop("generated_reply", "")
@@ -381,6 +407,8 @@ async def get_reply_queue(user_id: str, status: str = "pending_review", limit: i
             if "replied_at" in doc:
                 doc["posted_at"] = doc.get("replied_at")
             items.append(doc)
+            if len(items) >= limit:
+                break
         return items
     except Exception as e:
         logger.error(f"Error fetching reply queue for {user_id}: {e}")
@@ -519,6 +547,10 @@ async def _generate_reply(
     """Build the LLM prompt and generate the reply."""
 
     traits = tone_profile.get("extracted_traits", {})
+    avoid_words_exact = _get_exact_avoid_words(tone_profile, traits)
+    avoid_topics = _normalize_phrase_list(traits.get("avoid_topics", []))
+    if not avoid_topics and avoid_words_exact:
+        avoid_topics = list(avoid_words_exact)
 
     # Build system prompt
     fact_bundle = fact_bundle or {}
@@ -531,7 +563,8 @@ async def _generate_reply(
         humor_level=traits.get("humor_level", "subtle"),
         confrontation_style=traits.get("confrontation_style", "polite_correction"),
         signature_phrases=", ".join(traits.get("signature_phrases", [])) or "none",
-        avoid_topics=", ".join(traits.get("avoid_topics", [])) or "none",
+        avoid_words_exact=", ".join(avoid_words_exact) or "none",
+        avoid_topics=", ".join(avoid_topics) or "none",
         content_summary=post_context.get("content_summary", "Social media post") if post_context else "Social media post",
         key_topics=", ".join(post_context.get("key_topics", [])) if post_context else "general",
         post_sentiment=post_context.get("sentiment", "neutral") if post_context else "neutral",
@@ -564,6 +597,9 @@ async def _generate_reply(
             if reply.lower().startswith(prefix.lower()):
                 reply = reply[len(prefix):].strip()
 
+        if avoid_words_exact and _contains_forbidden_terms(reply, avoid_words_exact):
+            reply = _hard_remove_forbidden_terms(reply, avoid_words_exact)
+
     return reply
 
 
@@ -584,6 +620,10 @@ async def _rewrite_non_disagreeing_reply(
     rewrite_system = REPLY_SYSTEM_PROMPT + "\n11. Never include correctional language like 'you are wrong', 'actually', or 'I disagree'."
 
     traits = tone_profile.get("extracted_traits", {})
+    avoid_words_exact = _get_exact_avoid_words(tone_profile, traits)
+    avoid_topics = _normalize_phrase_list(traits.get("avoid_topics", []))
+    if not avoid_topics and avoid_words_exact:
+        avoid_topics = list(avoid_words_exact)
     fact_bundle = fact_bundle or {}
     rewrite_system = rewrite_system.format(
         user_name=user_name,
@@ -594,7 +634,8 @@ async def _rewrite_non_disagreeing_reply(
         humor_level=traits.get("humor_level", "subtle"),
         confrontation_style=traits.get("confrontation_style", "polite_correction"),
         signature_phrases=", ".join(traits.get("signature_phrases", [])) or "none",
-        avoid_topics=", ".join(traits.get("avoid_topics", [])) or "none",
+        avoid_words_exact=", ".join(avoid_words_exact) or "none",
+        avoid_topics=", ".join(avoid_topics) or "none",
         content_summary=post_context.get("content_summary", "Social media post") if post_context else "Social media post",
         key_topics=", ".join(post_context.get("key_topics", [])) if post_context else "general",
         post_sentiment=post_context.get("sentiment", "neutral") if post_context else "neutral",
@@ -678,6 +719,75 @@ async def _fact_align_reply(
     if _is_disagreeing_reply(cleaned):
         return draft_reply
     return cleaned or draft_reply
+
+
+def _normalize_phrase_list(value: Any) -> List[str]:
+    """Normalize list-like avoid/signature fields into unique trimmed phrases."""
+    if value is None:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        text = str(value)
+        raw_items = [part for part in text.replace("\n", ",").split(",")]
+
+    cleaned: List[str] = []
+    seen = set()
+    for item in raw_items:
+        token = str(item).strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(token)
+
+    return cleaned
+
+
+def _get_exact_avoid_words(tone_profile: Dict[str, Any], traits: Dict[str, Any]) -> List[str]:
+    form_data = tone_profile.get("form_data", {}) if tone_profile else {}
+    form_avoid = _normalize_phrase_list(form_data.get("avoid_words", []))
+    if form_avoid:
+        return form_avoid
+    return _normalize_phrase_list((traits or {}).get("avoid_topics", []))
+
+
+def _contains_forbidden_terms(text: str, forbidden_terms: List[str]) -> bool:
+    if not text:
+        return False
+    for term in forbidden_terms:
+        term = term.strip()
+        if not term:
+            continue
+        if re.search(_build_forbidden_pattern(term), text, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def _hard_remove_forbidden_terms(text: str, forbidden_terms: List[str]) -> str:
+    cleaned = text or ""
+    for term in forbidden_terms:
+        term = term.strip()
+        if not term:
+            continue
+        cleaned = re.sub(_build_forbidden_pattern(term), "", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.!?])", r"\1", cleaned)
+    cleaned = cleaned.strip(" \t\n\r-,:;")
+    return cleaned or "Noted."
+
+
+def _build_forbidden_pattern(term: str) -> str:
+    escaped = re.escape(term)
+    # Single alphanumeric tokens should respect word boundaries.
+    if " " not in term and re.fullmatch(r"[A-Za-z0-9_']+", term):
+        return rf"\b{escaped}\b"
+    return escaped
 
 
 async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
