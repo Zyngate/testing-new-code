@@ -288,6 +288,7 @@ async def fetch_comments_with_replies_instagram(
         comments = await _fetch_replies_for_comments(
             comments_raw, access_token
         )
+        comments = _dedupe_comments(comments)
 
         logger.info(f"📸 Instagram: fetched {len(comments)} comments with replies for media {media_id}")
         return {
@@ -325,6 +326,7 @@ async def fetch_more_comments_instagram(
         comments = await _fetch_replies_for_comments(
             comments_raw, access_token
         )
+        comments = _dedupe_comments(comments)
 
         return {
             "comments": comments,
@@ -370,6 +372,7 @@ async def _fetch_replies_for_comments(
                         "timestamp": r.get("timestamp", ""),
                         "like_count": r.get("like_count", 0),
                     })
+                replies = _dedupe_replies(replies)
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch replies for comment {comment_id}: {e}")
 
@@ -384,10 +387,80 @@ async def _fetch_replies_for_comments(
         )
 
     # Fetch replies concurrently using a shared HTTP client
+    unique_comments_raw = _dedupe_raw_comments(comments_raw)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        tasks = [_get_replies(client, c) for c in comments_raw]
+        tasks = [_get_replies(client, c) for c in unique_comments_raw]
         results = await asyncio.gather(*tasks)
-    return list(results)
+    return _dedupe_comments(list(results))
+
+
+def _dedupe_raw_comments(comments_raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate raw Graph API comments by id before reply fan-out."""
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for comment in comments_raw or []:
+        key = str(comment.get("id", "")).strip()
+        if not key:
+            key = f"{comment.get('username', '')}|{comment.get('text', '')}|{comment.get('timestamp', '')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(comment)
+    return unique
+
+
+def _dedupe_replies(replies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate nested replies by id while preserving order."""
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for reply in replies or []:
+        key = str(reply.get("id", "")).strip()
+        if not key:
+            key = f"{reply.get('username', '')}|{reply.get('text', '')}|{reply.get('timestamp', '')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(reply)
+    return unique
+
+
+def _dedupe_comments(comments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate normalized top-level comments and merge their reply lists."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+
+    for comment in comments or []:
+        key = str(comment.get("comment_id", "")).strip()
+        if not key:
+            key = f"{comment.get('author', '')}|{comment.get('text', '')}|{comment.get('timestamp', '')}"
+
+        if key not in merged:
+            item = dict(comment)
+            item["replies"] = _dedupe_replies(item.get("replies", []))
+            merged[key] = item
+            order.append(key)
+            continue
+
+        existing = merged[key]
+        existing_replies = existing.get("replies", [])
+        incoming_replies = comment.get("replies", [])
+        existing["replies"] = _dedupe_replies(existing_replies + incoming_replies)
+
+        if not existing.get("text") and comment.get("text"):
+            existing["text"] = comment.get("text")
+        if not existing.get("author") and comment.get("author"):
+            existing["author"] = comment.get("author")
+        if not existing.get("timestamp") and comment.get("timestamp"):
+            existing["timestamp"] = comment.get("timestamp")
+
+        try:
+            existing_like = int(existing.get("like_count", 0) or 0)
+            incoming_like = int(comment.get("like_count", 0) or 0)
+            existing["like_count"] = max(existing_like, incoming_like)
+        except Exception:
+            pass
+
+    return [merged[key] for key in order]
 
 
 async def post_comment_instagram(
