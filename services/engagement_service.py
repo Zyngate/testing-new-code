@@ -9,12 +9,26 @@ Responsible for:
 - Logging every reply to comment_replies_log
 - Spam detection
 - Model routing (simple vs complex comments)
+
+CHANGES v2:
+- [SECURITY]  access_token always fetched server-side from DB — never trusted from caller
+- [SECURITY]  Daily reply cap enforced inside generate_reply_for_comment (not just exposed as util)
+- [SECURITY]  approve_reply validates edited_text length + strips script-like content
+- [SECURITY]  ObjectId format validated before DB hits in approve_reply / reject_reply
+- [SECURITY]  Spam filter normalizes Unicode before matching (prevents lookalike bypass)
+- [SECURITY]  comment_text length capped before any LLM call
+- [FINE-TUNE] Extracted _build_system_prompt() helper — eliminates 70-line prompt duplication
+- [FINE-TUNE] select_model_for_comment: questions now always route to COMPLEX_MODEL (bug fix)
+- [FINE-TUNE] _generate_reply: temperature is dynamic based on comment_tone
+- [FINE-TUNE] _build_contextual_emoji_reply: uses random.sample to avoid repeated emojis
+- [FINE-TUNE] _infer_comment_tone: checks positive/negative before '?' to avoid false 'curious'
 """
 
 import asyncio
 import json
 import random
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
@@ -24,7 +38,7 @@ from services.ai_service import groq_generate_text
 from services.tone_calibration_service import get_active_tone_profile
 from services.post_content_analyzer import get_post_context
 from services.video_cache_repo import get_cached_video_analysis
-from services.social_engagement_api import post_reply
+from services.social_engagement_api import post_reply, get_user_auth
 
 
 # ── Collections ──────────────────────────────────────────────
@@ -36,13 +50,22 @@ scheduled_posts_col = db["scheduledposts"]
 # ── Constants ────────────────────────────────────────────────
 SIMPLE_MODEL = "llama-3.1-8b-instant"
 COMPLEX_MODEL = "llama-3.3-70b-versatile"
+FACT_CHECK_MODEL = "llama-3.3-70b-versatile"
 
 # Human-like pacing: random delay between replies (seconds)
 MIN_REPLY_DELAY = 15
 MAX_REPLY_DELAY = 45
-FACT_CHECK_MODEL = "llama-3.3-70b-versatile"
 
-# Spam detection keywords (basic — can be extended per user via blacklisted_words)
+# [SECURITY] Cap raw comment length fed into LLM (prevents prompt-stuffing)
+MAX_COMMENT_INPUT_LEN = 1000
+
+# [SECURITY] Cap edited reply length in approve_reply
+MAX_EDITED_REPLY_LEN = 500
+
+# Default daily reply cap — overridden by settings.max_replies_per_day if set
+DEFAULT_MAX_DAILY_REPLIES = 200
+
+# Spam detection keywords (basic — extended per user via blacklisted_words)
 DEFAULT_SPAM_KEYWORDS = [
     "buy followers", "get rich", "dm me for", "check my bio",
     "free money", "click this link", "onlyfans", "🔥🔥🔥🔥🔥",
@@ -109,26 +132,25 @@ async def generate_reply_for_comment(
     post_id: str,
     platform: str,
     comment: Dict[str, Any],
-    access_token: str = "",
+    access_token: str = "",   # kept for API compatibility but ignored — fetched from DB
     user_name: str = "the user",
     **reply_kwargs,
 ) -> Dict[str, Any]:
     """
     Core function: Generate a tone-matched reply for a single comment.
-    
-    Steps:
-        1. Load user's Tone DNA
-        2. Load post content context
-        3. Select appropriate LLM model
-        4. Build prompt and generate reply
-        5. Post reply (or queue for review)
-        6. Log to comment_replies_log
 
-    Returns:
-        Dict with reply details including status.
+    Steps:
+        1. Load engagement settings + enforce daily cap
+        2. Spam / blank checks
+        3. Load Tone DNA + post context
+        4. Select LLM model
+        5. Build prompt and generate reply
+        6. Post reply (or queue for review) using server-side auth token
+        7. Log to comment_replies_log
     """
     comment_id = comment.get("comment_id", "")
-    comment_text = (comment.get("text", "") or "").strip()
+    # [SECURITY] Cap comment text length before any processing or LLM call
+    comment_text = (comment.get("text", "") or "").strip()[:MAX_COMMENT_INPUT_LEN]
     comment_author = comment.get("author", "unknown")
 
     try:
@@ -136,7 +158,7 @@ async def generate_reply_for_comment(
         already = await replies_log_col.find_one({
             "comment_id": comment_id,
             "user_id": user_id,
-            "status": {"$in": ["posted", "approved_posted", "pending_review", "draft"]}
+            "status": {"$in": ["posted", "approved_posted", "pending_review", "draft"]},
         })
         if already:
             return {"status": "skipped", "reason": "already_replied"}
@@ -148,27 +170,30 @@ async def generate_reply_for_comment(
 
         reply_mode = settings.get("reply_mode", "automatic")
 
-        # ── 3. Blank comment check (always treated as spam) ──
+        # [SECURITY] Enforce daily reply cap inside the core function
+        max_daily = settings.get("max_replies_per_day") or DEFAULT_MAX_DAILY_REPLIES
+        if max_daily > 0:
+            daily_count = await get_daily_reply_count(user_id)
+            if daily_count >= max_daily:
+                logger.info(f"🚫 Daily reply cap ({max_daily}) reached for user {user_id}")
+                return {"status": "skipped", "reason": "daily_limit_reached"}
+
+        # ── 3. Blank comment check ──
         if _is_blank_comment(comment_text):
             logger.info(f"🚫 Blank comment detected, skipping comment {comment_id}")
             await _log_reply(
-                user_id,
-                post_id,
-                comment_id,
-                comment_author,
-                comment_text,
-                "[SPAM: BLANK_COMMENT]",
-                platform,
-                0,
-                "spam_skipped",
+                user_id, post_id, comment_id, comment_author, comment_text,
+                "[SPAM: BLANK_COMMENT]", platform, 0, "spam_skipped",
             )
             return {"status": "spam_skipped", "reason": "blank_comment"}
 
         # ── 4. Spam check ──
         if await _is_spam(comment_text, settings):
             logger.info(f"🚫 Spam detected, skipping comment {comment_id}")
-            await _log_reply(user_id, post_id, comment_id, comment_author,
-                             comment_text, "[SPAM DETECTED]", platform, 0, "spam_skipped")
+            await _log_reply(
+                user_id, post_id, comment_id, comment_author,
+                comment_text, "[SPAM DETECTED]", platform, 0, "spam_skipped",
+            )
             return {"status": "spam_skipped"}
 
         # ── 5. Load Tone DNA ──
@@ -202,7 +227,6 @@ async def generate_reply_for_comment(
         )
 
         if reply_text and comment_type == "emoji_only" and not _is_emoji_only_comment(reply_text):
-            # Hard guardrail: emoji-only comments must receive emoji-only replies.
             reply_text = _build_contextual_emoji_reply(post_ctx, tone)
 
         if reply_text and _is_disagreeing_reply(reply_text):
@@ -230,61 +254,62 @@ async def generate_reply_for_comment(
                 comment_type=comment_type,
             )
 
-        # Final deterministic pass: forbidden terms must never appear in output.
+        # Final deterministic forbidden-term pass
         forbidden_terms = _get_exact_avoid_words(tone, tone.get("extracted_traits", {}))
         if reply_text and forbidden_terms and _contains_forbidden_terms(reply_text, forbidden_terms):
             reply_text = _hard_remove_forbidden_terms(reply_text, forbidden_terms)
 
         if not reply_text:
-            await _log_reply(user_id, post_id, comment_id, comment_author,
-                             comment_text, "", platform,
-                             tone.get("version", 1), "failed")
+            await _log_reply(
+                user_id, post_id, comment_id, comment_author,
+                comment_text, "", platform, tone.get("version", 1), "failed",
+            )
             return {"status": "failed", "reason": "llm_generation_failed"}
 
-        # ── 9. Handle based on reply_mode ──
-        tone_version = tone.get("version", 1)
-
-        # Defensive re-check: if another worker already logged/posted this comment,
-        # skip to avoid duplicate queue cards and double posting.
+        # ── 9. Duplicate guard post-generation ──
         already_after_generation = await replies_log_col.find_one({
             "comment_id": comment_id,
             "user_id": user_id,
-            "status": {"$in": ["posted", "approved_posted", "pending_review", "draft"]}
+            "status": {"$in": ["posted", "approved_posted", "pending_review", "draft"]},
         })
         if already_after_generation:
             return {"status": "skipped", "reason": "already_replied"}
 
-        if reply_mode == "automatic":
-            # Post immediately via platform API
-            success = await post_reply(
-                platform=platform,
-                comment_id=comment_id,
-                reply_text=reply_text,
-                access_token=access_token,
-                **reply_kwargs,
-            )
-            status = "posted" if success else "failed"
+        tone_version = tone.get("version", 1)
 
-            # Human-like delay before next reply
-            delay = random.uniform(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
-            await asyncio.sleep(delay)
+        # ── 10. Handle based on reply_mode ──
+        if reply_mode == "automatic":
+            # [SECURITY] Always fetch token server-side — never trust caller's access_token
+            auth = await _get_platform_auth(user_id, platform)
+            if not auth:
+                logger.warning(f"⚠️ No auth token for user {user_id} on {platform}, queuing for review")
+                status = "pending_review"
+            else:
+                server_token = auth.get("accessToken", "")
+                success = await post_reply(
+                    platform=platform,
+                    comment_id=comment_id,
+                    reply_text=reply_text,
+                    access_token=server_token,
+                    **reply_kwargs,
+                )
+                status = "posted" if success else "failed"
+                delay = random.uniform(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
+                await asyncio.sleep(delay)
 
         elif reply_mode == "review":
-            # Queue for user review
             status = "pending_review"
 
         elif reply_mode == "manual":
-            # Save as draft suggestion
             status = "draft"
 
         else:
-            status = "pending_review"  # Default to safe mode
+            status = "pending_review"  # Safe default
 
-        # ── 10. Log ──
+        # ── 11. Log ──
         log_doc = await _log_reply(
             user_id, post_id, comment_id, comment_author,
-            comment_text, reply_text, platform,
-            tone_version, status
+            comment_text, reply_text, platform, tone_version, status,
         )
 
         return {
@@ -304,13 +329,30 @@ async def approve_reply(log_id: str, user_id: str, edited_text: str = None) -> D
     """
     Approve a pending_review reply (and optionally edit it).
     Posts to platform and updates status.
+
+    [SECURITY] Validates log_id format, caps edited_text length, strips dangerous content.
+    [SECURITY] Auth token always fetched server-side from DB.
     """
+    # [SECURITY] Validate ObjectId format before touching the DB
+    if not _is_valid_object_id(log_id):
+        return {"success": False, "reason": "invalid_log_id"}
+
+    # [SECURITY] Validate and sanitize edited_text
+    if edited_text is not None:
+        if not isinstance(edited_text, str):
+            return {"success": False, "reason": "edited_text must be a string"}
+        if len(edited_text) > MAX_EDITED_REPLY_LEN:
+            return {"success": False, "reason": f"edited_text exceeds {MAX_EDITED_REPLY_LEN} character limit"}
+        edited_text = _strip_script_content(edited_text.strip())
+        if not edited_text:
+            return {"success": False, "reason": "edited_text is empty after sanitization"}
+
     from bson import ObjectId
     try:
         doc = await replies_log_col.find_one({
             "_id": ObjectId(log_id),
             "user_id": user_id,
-            "status": {"$in": ["pending_review", "draft"]}
+            "status": {"$in": ["pending_review", "draft"]},
         })
         if not doc:
             return {"success": False, "reason": "Reply not found or already processed"}
@@ -319,19 +361,12 @@ async def approve_reply(log_id: str, user_id: str, edited_text: str = None) -> D
         platform = doc.get("platform", "")
         comment_id = doc.get("comment_id", "")
 
-        # Get auth token — for Instagram, prefer instafb (Business Graph)
-        from services.social_engagement_api import get_user_auth
-        auth = None
-        if platform == "instagram":
-            auth = await get_user_auth(user_id, "instafb")
-        if not auth:
-            auth = await get_user_auth(user_id, platform)
+        # [SECURITY] Always fetch token server-side
+        auth = await _get_platform_auth(user_id, platform)
         if not auth:
             return {"success": False, "reason": "No auth token for platform"}
 
         access_token = auth.get("accessToken", "")
-
-        # Post the reply
         success = await post_reply(
             platform=platform,
             comment_id=comment_id,
@@ -340,14 +375,13 @@ async def approve_reply(log_id: str, user_id: str, edited_text: str = None) -> D
         )
 
         new_status = "approved_posted" if success else "failed"
-
         await replies_log_col.update_one(
             {"_id": ObjectId(log_id)},
             {"$set": {
                 "status": new_status,
-                "generated_reply": reply_text,  # In case it was edited
+                "generated_reply": reply_text,
                 "approved_at": datetime.now(timezone.utc),
-            }}
+            }},
         )
 
         return {"success": success, "status": new_status}
@@ -359,11 +393,15 @@ async def approve_reply(log_id: str, user_id: str, edited_text: str = None) -> D
 
 async def reject_reply(log_id: str, user_id: str) -> Dict[str, Any]:
     """Reject a pending_review reply."""
+    # [SECURITY] Validate ObjectId format before touching the DB
+    if not _is_valid_object_id(log_id):
+        return {"success": False, "reason": "invalid_log_id"}
+
     from bson import ObjectId
     try:
         result = await replies_log_col.update_one(
             {"_id": ObjectId(log_id), "user_id": user_id},
-            {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc)}}
+            {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc)}},
         )
         return {"success": result.modified_count > 0}
     except Exception as e:
@@ -378,15 +416,13 @@ async def get_reply_queue(user_id: str, status: str = "pending_review", limit: i
     Maps DB field names to frontend QueuedReply interface.
     """
     try:
-        # Fetch extra rows because duplicate logs for the same comment can exist;
-        # we collapse them by comment_id before returning to the UI.
         fetch_limit = max(limit * 5, limit)
         cursor = replies_log_col.find(
             {"user_id": user_id, "status": status}
         ).sort("created_at", -1).limit(fetch_limit)
 
         items = []
-        seen_comment_keys = set()
+        seen_comment_keys: set = set()
         async for doc in cursor:
             comment_key = str(doc.get("comment_id", "")).strip() or str(doc.get("_id", ""))
             if comment_key in seen_comment_keys:
@@ -394,16 +430,12 @@ async def get_reply_queue(user_id: str, status: str = "pending_review", limit: i
             seen_comment_keys.add(comment_key)
 
             doc["_id"] = str(doc["_id"])
-            # Map DB field 'generated_reply' to frontend field 'reply_text'
             doc["reply_text"] = doc.pop("generated_reply", "")
-            # Ensure 'model_used' is present (frontend expects it)
             doc.setdefault("model_used", "")
-            # Convert datetime to ISO string
             for dt_key in ("created_at", "replied_at", "approved_at", "rejected_at"):
                 val = doc.get(dt_key)
                 if val and hasattr(val, "isoformat"):
                     doc[dt_key] = val.isoformat()
-            # Map 'replied_at' to 'posted_at' for frontend
             if "replied_at" in doc:
                 doc["posted_at"] = doc.get("replied_at")
             items.append(doc)
@@ -416,28 +448,18 @@ async def get_reply_queue(user_id: str, status: str = "pending_review", limit: i
 
 
 async def get_reply_stats(user_id: str) -> Dict[str, Any]:
-    """
-    Get engagement reply statistics for a user.
-    Returns fields matching the frontend EngagementStats interface:
-      total_replies, automatically_posted, pending_review, approved,
-      rejected, draft, replies_today, by_platform
-    """
+    """Get engagement reply statistics for a user."""
     try:
-        # Status breakdown
         pipeline = [
             {"$match": {"user_id": user_id}},
-            {"$group": {
-                "_id": "$status",
-                "count": {"$sum": 1}
-            }}
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
         ]
-        stats = {}
+        stats: Dict[str, int] = {}
         async for doc in replies_log_col.aggregate(pipeline):
             stats[doc["_id"]] = doc["count"]
 
         total = sum(stats.values())
 
-        # Today's count
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -447,17 +469,13 @@ async def get_reply_stats(user_id: str) -> Dict[str, Any]:
             "created_at": {"$gte": today_start},
         })
 
-        # Platform breakdown
         platform_pipeline = [
             {"$match": {"user_id": user_id}},
-            {"$group": {
-                "_id": "$platform",
-                "count": {"$sum": 1}
-            }}
+            {"$group": {"_id": "$platform", "count": {"$sum": 1}}},
         ]
-        by_platform = {}
+        by_platform: Dict[str, int] = {}
         async for doc in replies_log_col.aggregate(platform_pipeline):
-            if doc["_id"]:  # Skip null platforms
+            if doc["_id"]:
                 by_platform[doc["_id"]] = doc["count"]
 
         return {
@@ -473,14 +491,8 @@ async def get_reply_stats(user_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error fetching reply stats for {user_id}: {e}")
         return {
-            "total_replies": 0,
-            "automatically_posted": 0,
-            "pending_review": 0,
-            "approved": 0,
-            "rejected": 0,
-            "draft": 0,
-            "replies_today": 0,
-            "by_platform": {},
+            "total_replies": 0, "automatically_posted": 0, "pending_review": 0,
+            "approved": 0, "rejected": 0, "draft": 0, "replies_today": 0, "by_platform": {},
         }
 
 
@@ -488,73 +500,92 @@ async def get_reply_stats(user_id: str) -> Dict[str, Any]:
 # INTERNAL HELPERS
 # ══════════════════════════════════════════════════════════════
 
+def _is_valid_object_id(value: str) -> bool:
+    """[SECURITY] Validate MongoDB ObjectId format (24 hex chars)."""
+    return bool(re.fullmatch(r"[0-9a-fA-F]{24}", value or ""))
+
+
+def _strip_script_content(text: str) -> str:
+    """[SECURITY] Remove HTML tags and javascript: references from user-edited text."""
+    cleaned = re.sub(r"<[^>]{0,200}>", "", text)
+    cleaned = re.sub(r"javascript\s*:", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+async def _get_platform_auth(user_id: str, platform: str) -> Optional[Dict[str, Any]]:
+    """
+    [SECURITY] Fetch access token for user+platform from DB.
+    For Instagram, prefers instafb (Business Graph API).
+    Never accepts tokens from callers.
+    """
+    auth = None
+    if platform == "instagram":
+        auth = await get_user_auth(user_id, "instafb")
+    if not auth:
+        auth = await get_user_auth(user_id, platform)
+    return auth
+
+
 def select_model_for_comment(comment_text: str) -> str:
-    """Route to appropriate model based on comment complexity."""
+    """
+    Route to appropriate model based on comment complexity.
+
+    [FINE-TUNE] Fixed bug: questions now always route to COMPLEX_MODEL.
+    Previously, a question with ≤5 words would hit the first 'if' and return
+    SIMPLE_MODEL before the 'has_question' check was ever reached.
+    Now: complexity signals are evaluated first, short-circuit last.
+    """
     words = comment_text.split()
     word_count = len(words)
 
-    # Complexity indicators
     has_question = "?" in comment_text
-    has_multiple_sentences = comment_text.count(".") + comment_text.count("!") > 1
     has_negation = any(neg in comment_text.lower() for neg in ["not", "don't", "can't", "won't", "shouldn't"])
     all_caps_words = sum(1 for w in words if w.isupper() and len(w) > 1)
     exclamation_count = comment_text.count("!")
+    has_multiple_sentences = comment_text.count(".") + comment_text.count("!") > 1
 
-    # SIMPLE MODEL: use for straightforward, short, positive engagement
-    if word_count <= 5 and not has_question and not has_negation:
-        return SIMPLE_MODEL
-
-    # SIMPLE MODEL: emoji-only or very short affirmations
-    if word_count <= 3:
-        return SIMPLE_MODEL
-
-    # COMPLEX MODEL: triggers
-    # - Questions require thoughtful responses
-    if has_question:
-        return COMPLEX_MODEL
-    # - Long comments need nuanced replies
-    if word_count > 15:
-        return COMPLEX_MODEL
-    # - Critical/negative comments need careful handling
-    if has_negation or all_caps_words > 1:
-        return COMPLEX_MODEL
-    # - Highly emotional comments (multiple exclamations)
-    if exclamation_count > 2:
-        return COMPLEX_MODEL
-    # - Multi-sentence discussions
-    if has_multiple_sentences:
+    # [FINE-TUNE] Evaluate COMPLEX triggers first — they always win regardless of length
+    if (
+        has_question
+        or has_negation
+        or word_count > 15
+        or all_caps_words > 1
+        or exclamation_count > 2
+        or has_multiple_sentences
+        or word_count >= 8
+    ):
         return COMPLEX_MODEL
 
-    # Default to complex for safety with moderate length
-    if word_count >= 8:
-        return COMPLEX_MODEL
-
+    # Simple: short, no complexity signals, no questions, no negation
     return SIMPLE_MODEL
 
 
-async def _generate_reply(
+def _build_system_prompt(
     tone_profile: Dict[str, Any],
     post_context: Optional[Dict[str, Any]],
-    fact_bundle: Optional[Dict[str, Any]],
-    comment_text: str,
-    comment_author: str,
+    fact_bundle: Dict[str, Any],
     platform: str,
-    model: str,
-    user_name: str = "the user",
-    comment_type: str = "text",
-    comment_tone: str = "neutral",
+    comment_type: str,
+    comment_tone: str,
+    user_name: str,
+    extra_rules: str = "",
 ) -> str:
-    """Build the LLM prompt and generate the reply."""
-
+    """
+    [FINE-TUNE] Extracted shared helper — eliminates the 70-line duplicated
+    .format() block that existed in both _generate_reply and _rewrite_non_disagreeing_reply.
+    Both functions now call this single source of truth.
+    """
     traits = tone_profile.get("extracted_traits", {})
     avoid_words_exact = _get_exact_avoid_words(tone_profile, traits)
     avoid_topics = _normalize_phrase_list(traits.get("avoid_topics", []))
     if not avoid_topics and avoid_words_exact:
         avoid_topics = list(avoid_words_exact)
 
-    # Build system prompt
-    fact_bundle = fact_bundle or {}
-    system_msg = REPLY_SYSTEM_PROMPT.format(
+    prompt_template = REPLY_SYSTEM_PROMPT
+    if extra_rules:
+        prompt_template = prompt_template + f"\n{extra_rules}"
+
+    return prompt_template.format(
         user_name=user_name,
         tone_label=tone_profile.get("tone_label", "Friendly"),
         formality=traits.get("formality", 0.3),
@@ -578,25 +609,56 @@ async def _generate_reply(
         lexical_sync_words=fact_bundle.get("lexical_sync_words", "none"),
     )
 
-    # Build user prompt
+
+async def _generate_reply(
+    tone_profile: Dict[str, Any],
+    post_context: Optional[Dict[str, Any]],
+    fact_bundle: Optional[Dict[str, Any]],
+    comment_text: str,
+    comment_author: str,
+    platform: str,
+    model: str,
+    user_name: str = "the user",
+    comment_type: str = "text",
+    comment_tone: str = "neutral",
+) -> str:
+    """
+    Build the LLM prompt and generate the reply.
+
+    [FINE-TUNE] Temperature is now dynamic based on comment_tone:
+    - critical comments → 0.5 (more controlled, careful output)
+    - positive comments → 0.8 (slightly more expressive/warm)
+    - neutral/curious   → 0.7 (balanced default)
+    """
+    fact_bundle = fact_bundle or {}
+    system_msg = _build_system_prompt(
+        tone_profile, post_context, fact_bundle,
+        platform, comment_type, comment_tone, user_name,
+    )
+
     user_prompt = f'Reply to this comment from @{comment_author}: "{comment_text}"'
+
+    # [FINE-TUNE] Dynamic temperature by comment tone
+    temp_map = {"critical": 0.5, "positive": 0.8, "curious": 0.65}
+    temperature = temp_map.get(comment_tone, 0.7)
 
     reply = await groq_generate_text(
         model=model,
         prompt=user_prompt,
         system_msg=system_msg,
-        temperature=0.7,
+        temperature=temperature,
         max_completion_tokens=160,
     )
 
-    # Clean up: remove quotes, prefixes like "Reply:" etc.
     if reply:
         reply = reply.strip().strip('"').strip("'")
-        # Remove common LLM artifacts
         for prefix in ["Reply:", "Response:", "Here's my reply:", "My reply:"]:
             if reply.lower().startswith(prefix.lower()):
                 reply = reply[len(prefix):].strip()
 
+        avoid_words_exact = _get_exact_avoid_words(
+            tone_profile, tone_profile.get("extracted_traits", {})
+        )
         if avoid_words_exact and _contains_forbidden_terms(reply, avoid_words_exact):
             reply = _hard_remove_forbidden_terms(reply, avoid_words_exact)
 
@@ -616,37 +678,16 @@ async def _rewrite_non_disagreeing_reply(
     comment_type: str,
     comment_tone: str,
 ) -> str:
-    """One-pass rewrite when a draft sounds contradictory or argumentative."""
-    rewrite_system = REPLY_SYSTEM_PROMPT + "\n11. Never include correctional language like 'you are wrong', 'actually', or 'I disagree'."
+    """
+    One-pass rewrite when a draft sounds contradictory or argumentative.
 
-    traits = tone_profile.get("extracted_traits", {})
-    avoid_words_exact = _get_exact_avoid_words(tone_profile, traits)
-    avoid_topics = _normalize_phrase_list(traits.get("avoid_topics", []))
-    if not avoid_topics and avoid_words_exact:
-        avoid_topics = list(avoid_words_exact)
+    [FINE-TUNE] Now uses _build_system_prompt() instead of duplicating the format block.
+    """
     fact_bundle = fact_bundle or {}
-    rewrite_system = rewrite_system.format(
-        user_name=user_name,
-        tone_label=tone_profile.get("tone_label", "Friendly"),
-        formality=traits.get("formality", 0.3),
-        emoji_frequency=traits.get("emoji_frequency", 0.5),
-        avg_reply_length=traits.get("avg_reply_length_words", 18),
-        humor_level=traits.get("humor_level", "subtle"),
-        confrontation_style=traits.get("confrontation_style", "polite_correction"),
-        signature_phrases=", ".join(traits.get("signature_phrases", [])) or "none",
-        avoid_words_exact=", ".join(avoid_words_exact) or "none",
-        avoid_topics=", ".join(avoid_topics) or "none",
-        content_summary=post_context.get("content_summary", "Social media post") if post_context else "Social media post",
-        key_topics=", ".join(post_context.get("key_topics", [])) if post_context else "general",
-        post_sentiment=post_context.get("sentiment", "neutral") if post_context else "neutral",
-        likely_comment_themes=", ".join(post_context.get("likely_comment_themes", [])) if post_context else "general audience reactions",
-        platform=platform,
-        comment_type=comment_type,
-        comment_tone=comment_tone,
-        video_summary=fact_bundle.get("video_summary", "none"),
-        transcript_highlights=fact_bundle.get("transcript_highlights", "none"),
-        fact_anchors=fact_bundle.get("fact_anchors", "none"),
-        lexical_sync_words=fact_bundle.get("lexical_sync_words", "none"),
+    rewrite_system = _build_system_prompt(
+        tone_profile, post_context, fact_bundle,
+        platform, comment_type, comment_tone, user_name,
+        extra_rules="15. Never include correctional language like 'you are wrong', 'actually', or 'I disagree'.",
     )
 
     rewrite_prompt = (
@@ -679,7 +720,7 @@ async def _fact_align_reply(
     fact_bundle: Dict[str, Any],
     comment_type: str,
 ) -> str:
-    """Final fact-consistency pass using post/video context without becoming argumentative."""
+    """Final fact-consistency pass using post/video context."""
     if not fact_bundle.get("has_facts"):
         return draft_reply
 
@@ -725,7 +766,6 @@ def _normalize_phrase_list(value: Any) -> List[str]:
     """Normalize list-like avoid/signature fields into unique trimmed phrases."""
     if value is None:
         return []
-
     raw_items: List[Any]
     if isinstance(value, list):
         raw_items = value
@@ -734,7 +774,7 @@ def _normalize_phrase_list(value: Any) -> List[str]:
         raw_items = [part for part in text.replace("\n", ",").split(",")]
 
     cleaned: List[str] = []
-    seen = set()
+    seen: set = set()
     for item in raw_items:
         token = str(item).strip()
         if not token:
@@ -744,7 +784,6 @@ def _normalize_phrase_list(value: Any) -> List[str]:
             continue
         seen.add(key)
         cleaned.append(token)
-
     return cleaned
 
 
@@ -775,7 +814,6 @@ def _hard_remove_forbidden_terms(text: str, forbidden_terms: List[str]) -> str:
         if not term:
             continue
         cleaned = re.sub(_build_forbidden_pattern(term), "", cleaned, flags=re.IGNORECASE)
-
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([,.!?])", r"\1", cleaned)
     cleaned = cleaned.strip(" \t\n\r-,:;")
@@ -784,16 +822,27 @@ def _hard_remove_forbidden_terms(text: str, forbidden_terms: List[str]) -> str:
 
 def _build_forbidden_pattern(term: str) -> str:
     escaped = re.escape(term)
-    # Single alphanumeric tokens should respect word boundaries.
     if " " not in term and re.fullmatch(r"[A-Za-z0-9_']+", term):
         return rf"\b{escaped}\b"
     return escaped
+
+
+def _normalize_for_spam(text: str) -> str:
+    """
+    [SECURITY] Normalize Unicode and strip lookalike characters before spam matching.
+    Prevents bypasses like '𝒷𝓊𝔂 followers' slipping through keyword filters.
+    """
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return ascii_text.lower()
 
 
 async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
     """
     Check if a comment is spam using keyword matching.
     Combines default keywords + user's blacklisted words.
+
+    [SECURITY] Normalizes Unicode before matching to prevent lookalike bypasses.
     """
     if _is_blank_comment(comment_text):
         return True
@@ -801,16 +850,15 @@ async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
     if not settings.get("spam_filter_enabled", True):
         return False
 
-    text_lower = comment_text.lower()
+    # [SECURITY] Normalize before matching
+    normalized_text = _normalize_for_spam(comment_text)
 
-    # Combined blacklist
     all_keywords = DEFAULT_SPAM_KEYWORDS + settings.get("blacklisted_words", [])
-
     for keyword in all_keywords:
-        if keyword.lower() in text_lower:
+        if _normalize_for_spam(keyword) in normalized_text:
             return True
 
-    # Emoji-only spam: allow normal emoji reactions, block excessive bursts.
+    # Excessive emoji burst check (≥8 emojis, no text)
     emoji_pattern = re.compile(
         r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
         r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF'
@@ -820,7 +868,7 @@ async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
         r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
         r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF'
         r'\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002600-\U000026FF]+',
-        '', comment_text
+        '', comment_text,
     ).strip()
     emoji_count = len(emoji_pattern.findall(comment_text))
     if not text_no_emoji and emoji_count >= 8:
@@ -846,20 +894,26 @@ def _is_emoji_only_comment(text: str) -> bool:
     has_emoji = bool(emoji_pattern.search(text))
     stripped = emoji_pattern.sub("", text)
     stripped = re.sub(r"[\s\.,!?~#@&*+\-_/\\|:;'\"()\[\]{}<>]+", "", stripped)
-
     return has_emoji and stripped == ""
 
 
 def _infer_comment_tone(comment_text: str) -> str:
+    """
+    [FINE-TUNE] Positive/negative checks now run before '?' check.
+    Previously a comment like "this is amazing, what do you think?" always
+    returned 'curious' even though it's clearly positive-curious. Now it
+    correctly returns 'positive'.
+    """
     text = (comment_text or "").lower()
     if not text:
         return "neutral"
-    if "?" in text:
-        return "curious"
+    # Check sentiment first — more informative signal than punctuation
     if any(w in text for w in ["love", "awesome", "great", "amazing", "🔥", "😍", "👏"]):
         return "positive"
     if any(w in text for w in ["bad", "hate", "worst", "boring", "terrible", "not good"]):
         return "critical"
+    if "?" in text:
+        return "curious"
     return "neutral"
 
 
@@ -888,7 +942,6 @@ async def _load_video_cache_context(
     post_doc = None
     try:
         from bson import ObjectId
-
         try:
             post_doc = await scheduled_posts_col.find_one(
                 {"_id": ObjectId(post_id), "userId": user_id},
@@ -896,7 +949,6 @@ async def _load_video_cache_context(
             )
         except Exception:
             post_doc = None
-
     except Exception:
         post_doc = None
 
@@ -971,8 +1023,8 @@ def _extract_keywords(text: str) -> List[str]:
         "thanks", "thank", "great", "awesome", "video", "post", "comment",
     }
     words = re.findall(r"[a-zA-Z][a-zA-Z']{2,}", (text or "").lower())
-    deduped = []
-    seen = set()
+    deduped: List[str] = []
+    seen: set = set()
     for w in words:
         if w in stop_words or w in seen:
             continue
@@ -985,7 +1037,7 @@ def _first_sentences(text: str, max_chars: int = 280) -> str:
     if not text:
         return ""
     chunks = re.split(r"(?<=[.!?])\s+", text.strip())
-    out = []
+    out: List[str] = []
     length = 0
     for chunk in chunks:
         c = chunk.strip()
@@ -1005,7 +1057,12 @@ def _build_contextual_emoji_reply(
     post_context: Optional[Dict[str, Any]],
     tone_profile: Optional[Dict[str, Any]],
 ) -> str:
-    """Build a context-aware emoji-only fallback reply."""
+    """
+    Build a context-aware emoji-only fallback reply.
+
+    [FINE-TUNE] Uses random.sample instead of random.choice in a loop,
+    preventing repeated emoji like 🔥🔥🔥 in the output.
+    """
     context_text = ""
     if post_context:
         context_text = (
@@ -1015,14 +1072,14 @@ def _build_contextual_emoji_reply(
         ).lower()
 
     topic_map = [
-        (["workout", "fitness", "gym", "training"], ["💪", "🔥", "🏋️"]),
-        (["food", "recipe", "cooking", "meal"], ["😋", "🍽️", "🔥"]),
-        (["travel", "trip", "vacation", "adventure"], ["✈️", "🌍", "✨"]),
-        (["music", "song", "beat", "dance"], ["🎵", "🎶", "💃"]),
-        (["business", "startup", "marketing", "sales"], ["📈", "🚀", "🙌"]),
-        (["tech", "ai", "code", "software"], ["🤖", "💡", "🚀"]),
-        (["fashion", "style", "outfit", "beauty"], ["✨", "💅", "😍"]),
-        (["pet", "dog", "cat", "puppy"], ["🐾", "❤️", "🥹"]),
+        (["workout", "fitness", "gym", "training"], ["💪", "🔥", "🏋️", "⚡"]),
+        (["food", "recipe", "cooking", "meal"], ["😋", "🍽️", "🔥", "👨‍🍳"]),
+        (["travel", "trip", "vacation", "adventure"], ["✈️", "🌍", "✨", "🗺️"]),
+        (["music", "song", "beat", "dance"], ["🎵", "🎶", "💃", "🎤"]),
+        (["business", "startup", "marketing", "sales"], ["📈", "🚀", "🙌", "💡"]),
+        (["tech", "ai", "code", "software"], ["🤖", "💡", "🚀", "⚙️"]),
+        (["fashion", "style", "outfit", "beauty"], ["✨", "💅", "😍", "👗"]),
+        (["pet", "dog", "cat", "puppy"], ["🐾", "❤️", "🥹", "🐶"]),
     ]
 
     emoji_pool = ["🔥", "👏", "🙌", "✨", "❤️"]
@@ -1041,7 +1098,9 @@ def _build_contextual_emoji_reply(
     else:
         count = 2
 
-    chosen = [random.choice(emoji_pool) for _ in range(count)]
+    # [FINE-TUNE] random.sample prevents duplicate emojis in the output
+    count = min(count, len(emoji_pool))
+    chosen = random.sample(emoji_pool, count)
     return "".join(chosen)
 
 
@@ -1062,7 +1121,7 @@ async def _log_reply(
         "post_id": post_id,
         "comment_id": comment_id,
         "comment_author": comment_author,
-        "comment_text": comment_text,
+        "comment_text": comment_text,   # stored as value only — never used in queries
         "generated_reply": generated_reply,
         "platform": platform,
         "tone_version": tone_version,
