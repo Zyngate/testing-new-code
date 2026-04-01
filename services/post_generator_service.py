@@ -223,6 +223,19 @@ INSTAGRAM_PASSIVE_OPENERS = (
     "the discussion raises",
 )
 
+INSTAGRAM_DESCRIPTION_STYLE_TERMS = (
+    "as the scene unfolds",
+    "the scene unfolds",
+    "in front of",
+    "in the background",
+    "the image of",
+    "is displayed prominently",
+    "the tone is serious",
+    "it becomes clear",
+    "steps up to",
+    "speaking in front of",
+)
+
 INSTAGRAM_OVERLAP_STOPWORDS = {
     "the", "and", "that", "with", "from", "into", "this", "there", "their",
     "about", "because", "while", "where", "which", "what", "when", "have",
@@ -773,7 +786,7 @@ async def fetch_platform_hashtags(
 
     return ordered_tags[:10]
 
-def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
+def enforce_instagram_constraints(text: str, target_chars: int = 1500) -> str:
     """
     Enforces:
     - <= target_chars characters (including spaces)
@@ -782,7 +795,7 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     - No sentence cut-off at the end
     """
 
-    min_chars = 900
+    min_chars = min(1000, target_chars)
 
     # 1) Normalize paragraphs first.
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -872,9 +885,9 @@ def _build_caption_prompt(
     if detected_person:
         person_instruction = f"""
 IMPORTANT:
-- The video includes {detected_person}.
-- Naturally reference {detected_person} 2-4 times.
-- Do NOT force the name.
+- If relevant, you may mention {detected_person} once.
+- Do NOT force the name repeatedly.
+- Do NOT describe physical behavior, posture, or appearance.
 """
     """Build the caption prompt for a given platform."""
     # Detect if this is a marketing campaign (affects Threads tone)
@@ -883,10 +896,10 @@ IMPORTANT:
     identity_hook_rule = ""
     if detected_person:
         identity_hook_rule = f"""
-- The FIRST sentence MUST begin with "{detected_person}".
-- Do NOT begin with: "A conversation", "The video", "A speaker", or any generic subject.
+- The first sentence does NOT need to start with a person's name.
+- Keep focus on the claim, implication, or accountability angle.
 - Do NOT use the word "speaker".
-- The person must be framed as the central figure.
+- Mention {detected_person} only if it adds context.
 """
     else:
         identity_hook_rule = """
@@ -931,20 +944,17 @@ PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
 - 3-4 short lines.
 - Must reference one concrete detail from OCR or transcript naturally.
 - Do NOT label it as "OCR", "on-screen text", "transcript", "the phrase", "this phrase", "that phrase", "the line", or "this line".
-- Write the hook as if a human reacted in real time.
+- Write the hook as a sharp public-facing claim, not scene narration.
 
 PARAGRAPH 2 — CONTEXT & INSIGHT  
 - This paragraph MUST add NEW information and MUST NOT repeat the hook wording or meaning.
 - Do NOT rephrase the hook sentence. Continue the story forward.
 - Explain what happens next and why it matters.
 - Human, conversational tone.
-- Grounded in actual moments from the video.
+- Grounded in the topic meaning, not scene narration.
 - This should be the longest paragraph.
 - Never mention what anyone wore in the video.
 - FORBIDDEN OPENERS: "This video shows", "This video delves", "The video shows", "The video delves", "In this video".
-
-Example:
--The guy in black suite
 
 PARAGRAPH 3 — REFLECTION / CTA  
 - 3-4 short lines.
@@ -954,21 +964,23 @@ PARAGRAPH 3 — REFLECTION / CTA
 
 CONTEXT ANCHOR (MANDATORY):
 
-Base the caption on what specifically happens in the video.
-Describe actions, visuals, or sequences shown.
-Do not write abstract commentary about the topic.
-The caption should reflect the flow of the video, not just the theme.
+Base the caption on the main point/topic.
+Do NOT narrate the scene like a visual description.
+Do NOT describe posture, clothing, camera framing, background, or facial expressions.
+Write as a social caption reaction/opinion, not as a shot-by-shot summary.
 
 STYLE:
 - Human and engaging  
-- Confident, not corporate  
-- Clear, not abstract.
-- Sound like a real person typed it quickly but clearly.
+- Confident, not corporate
+- Critical-editorial voice (serious, direct, accountable)
+- Clear, not abstract
+- Sound like a real caption, not a report
 - Use varied sentence shapes; avoid repetitive structures.
 MANDATORY SPECIFICITY RULE:
 - You MUST reference at least ONE concrete detail from the topic.
 RULES:
-- You MAY reference visuals or moments in the video  
+- You MAY mention the topic, claim, or implication, but do NOT describe the scene frame-by-frame  
+- Do NOT describe body language, camera angle, background objects, or posture  
 - STRICTLY NO first-person language (no I, me, my, we)  
 - No emojis  
 - No hashtags inside the caption text  
@@ -979,10 +991,12 @@ SELF-CHECK:
 - If paragraph 2 repeats hook meaning, rewrite paragraph 2.
 - If any forbidden opener appears, rewrite before returning.
 - If "on-screen text" appears, rewrite before returning.
+- If the caption reads like video description (scene/background/body language), rewrite before returning.
+- If it sounds like a neutral news report instead of an opinionated caption, rewrite before returning.
 
 
 LENGTH:
-- Long-form: 900–1,000 characters total  
+- Long-form: 1,000–1,500 characters total (including spaces)  
 - EXACTLY 3 paragraphs separated by a blank line  
 
 VIDEO DETAILS (USE THESE SPECIFICS CAREFULLY):
@@ -1542,6 +1556,23 @@ def _has_instagram_generic_abstract_language(text: str) -> bool:
     return abstract_hits >= 2
 
 
+def _has_instagram_description_style(text: str) -> bool:
+    lowered = text.lower()
+    term_hits = sum(1 for term in INSTAGRAM_DESCRIPTION_STYLE_TERMS if term in lowered)
+
+    # Caption should not sound like scene narration.
+    if term_hits >= 1:
+        return True
+
+    if re.search(r"\bas\s+the\s+scene\s+unfolds\b", lowered):
+        return True
+
+    if re.search(r"\bin\s+front\s+of\s+(a|the)\b", lowered):
+        return True
+
+    return False
+
+
 def _is_hook_context_repetitive(hook: str, context: str) -> bool:
     hook_tokens = _token_set_for_overlap(hook)
     context_tokens = _token_set_for_overlap(context)
@@ -1560,6 +1591,8 @@ def _needs_instagram_strict_rewrite(caption: str) -> bool:
     if _has_instagram_forbidden_language(caption):
         return True
     if _has_instagram_generic_abstract_language(caption):
+        return True
+    if _has_instagram_description_style(caption):
         return True
     if _paragraph_two_has_forbidden_opener(paragraphs[1]):
         return True
@@ -1597,7 +1630,10 @@ STRICT RULES:
 - Paragraph 2 must NOT start with: This video shows / This video delves / The video shows / The video delves / In this video.
 - Paragraph 2 and 3 must NOT start with passive openers like: A distinction is made / The discussion raises.
 - Do NOT use these words/phrases anywhere: on-screen text, OCR, transcript, the phrase, this phrase, that phrase, the line, this line.
+- Do NOT write scene narration (no "in front of", "in the background", "as the scene unfolds", posture/body-language description, or camera framing details).
 - Avoid abstract filler words: conversation, discussion, debate, complexities and nuances.
+- Voice must be critical-editorial and opinionated, like a serious Instagram commentary caption.
+- Do NOT write like a neutral news report.
 - Human, natural, conversational tone.
 - No first-person language.
 - No emojis. No hashtags.
@@ -1844,7 +1880,7 @@ async def _generate_caption_for_platform(
             ocr_text,
             transcript,
         )
-        caption_text = enforce_instagram_constraints(caption_text, target_chars=1000)
+        caption_text = enforce_instagram_constraints(caption_text, target_chars=1500)
 
     if p_norm == "tiktok" and caption_text:
         caption_text = await _enforce_tiktok_caption_length(
