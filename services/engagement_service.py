@@ -852,10 +852,22 @@ async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
 
     # [SECURITY] Normalize before matching
     normalized_text = _normalize_for_spam(comment_text)
+    raw_text_lower = (comment_text or "").lower()
 
-    all_keywords = DEFAULT_SPAM_KEYWORDS + settings.get("blacklisted_words", [])
+    all_keywords = _normalize_spam_keywords(
+        DEFAULT_SPAM_KEYWORDS + _normalize_spam_keywords(settings.get("blacklisted_words", []))
+    )
     for keyword in all_keywords:
-        if _normalize_for_spam(keyword) in normalized_text:
+        normalized_keyword = _normalize_for_spam(keyword)
+
+        # Critical fix: never allow empty normalized tokens to match everything.
+        if normalized_keyword:
+            if normalized_keyword in normalized_text:
+                return True
+            continue
+
+        # Emoji/symbol keywords may normalize to empty; match against raw text.
+        if keyword.lower() in raw_text_lower:
             return True
 
     # Excessive emoji burst check (≥8 emojis, no text)
@@ -875,6 +887,33 @@ async def _is_spam(comment_text: str, settings: Dict[str, Any]) -> bool:
         return True
 
     return False
+
+
+def _normalize_spam_keywords(value: Any) -> List[str]:
+    """Normalize blacklist values into a clean, unique list of keywords."""
+    if value is None:
+        return []
+
+    raw_items: List[Any]
+    if isinstance(value, list):
+        raw_items = value
+    else:
+        text = str(value)
+        raw_items = [part for part in text.replace("\n", ",").split(",")]
+
+    cleaned: List[str] = []
+    seen = set()
+    for item in raw_items:
+        token = str(item).strip()
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(token)
+
+    return cleaned
 
 
 def _is_blank_comment(comment_text: str) -> bool:
