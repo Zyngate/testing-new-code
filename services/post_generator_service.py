@@ -1967,6 +1967,7 @@ Return ONLY the title text.
         for p_norm in normalized_platforms
     ])
 
+
     captions = {}
     platform_ctas = {}
 
