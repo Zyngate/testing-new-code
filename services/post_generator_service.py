@@ -21,7 +21,7 @@ HASHTAG_LIMITS = {
     "linkedin": 10,
     "facebook": 10,
     "pinterest": 10,
-    "tiktok": 5,  # TikTok Community Guidelines: exactly 5 hashtags
+    "tiktok": 4,  # TikTok: exactly 4 hashtags
     "youtube": 10,
     "threads": 10,
     "twitter": 10,
@@ -181,6 +181,58 @@ BANNED_WORDS = [
     "obsessed", "literally", "no cap",
     "delulu"
 ]
+
+INSTAGRAM_FORBIDDEN_TERMS = (
+    "on-screen text",
+    "ocr",
+    "transcript",
+    "the phrase",
+    "this phrase",
+    "that phrase",
+    "the line",
+    "this line",
+)
+
+INSTAGRAM_FORBIDDEN_OPENERS = (
+    "this video shows",
+    "this video delves",
+    "the video shows",
+    "the video delves",
+    "in this video",
+)
+
+INSTAGRAM_GENERIC_ABSTRACT_TERMS = (
+    "the conversation",
+    "this conversation",
+    "the discussion",
+    "this discussion",
+    "raises important questions",
+    "nature of equality",
+    "complexities and nuances",
+)
+
+INSTAGRAM_ZERO_TOLERANCE_TERMS = (
+    "conversation",
+    "discussion",
+)
+
+INSTAGRAM_PASSIVE_OPENERS = (
+    "a distinction is made",
+    "it is discussed",
+    "it is explained",
+    "the discussion raises",
+)
+
+INSTAGRAM_OVERLAP_STOPWORDS = {
+    "the", "and", "that", "with", "from", "into", "this", "there", "their",
+    "about", "because", "while", "where", "which", "what", "when", "have",
+    "will", "would", "could", "should", "were", "been", "being", "they",
+    "then", "than", "just", "very", "more", "most", "also", "only", "over",
+    "under", "after", "before", "again", "still", "your", "you", "them",
+}
+
+TIKTOK_MIN_CHARS = 170
+TIKTOK_MAX_CHARS = 380
 
 # High-reach discovery tags for algorithm boost
 INSTAGRAM_DISCOVERY_CORE = [
@@ -571,8 +623,8 @@ async def fetch_platform_hashtags(
 
     platform = platform.lower()
 
-    # 🎯 TikTok Community Guidelines Hashtag Strategy
-    # Structure: 1×Tier1 (broad) + 2×Tier2 (mid-size) + 1×Tier3 (niche) + 1×Branded = 5 tags
+    # 🎯 TikTok Hashtag Strategy
+    # Structure: 1×Tier1 (broad) + 2×Tier2 (mid-size) + 1×Branded = 4 tags
     if platform == "tiktok":
         tags = []
 
@@ -592,28 +644,11 @@ async def fetch_platform_hashtags(
         tags.append(f"#{kws[1].replace(' ', '').lower()}")
         tags.append(f"#{kws[2].replace(' ', '').lower()}")
 
-        # 3️⃣ Tier 3 — Niche, highly specific (1 tag)
-        # Build from effective_query words for maximum specificity
-        safe_query = re.sub(
-            r"(pedophilia|child abuse|sexual abuse|rape|molestation)",
-            "",
-            effective_query,
-            flags=re.IGNORECASE
-        )
-
-        words = re.findall(r"[A-Za-z]+", safe_query)
-        
-        if len(words) >= 2:
-            niche = "#" + "".join(w.capitalize() for w in words[:2])
-        else:
-            niche = f"#{kws[0]}Tips"
-        tags.append(niche)
-
-        # 4️⃣ Branded/Community tag (1 tag)
+        # 3️⃣ Branded/Community tag (1 tag)
         tags.append("#StelleWorld")
 
-        # Return exactly 5 hashtags (CEO rule)
-        return tags[:5]
+        # Return exactly 4 hashtags
+        return tags[:4]
 
     # 1️⃣ Suggestion-based relevant tags
     clean_query = _sanitize_query_for_suggestions(effective_query, seed_keywords)
@@ -839,23 +874,19 @@ PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
 {identity_hook_rule}
 
 - 2–3 short lines.
-- Must reference a specific phrase from:
-  • OCR text
-  • Transcript
-+ DO NOT start with:
-+ - "The phrase"
-+ - "This phrase"
-+ - "That phrase"
-+ - "The line"
-+ - "This line"
+- Must reference one concrete detail from OCR or transcript naturally.
+- Do NOT label it as "OCR", "on-screen text", "transcript", "the phrase", "this phrase", "that phrase", "the line", or "this line".
+- Write the hook as if a human reacted in real time.
 
 PARAGRAPH 2 — CONTEXT & INSIGHT  
-- Explain what's happening in the video  
-- Add reasoning, meaning, or perspective  
-- Human, conversational tone  
-- Grounded in the actual video content  
-- This should be the longest paragraph
-- Never ever say what the human wore in the video 
+- This paragraph MUST add NEW information and MUST NOT repeat the hook wording or meaning.
+- Do NOT rephrase the hook sentence. Continue the story forward.
+- Explain what happens next and why it matters.
+- Human, conversational tone.
+- Grounded in actual moments from the video.
+- This should be the longest paragraph.
+- Never mention what anyone wore in the video.
+- FORBIDDEN OPENERS: "This video shows", "This video delves", "The video shows", "The video delves", "In this video".
 
 Example:
 -The guy in black suite
@@ -875,21 +906,23 @@ The caption should reflect the flow of the video, not just the theme.
 STYLE:
 - Human and engaging  
 - Confident, not corporate  
-- Clear, not abstract  
+- Clear, not abstract.
+- Sound like a real person typed it quickly but clearly.
+- Use varied sentence shapes; avoid repetitive structures.
 MANDATORY SPECIFICITY RULE:
 - You MUST reference at least ONE concrete detail from the topic.
-IMPORTANT:
-- The video includes {detected_person}.
-- Naturally reference {detected_person} 2-4 times.
-- Do NOT force the name.
 RULES:
 - You MAY reference visuals or moments in the video  
 - STRICTLY NO first-person language (no I, me, my, we)  
 - No emojis  
 - No hashtags inside the caption text  
 - Avoid generic motivational filler  
+
 SELF-CHECK:
 - If first-person appears, rewrite internally before responding  
+- If paragraph 2 repeats hook meaning, rewrite paragraph 2.
+- If any forbidden opener appears, rewrite before returning.
+- If "on-screen text" appears, rewrite before returning.
 
 
 LENGTH:
@@ -1220,7 +1253,7 @@ Return ONLY the description text.
 
     elif p_norm == "tiktok":
         return f"""
-Write a TikTok caption (MAX 250 characters).
+Write a TikTok caption (TARGET {TIKTOK_MIN_CHARS}-{TIKTOK_MAX_CHARS} characters).
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 STRUCTURE (STRICT)
@@ -1238,7 +1271,7 @@ DO NOT start with:
 "The phrase", "This phrase", "That phrase", "The line"
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-Line 2–3 — CONTEXT
+Line 2–4 — CONTEXT
 ━━━━━━━━━━━━━━━━━━━━━━━
 
 - Explain what the video delivers in simple, natural language
@@ -1251,7 +1284,7 @@ Line 2–3 — CONTEXT
 CONTENT RULES
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-- Keep it punchy and concise
+- Keep it punchy but not too short
 - Focus on ONE clear idea
 - No surreal, poetic, or vague writing
 - No exaggeration or fake drama
@@ -1298,7 +1331,7 @@ GLOBAL RULES
 FINAL CHECK
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-- Must be under 250 characters
+- Must be between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters
 - Hook must be in first line
 - Keywords must appear naturally
 - CTA must be present
@@ -1408,6 +1441,221 @@ def fix_dropped_first_char(text: str) -> str:
     text = re.sub(r"\bee\b", "free", text)
 
     return text
+
+
+def _instagram_paragraphs(text: str) -> List[str]:
+    return [p.strip() for p in text.split("\n\n") if p.strip()]
+
+
+def _token_set_for_overlap(text: str) -> Set[str]:
+    tokens = re.findall(r"[a-z]+", text.lower())
+    return {
+        t for t in tokens
+        if len(t) > 3 and t not in INSTAGRAM_OVERLAP_STOPWORDS
+    }
+
+
+def _has_instagram_forbidden_language(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in INSTAGRAM_FORBIDDEN_TERMS)
+
+
+def _paragraph_two_has_forbidden_opener(paragraph_two: str) -> bool:
+    p2 = paragraph_two.strip().lower()
+    return any(p2.startswith(prefix) for prefix in INSTAGRAM_FORBIDDEN_OPENERS)
+
+
+def _paragraph_has_passive_ai_opener(paragraph: str) -> bool:
+    lowered = paragraph.strip().lower()
+    return any(lowered.startswith(prefix) for prefix in INSTAGRAM_PASSIVE_OPENERS)
+
+
+def _has_instagram_generic_abstract_language(text: str) -> bool:
+    lowered = text.lower()
+    if any(term in lowered for term in INSTAGRAM_GENERIC_ABSTRACT_TERMS):
+        return True
+
+    # Zero-tolerance mode: reject any usage of these words.
+    if any(re.search(rf"\b{re.escape(term)}\b", lowered) for term in INSTAGRAM_ZERO_TOLERANCE_TERMS):
+        return True
+
+    # Reject captions that overuse abstract framing instead of concrete moments.
+    abstract_hits = 0
+    for token in ("debate",):
+        abstract_hits += len(re.findall(rf"\b{token}\b", lowered))
+    return abstract_hits >= 2
+
+
+def _is_hook_context_repetitive(hook: str, context: str) -> bool:
+    hook_tokens = _token_set_for_overlap(hook)
+    context_tokens = _token_set_for_overlap(context)
+    if not hook_tokens or not context_tokens:
+        return False
+
+    overlap = len(hook_tokens & context_tokens)
+    min_len = min(len(hook_tokens), len(context_tokens))
+    return overlap >= max(4, int(0.45 * min_len))
+
+
+def _needs_instagram_strict_rewrite(caption: str) -> bool:
+    paragraphs = _instagram_paragraphs(caption)
+    if len(paragraphs) < 3:
+        return True
+    if _has_instagram_forbidden_language(caption):
+        return True
+    if _has_instagram_generic_abstract_language(caption):
+        return True
+    if _paragraph_two_has_forbidden_opener(paragraphs[1]):
+        return True
+    if _paragraph_has_passive_ai_opener(paragraphs[1]):
+        return True
+    if _paragraph_has_passive_ai_opener(paragraphs[2]):
+        return True
+    if _is_hook_context_repetitive(paragraphs[0], paragraphs[1]):
+        return True
+    if _is_hook_context_repetitive(paragraphs[1], paragraphs[2]):
+        return True
+    return False
+
+
+async def _enforce_instagram_caption_strict(
+    caption_text: str,
+    effective_query: str,
+    detected_person: str | None,
+    ocr_text: str | None,
+    transcript: str | None,
+) -> str:
+    if not caption_text:
+        return caption_text
+
+    if not _needs_instagram_strict_rewrite(caption_text):
+        return caption_text
+
+    repair_prompt = f"""
+Rewrite this Instagram caption in EXACTLY 3 paragraphs.
+
+STRICT RULES:
+- Paragraph 1 = hook with one concrete detail.
+- Paragraph 2 = NEW progression only. Do NOT repeat hook wording or meaning.
+- Paragraph 3 = reflection only. Do NOT restate paragraph 2 in different words.
+- Paragraph 2 must NOT start with: This video shows / This video delves / The video shows / The video delves / In this video.
+- Paragraph 2 and 3 must NOT start with passive openers like: A distinction is made / The discussion raises.
+- Do NOT use these words/phrases anywhere: on-screen text, OCR, transcript, the phrase, this phrase, that phrase, the line, this line.
+- Avoid abstract filler words: conversation, discussion, debate, complexities and nuances.
+- Human, natural, conversational tone.
+- No first-person language.
+- No emojis. No hashtags.
+
+TOPIC:
+{effective_query}
+
+PERSON (if any):
+{detected_person or "none"}
+
+OCR:
+{(ocr_text or "")[:300]}
+
+TRANSCRIPT:
+{(transcript or "")[:300]}
+
+ORIGINAL CAPTION:
+{caption_text}
+
+Return ONLY the rewritten caption.
+"""
+
+    for pass_index in range(2):
+        pass_prompt = repair_prompt
+        if pass_index == 1:
+            pass_prompt += "\nSECOND PASS (MANDATORY): Remove every occurrence of the words 'conversation' and 'discussion'. Keep exactly 3 paragraphs.\n"
+
+        repaired = await safe_generate_caption(pass_prompt, platform="instagram", retries=1)
+        if repaired and not _needs_instagram_strict_rewrite(repaired):
+            return repaired.strip()
+
+    # Last-resort deterministic cleanup to avoid forbidden AI-like phrasing.
+    paragraphs = _instagram_paragraphs(caption_text)
+    while len(paragraphs) < 3:
+        paragraphs.append("")
+
+    p1, p2, p3 = paragraphs[:3]
+    lowered_p2 = p2.lower().strip()
+    for prefix in INSTAGRAM_FORBIDDEN_OPENERS:
+        if lowered_p2.startswith(prefix):
+            p2 = re.sub(r"^\s*[^.?!]*[.?!]?\s*", "Then the moment shifts: ", p2, count=1)
+            break
+
+    combined = "\n\n".join([p1, p2, p3]).strip()
+    for term in INSTAGRAM_FORBIDDEN_TERMS:
+        combined = re.sub(re.escape(term), "", combined, flags=re.IGNORECASE)
+
+    # Remove repetitive abstract framing that sounds AI-generated.
+    combined = re.sub(r"\b(the\s+)?conversation\b", "the moment", combined, flags=re.IGNORECASE)
+    combined = re.sub(r"\b(the\s+)?discussion\b", "the point", combined, flags=re.IGNORECASE)
+    combined = re.sub(r"\bdebate\b", "issue", combined, flags=re.IGNORECASE)
+
+    combined = re.sub(r"\s+", " ", combined)
+    combined = combined.replace(" .", ".").replace(" ,", ",").strip()
+    rebuilt = "\n\n".join([p.strip() for p in _instagram_paragraphs(combined)[:3] if p.strip()])
+    return rebuilt if rebuilt else caption_text
+
+
+def _trim_to_sentence_boundary(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[:max_chars]
+    cut = max(trimmed.rfind("."), trimmed.rfind("!"), trimmed.rfind("?"))
+    if cut != -1 and cut > int(max_chars * 0.6):
+        return trimmed[: cut + 1].strip()
+    return trimmed.rsplit(" ", 1)[0].strip()
+
+
+def _is_valid_tiktok_caption_length(text: str) -> bool:
+    length = len(text.strip())
+    return TIKTOK_MIN_CHARS <= length <= TIKTOK_MAX_CHARS
+
+
+async def _enforce_tiktok_caption_length(caption_text: str, effective_query: str) -> str:
+    if not caption_text:
+        return caption_text
+
+    if _is_valid_tiktok_caption_length(caption_text):
+        return caption_text
+
+    repair_prompt = f"""
+Rewrite this TikTok caption.
+
+STRICT RULES:
+- Keep it natural and human.
+- No first-person.
+- No emojis.
+- No hashtags.
+- Keep CTA in final line.
+- Use 3-4 short lines.
+- Final length MUST be between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters.
+
+TOPIC:
+{effective_query}
+
+ORIGINAL:
+{caption_text}
+
+Return ONLY the rewritten caption text.
+"""
+
+    repaired = await safe_generate_caption(repair_prompt, platform="tiktok", retries=1)
+    if repaired and _is_valid_tiktok_caption_length(repaired):
+        return repaired.strip()
+
+    fallback = caption_text.strip()
+    core_topic = " ".join(re.findall(r"[A-Za-z0-9]+", effective_query)[:10]).strip()
+    if len(fallback) < TIKTOK_MIN_CHARS:
+        add_line = f"\n\nKey detail: {core_topic}." if core_topic else "\n\nKey detail: the core point is practical and immediate."
+        while len(fallback) < TIKTOK_MIN_CHARS:
+            fallback += add_line
+
+    fallback = _trim_to_sentence_boundary(fallback, TIKTOK_MAX_CHARS)
+    return fallback
 
 # ---------------------------
 # CTA INJECTION ENGINE
@@ -1531,6 +1779,21 @@ async def _generate_caption_for_platform(
     caption_text = "\n\n".join(
         [" ".join(p.split()) for p in caption_text.split("\n\n") if p.strip()]
     )
+
+    if p_norm == "instagram" and caption_text:
+        caption_text = await _enforce_instagram_caption_strict(
+            caption_text,
+            effective_query,
+            detected_person,
+            ocr_text,
+            transcript,
+        )
+
+    if p_norm == "tiktok" and caption_text:
+        caption_text = await _enforce_tiktok_caption_length(
+            caption_text,
+            effective_query,
+        )
 
     if not caption_text:
         caption_text = f"Caption could not be generated for {p_norm}. Please retry."
@@ -1734,7 +1997,7 @@ Return ONLY the title text.
     )
 
     for p_norm, tags in hashtag_results:
-        # 🚀 Skip topic tag modification for TikTok (CEO rule: exact 5 tags)
+        # 🚀 Skip topic tag modification for TikTok (exact 4 tags)
         if p_norm == "tiktok":
             platform_hashtags[p_norm] = tags
             continue
@@ -1768,8 +2031,8 @@ Return ONLY the title text.
         platforms_combined = {}
         for p_norm in normalized_platforms:
             caption_text = captions.get(p_norm, "")
-            # TikTok: exactly 5 hashtags (CEO rule), others: up to 10
-            hashtag_limit = 5 if p_norm == "tiktok" else 10
+            # TikTok: exactly 4 hashtags, others: up to 10
+            hashtag_limit = 4 if p_norm == "tiktok" else 10
             hashtags_list = platform_hashtags.get(p_norm, [])[:hashtag_limit]
             selected_cta = platform_ctas.get(p_norm, "")
             title_text = titles.get(p_norm, "") if p_norm in ("youtube", "pinterest") else ""
