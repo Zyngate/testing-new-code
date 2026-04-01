@@ -236,8 +236,29 @@ TIKTOK_MAX_CHARS = 380
 
 # High-reach discovery tags for algorithm boost
 INSTAGRAM_DISCOVERY_CORE = [
-    "#fyp", "#explore", "#reels", "#foryou", "#explorepage"
+    "#fyp", "#explore", "#foryou", "#explorepage"
 ]
+
+_instagram_discovery_deck = INSTAGRAM_DISCOVERY_CORE[:]
+random.shuffle(_instagram_discovery_deck)
+_instagram_discovery_index = 0
+
+
+def _next_instagram_discovery_tag() -> str:
+    """Return a rotating discovery tag so consecutive videos don't repeat one tag."""
+    global _instagram_discovery_index, _instagram_discovery_deck
+
+    if not _instagram_discovery_deck:
+        return "#explore"
+
+    if _instagram_discovery_index >= len(_instagram_discovery_deck):
+        _instagram_discovery_deck = INSTAGRAM_DISCOVERY_CORE[:]
+        random.shuffle(_instagram_discovery_deck)
+        _instagram_discovery_index = 0
+
+    tag = _instagram_discovery_deck[_instagram_discovery_index]
+    _instagram_discovery_index += 1
+    return tag
 
 # Broad-tag blacklist: discovery/algorithmic boost tags that should NOT be used
 # as the 'broad/category' tag. We prefer category-level tags for the broad slot.
@@ -473,7 +494,7 @@ TRENDING_GENERATORS = {
 async def _fetch_trending_tag(platform: str, effective_query: str) -> str | None:
     """Fetch trending tag - run in parallel."""
     if platform == "instagram":
-        return random.choice(INSTAGRAM_DISCOVERY_CORE)
+        return _next_instagram_discovery_tag()
     
     pool = TRENDING_POOLS.get(platform, [])
     if pool:
@@ -735,6 +756,13 @@ async def fetch_platform_hashtags(
     random.shuffle(pool)
 
     trending_added = 0
+
+    # Use pre-fetched trending tag first so every request gets fresh rotation.
+    if trending_limit > 0 and trending_tag and trending_tag.lower() not in ordered_lower:
+        ordered_tags.append(trending_tag)
+        ordered_lower.add(trending_tag.lower())
+        trending_added += 1
+
     for tag in pool:
         if trending_added >= trending_limit:
             break
@@ -748,47 +776,74 @@ async def fetch_platform_hashtags(
 def enforce_instagram_constraints(text: str, target_chars: int = 1000) -> str:
     """
     Enforces:
-    - EXACTLY target_chars characters (including spaces)
-    - EXACTLY 3 paragraphs
-    - No sentence cut-off
+    - <= target_chars characters (including spaces)
+    - Exactly 3 paragraphs
+    - No repetitive filler loops
+    - No sentence cut-off at the end
     """
 
-    # 1️⃣ Normalize paragraphs FIRST (before counting)
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    min_chars = 900
 
-    # Force exactly 3 paragraphs
+    # 1) Normalize paragraphs first.
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     if len(paragraphs) > 3:
         paragraphs = paragraphs[:3]
     while len(paragraphs) < 3:
         paragraphs.append("")
 
-    text = "\n\n".join(paragraphs)
+    text = "\n\n".join(paragraphs).strip()
 
-    # 2️⃣ If too long → trim safely at sentence boundary
+    # 2) If too long, trim to sentence boundary.
     if len(text) > target_chars:
-        trimmed = text[:target_chars]
+        text = _trim_to_sentence_boundary(text, target_chars)
 
-        last_punct = max(
-            trimmed.rfind("."),
-            trimmed.rfind("?"),
-            trimmed.rfind("!")
-        )
+    # 3) If too short, expand paragraph 3 with varied non-repetitive lines.
+    expansion_lines = [
+        "The pressure now is not abstract; the next response carries real strategic weight.",
+        "What happens next will define whether this remains rhetoric or turns into policy.",
+        "That is why every public statement here functions as a signal, not just a soundbite.",
+        "Each line now raises the stakes for allies, opponents, and undecided observers alike.",
+        "The outcome depends on what action follows these words, not on the words alone.",
+    ]
 
-        if last_punct != -1:
-            trimmed = trimmed[: last_punct + 1]
-
-        text = trimmed.strip()
-
-    # 3️⃣ If too short → PAD safely (controlled filler)
-    filler = " Moments like this invite closer attention to how public images are shaped and interpreted."
-    while len(text) < target_chars:
-        # Add filler to LAST paragraph only
+    line_index = 0
+    while len(text) < min_chars and line_index < len(expansion_lines) * 2:
         parts = text.split("\n\n")
-        parts[-1] += filler
-        text = "\n\n".join(parts)
+        if len(parts) < 3:
+            while len(parts) < 3:
+                parts.append("")
 
-    # 4️⃣ Final hard trim (guaranteed safe now)
-    return text[:target_chars]
+        candidate = expansion_lines[line_index % len(expansion_lines)]
+        line_index += 1
+
+        # Avoid adding a sentence that already exists in the caption.
+        if candidate.lower() in text.lower():
+            continue
+
+        joiner = " " if parts[2].strip() else ""
+        parts[2] = (parts[2] + joiner + candidate).strip()
+        text = "\n\n".join(parts).strip()
+
+        if len(text) > target_chars:
+            text = _trim_to_sentence_boundary(text, target_chars)
+            break
+
+    # 4) Final safety trim and clean sentence ending.
+    if len(text) > target_chars:
+        text = _trim_to_sentence_boundary(text, target_chars)
+
+    text = text.strip()
+    if text and text[-1] not in ".!?":
+        text += "."
+
+    # Keep exactly 3 paragraph blocks after all edits.
+    final_parts = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if len(final_parts) > 3:
+        final_parts = final_parts[:3]
+    while len(final_parts) < 3:
+        final_parts.append("")
+
+    return "\n\n".join(final_parts).strip()
 
 
 
@@ -873,7 +928,7 @@ PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
 
 {identity_hook_rule}
 
-- 2–3 short lines.
+- 3-4 short lines.
 - Must reference one concrete detail from OCR or transcript naturally.
 - Do NOT label it as "OCR", "on-screen text", "transcript", "the phrase", "this phrase", "that phrase", "the line", or "this line".
 - Write the hook as if a human reacted in real time.
@@ -892,6 +947,7 @@ Example:
 -The guy in black suite
 
 PARAGRAPH 3 — REFLECTION / CTA  
+- 3-4 short lines.
 - Invite the viewer to think, react, or comment  
 - Natural and thoughtful, not salesy  
 - End with a question or reflective line
@@ -926,7 +982,7 @@ SELF-CHECK:
 
 
 LENGTH:
-- Long-form: 800–1,100 characters total  
+- Long-form: 900–1,000 characters total  
 - EXACTLY 3 paragraphs separated by a blank line  
 
 VIDEO DETAILS (USE THESE SPECIFICS CAREFULLY):
@@ -1788,6 +1844,7 @@ async def _generate_caption_for_platform(
             ocr_text,
             transcript,
         )
+        caption_text = enforce_instagram_constraints(caption_text, target_chars=1000)
 
     if p_norm == "tiktok" and caption_text:
         caption_text = await _enforce_tiktok_caption_length(
