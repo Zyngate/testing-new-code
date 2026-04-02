@@ -44,6 +44,15 @@ visualize_queries = {}
 visualize_jobs = {}
 deepsearch_queries = {}
 
+
+def _streaming_headers() -> Dict[str, str]:
+    """Headers that help proxies/clients avoid buffering streamed chunks."""
+    return {
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
 def is_small_talk(message: str) -> bool:
     msg = message.lower().strip()
     return msg in ["hi", "hello", "hey", "yo"]
@@ -541,13 +550,16 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 ),
             )
 
+        # /chat forwards into this handler and should stay lightweight for fast token streaming.
+        is_basic_chat_mode = request.url.path.rstrip("/").endswith("/chat")
+
         # --- Short-circuit: small talk ---
         if is_small_talk(user_message):
             reply = "Hello. How can I assist you?"
             asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
             async def _small_talk_stream():
                 yield reply
-            return StreamingResponse(_small_talk_stream(), media_type="text/plain")
+            return StreamingResponse(_small_talk_stream(), media_type="text/plain", headers=_streaming_headers())
 
         # --- Short-circuit: simple date/time query ---
         if is_simple_query(user_message):
@@ -559,7 +571,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
             async def _simple_query_stream():
                 yield reply
-            return StreamingResponse(_simple_query_stream(), media_type="text/plain")
+            return StreamingResponse(_simple_query_stream(), media_type="text/plain", headers=_streaming_headers())
 
         # --- 1. Gather Context (Goals, Files, URLs, Memory) ---
         active_goals = await goals_collection.find({"user_id": user_id, "status": {"$in": ["active", "in progress"]}}).to_list(None)
@@ -600,8 +612,11 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             unified_prompt += f"\n[Retrieved File & Code Context]:\n{multimodal_context}\n"
         unified_prompt += "\n\nRespond appropriately based on the query."
 
-        research_needed = await classify_prompt(user_message)
-        if research_needed == "research" and not multimodal_context:
+        research_needed = "none"
+        if not is_basic_chat_mode:
+            research_needed = await classify_prompt(user_message)
+
+        if (not is_basic_chat_mode) and research_needed == "research" and not multimodal_context:
             try:
                 ds_content, ds_sources = await query_deepsearch(user_message)
                 if ds_content and "Error" not in ds_content and "unavailable" not in ds_content:
@@ -620,7 +635,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 if research_results and research_results != "Error accessing internet information.":
                     unified_prompt += f"\n\n[Additional Research]:\n{research_results}"
 
-        if multimodal_context and any(k in user_message.lower() for k in ("visual", "visualize", "analyze", "analysis", "insight")):
+        if (not is_basic_chat_mode) and multimodal_context and any(k in user_message.lower() for k in ("visual", "visualize", "analyze", "analysis", "insight")):
             try:
                 viz = await visualize_content(multimodal_context)
                 unified_prompt += (
@@ -672,8 +687,13 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             "- Never output bracketed command lines like [TASK: ...] or [GOAL: ...].\n"
             "- If uncertain, state the uncertainty briefly and provide the best actionable answer.\n"
             "- Keep tone professional and natural.\n"
-            "- For short questions, answer in 1-3 sentences.\n"
-            "- For complex requests, use short numbered steps.\n"
+            "- For all substantive queries, use this structure in order:\n"
+            "  1) First line: brief empathy/appreciation/motivation tailored to the user request.\n"
+            "  2) Introduction: 1-2 lines framing the query and objective.\n"
+            "  3) Deep dive: concise bullet points with practical details, examples, or steps.\n"
+            "  4) Conclusion: 1-2 lines summarizing the key takeaway.\n"
+            "  5) Next question: end with one relevant follow-up question to continue progress.\n"
+            "- For very short/simple queries, keep it brief but still include a warm opener and a useful follow-up question.\n"
             "- Mention date/time only when user asks.\n\n"
             f"Current date and time: {current_date}"
         )
@@ -743,7 +763,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 )
             )
 
-        return StreamingResponse(generate_stream(), media_type="text/plain")
+        return StreamingResponse(generate_stream(), media_type="text/plain", headers=_streaming_headers())
 
     except HTTPException:
         raise
@@ -824,7 +844,13 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
 
     "When answering:\n"
     "- Use a neutral, informative, and direct tone.\n"
-    "- Structure responses with clear sections or bullets only if the question is complex.\n"
+    "- For all substantive queries, follow this exact flow:\n"
+    "  1) First line with empathy/appreciation/motivation relevant to user context.\n"
+    "  2) Brief introduction describing the query focus.\n"
+    "  3) Deep dive in concise bullet points with practical value.\n"
+    "  4) Short conclusion with key takeaway.\n"
+    "  5) End with one relevant next-step question.\n"
+    "- For simple queries, keep the answer short but include a warm opener and one follow-up question.\n"
     "- Avoid unnecessary elaboration or repetition.\n"
     "- Never sound like a coach, consultant, or motivational speaker.\n"
     "- Never use childish, playful, or overly friendly language.\n"
@@ -925,7 +951,7 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
             # Cleanup RAG chunks
             await update_rag_usage_and_cleanup(user_id, session_id)
 
-        return StreamingResponse(regeneration_stream(), media_type="text/plain")
+        return StreamingResponse(regeneration_stream(), media_type="text/plain", headers=_streaming_headers())
 
     except Exception as e:
         logger.error(f"Error in /regenerate endpoint: {e}")
