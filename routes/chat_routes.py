@@ -55,8 +55,9 @@ def _streaming_headers() -> Dict[str, str]:
 
 
 def _should_use_sse(request: Request) -> bool:
-    """Always use SSE for chat streaming reliability."""
-    return True
+    """Use SSE only when the client explicitly requests it."""
+    accept = (request.headers.get("accept") or "").lower()
+    return "text/event-stream" in accept
 
 
 def _stream_media_type(use_sse: bool) -> str:
@@ -797,7 +798,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 )
             )
 
-        return StreamingResponse(generate_stream(), media_type="text/event-stream", headers=_streaming_headers())
+        return StreamingResponse(generate_stream(), media_type=_stream_media_type(use_sse), headers=_streaming_headers())
 
     except HTTPException:
         raise
