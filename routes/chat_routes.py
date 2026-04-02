@@ -53,6 +53,28 @@ def _streaming_headers() -> Dict[str, str]:
         "X-Accel-Buffering": "no",
     }
 
+
+def _should_use_sse(request: Request) -> bool:
+    """Use SSE when requested, and default to SSE for /chat to improve proxy compatibility."""
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/event-stream" in accept:
+        return True
+    path = request.url.path.rstrip("/")
+    return path.endswith("/chat")
+
+
+def _stream_media_type(use_sse: bool) -> str:
+    return "text/event-stream" if use_sse else "text/plain"
+
+
+def _encode_stream_chunk(text: str, use_sse: bool) -> str:
+    if not use_sse:
+        return text
+    if not text:
+        return ""
+    # SSE requires each payload line to start with "data: ".
+    return "".join(f"data: {line}\n" for line in text.splitlines(True)) + "\n"
+
 def is_small_talk(message: str) -> bool:
     msg = message.lower().strip()
     return msg in ["hi", "hello", "hey", "yo"]
@@ -552,14 +574,17 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         # /chat forwards into this handler and should stay lightweight for fast token streaming.
         is_basic_chat_mode = request.url.path.rstrip("/").endswith("/chat")
+        use_sse = _should_use_sse(request)
 
         # --- Short-circuit: small talk ---
         if is_small_talk(user_message):
             reply = "Hello. How can I assist you?"
             asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
             async def _small_talk_stream():
-                yield reply
-            return StreamingResponse(_small_talk_stream(), media_type="text/plain", headers=_streaming_headers())
+                if use_sse:
+                    yield ": stream-open\n\n"
+                yield _encode_stream_chunk(reply, use_sse)
+            return StreamingResponse(_small_talk_stream(), media_type=_stream_media_type(use_sse), headers=_streaming_headers())
 
         # --- Short-circuit: simple date/time query ---
         if is_simple_query(user_message):
@@ -570,8 +595,10 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 reply = f"Today is {datetime.now().strftime('%B %d, %Y')}."
             asyncio.create_task(_persist_turn(user_id, session_id, user_message, reply))
             async def _simple_query_stream():
-                yield reply
-            return StreamingResponse(_simple_query_stream(), media_type="text/plain", headers=_streaming_headers())
+                if use_sse:
+                    yield ": stream-open\n\n"
+                yield _encode_stream_chunk(reply, use_sse)
+            return StreamingResponse(_simple_query_stream(), media_type=_stream_media_type(use_sse), headers=_streaming_headers())
 
         # --- 1. Gather Context (Goals, Files, URLs, Memory) ---
         active_goals = await goals_collection.find({"user_id": user_id, "status": {"$in": ["active", "in progress"]}}).to_list(None)
@@ -693,6 +720,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             "  3) Deep dive: concise bullet points with practical details, examples, or steps.\n"
             "  4) Conclusion: 1-2 lines summarizing the key takeaway.\n"
             "  5) Next question: end with one relevant follow-up question to continue progress.\n"
+            "- For substantive informational answers, target about 1800-2200 characters including spaces unless the user requests a different length.\n"
+            "- Keep depth high and specific; do not add filler just to increase length.\n"
             "- For very short/simple queries, keep it brief but still include a warm opener and a useful follow-up question.\n"
             "- Mention date/time only when user asks.\n\n"
             f"Current date and time: {current_date}"
@@ -720,6 +749,9 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             full_reply = ""
             last_visible = ""
             try:
+                if use_sse:
+                    # Early first bytes help some platforms flush the response pipeline.
+                    yield ": stream-open\n\n"
                 stream = await client_generate.chat.completions.create(
                     messages=cast(Any, messages),
                     model="llama-3.3-70b-versatile",
@@ -734,12 +766,12 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     if len(visible) > len(last_visible):
                         new_text = visible[len(last_visible):]
                         if new_text:
-                            yield new_text
+                            yield _encode_stream_chunk(new_text, use_sse)
                         last_visible = visible
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
                 fallback = "I encountered a temporary response issue. Please try again."
-                yield fallback
+                yield _encode_stream_chunk(fallback, use_sse)
                 asyncio.create_task(_persist_turn(user_id, session_id, user_message, fallback))
                 return
 
@@ -749,7 +781,10 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             if not reply_content_clean:
                 reply_content_clean = "I could not generate a usable response. Please rephrase and try again."
                 if len(reply_content_clean) > len(last_visible):
-                    yield reply_content_clean[len(last_visible):]
+                    yield _encode_stream_chunk(reply_content_clean[len(last_visible):], use_sse)
+
+            if use_sse:
+                yield "event: done\ndata: [DONE]\n\n"
 
             asyncio.create_task(
                 _post_stream_persist(
@@ -763,7 +798,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 )
             )
 
-        return StreamingResponse(generate_stream(), media_type="text/plain", headers=_streaming_headers())
+        return StreamingResponse(generate_stream(), media_type=_stream_media_type(use_sse), headers=_streaming_headers())
 
     except HTTPException:
         raise
@@ -850,6 +885,8 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
     "  3) Deep dive in concise bullet points with practical value.\n"
     "  4) Short conclusion with key takeaway.\n"
     "  5) End with one relevant next-step question.\n"
+    "- For substantive informational answers, target about 1800-2200 characters including spaces unless user asks for a different length.\n"
+    "- Add substance and specificity, not filler.\n"
     "- For simple queries, keep the answer short but include a warm opener and one follow-up question.\n"
     "- Avoid unnecessary elaboration or repetition.\n"
     "- Never sound like a coach, consultant, or motivational speaker.\n"
