@@ -48,19 +48,15 @@ deepsearch_queries = {}
 def _streaming_headers() -> Dict[str, str]:
     """Headers that help proxies/clients avoid buffering streamed chunks."""
     return {
-        "Cache-Control": "no-cache, no-transform",
+        "Cache-Control": "no-cache",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
     }
 
 
 def _should_use_sse(request: Request) -> bool:
-    """Use SSE when requested, and default to SSE for /chat to improve proxy compatibility."""
-    accept = (request.headers.get("accept") or "").lower()
-    if "text/event-stream" in accept:
-        return True
-    path = request.url.path.rstrip("/")
-    return path.endswith("/chat")
+    """Always use SSE for chat streaming reliability."""
+    return True
 
 
 def _stream_media_type(use_sse: bool) -> str:
@@ -72,8 +68,8 @@ def _encode_stream_chunk(text: str, use_sse: bool) -> str:
         return text
     if not text:
         return ""
-    # SSE requires each payload line to start with "data: ".
-    return "".join(f"data: {line}\n" for line in text.splitlines(True)) + "\n"
+    sse_safe = text.replace("\n", "\ndata: ")
+    return f"data: {sse_safe}\n\n"
 
 def is_small_talk(message: str) -> bool:
     msg = message.lower().strip()
@@ -717,9 +713,11 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             "- For all substantive queries, use this structure in order:\n"
             "  1) First line: brief empathy/appreciation/motivation tailored to the user request.\n"
             "  2) Introduction: 1-2 lines framing the query and objective.\n"
-            "  3) Deep dive: concise bullet points with practical details, examples, or steps.\n"
+            "  3) Deep Dive: write a heading exactly as 'Deep Dive:' and then provide at least 4 bullet points.\n"
+            "     Each bullet must start with '- ' and include practical details, examples, or steps.\n"
             "  4) Conclusion: 1-2 lines summarizing the key takeaway.\n"
             "  5) Next question: end with one relevant follow-up question to continue progress.\n"
+            "- Use explicit section labels exactly: 'Introduction:', 'Deep Dive:', 'Conclusion:'.\n"
             "- For substantive informational answers, target about 1800-2200 characters including spaces unless the user requests a different length.\n"
             "- Keep depth high and specific; do not add filler just to increase length.\n"
             "- For very short/simple queries, keep it brief but still include a warm opener and a useful follow-up question.\n"
@@ -767,6 +765,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                         new_text = visible[len(last_visible):]
                         if new_text:
                             yield _encode_stream_chunk(new_text, use_sse)
+                            await asyncio.sleep(0.01)
                         last_visible = visible
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
@@ -798,7 +797,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 )
             )
 
-        return StreamingResponse(generate_stream(), media_type=_stream_media_type(use_sse), headers=_streaming_headers())
+        return StreamingResponse(generate_stream(), media_type="text/event-stream", headers=_streaming_headers())
 
     except HTTPException:
         raise
@@ -882,9 +881,11 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
     "- For all substantive queries, follow this exact flow:\n"
     "  1) First line with empathy/appreciation/motivation relevant to user context.\n"
     "  2) Brief introduction describing the query focus.\n"
-    "  3) Deep dive in concise bullet points with practical value.\n"
+    "  3) Deep Dive: heading must be exactly 'Deep Dive:' followed by at least 4 bullets.\n"
+    "     Every bullet must begin with '- ' and contain practical value.\n"
     "  4) Short conclusion with key takeaway.\n"
     "  5) End with one relevant next-step question.\n"
+    "- Use section labels exactly: 'Introduction:', 'Deep Dive:', 'Conclusion:'.\n"
     "- For substantive informational answers, target about 1800-2200 characters including spaces unless user asks for a different length.\n"
     "- Add substance and specificity, not filler.\n"
     "- For simple queries, keep the answer short but include a warm opener and one follow-up question.\n"
