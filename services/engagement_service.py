@@ -62,8 +62,9 @@ MAX_COMMENT_INPUT_LEN = 1000
 # [SECURITY] Cap edited reply length in approve_reply
 MAX_EDITED_REPLY_LEN = 500
 
-# Default daily reply cap — overridden by settings.max_replies_per_day if set
-DEFAULT_MAX_DAILY_REPLIES = 200
+# Default daily reply cap.
+# 0 means unlimited (no daily cap).
+DEFAULT_MAX_DAILY_REPLIES = 0
 
 # Spam detection keywords (basic — extended per user via blacklisted_words)
 DEFAULT_SPAM_KEYWORDS = [
@@ -170,13 +171,7 @@ async def generate_reply_for_comment(
 
         reply_mode = settings.get("reply_mode", "automatic")
 
-        # [SECURITY] Enforce daily reply cap inside the core function
-        max_daily = settings.get("max_replies_per_day") or DEFAULT_MAX_DAILY_REPLIES
-        if max_daily > 0:
-            daily_count = await get_daily_reply_count(user_id)
-            if daily_count >= max_daily:
-                logger.info(f"🚫 Daily reply cap ({max_daily}) reached for user {user_id}")
-                return {"status": "skipped", "reason": "daily_limit_reached"}
+        # Daily reply cap disabled: autonomous engagement runs with unlimited daily replies.
 
         # ── 3. Blank comment check ──
         if _is_blank_comment(comment_text):
