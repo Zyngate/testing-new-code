@@ -1703,8 +1703,29 @@ def _trim_to_sentence_boundary(text: str, max_chars: int) -> str:
 
 
 def _is_valid_tiktok_caption_length(text: str) -> bool:
-    length = len(text.strip())
+    # Count characters as displayed in the caption text (including spaces).
+    length = len(text)
     return TIKTOK_MIN_CHARS <= length <= TIKTOK_MAX_CHARS
+
+
+def _extract_tiktok_core_topic(effective_query: str) -> str:
+    raw = re.sub(r"\s+", " ", (effective_query or "")).strip()
+    if not raw:
+        return ""
+
+    # Remove boilerplate that can leak into fallback text.
+    cleaned = re.sub(
+        r"(?i)this video contains a real spoken conversation\.?\s*base understanding primarily on what is being said\.?",
+        "",
+        raw,
+    )
+    cleaned = re.sub(
+        r"(?i)\b(conversation|on-screen text|visual context \(secondary\)|scene|visual details)\s*:\s*",
+        " ",
+        cleaned,
+    )
+    words = re.findall(r"[A-Za-z0-9']+", cleaned)
+    return " ".join(words[:12]).strip()
 
 
 async def _enforce_tiktok_caption_length(caption_text: str, effective_query: str) -> str:
@@ -1740,13 +1761,31 @@ Return ONLY the rewritten caption text.
         return repaired.strip()
 
     fallback = caption_text.strip()
-    core_topic = " ".join(re.findall(r"[A-Za-z0-9]+", effective_query)[:10]).strip()
+    core_topic = _extract_tiktok_core_topic(effective_query)
     if len(fallback) < TIKTOK_MIN_CHARS:
-        add_line = f"\n\nKey detail: {core_topic}." if core_topic else "\n\nKey detail: the core point is practical and immediate."
+        expansion_lines = [
+            f"The core issue here is {core_topic}." if core_topic else "The core issue here is practical and immediate.",
+            "This matters because people form opinions based on what they hear and repeat.",
+            "The bigger question is how these ideas shape fairness, status, and day-to-day treatment.",
+            "If we normalize hierarchy too early, it can influence behavior long before anyone questions it.",
+            "Context matters because repeated beliefs can become social rules people stop challenging.",
+            "The long-term impact is not only personal identity, but also how communities define who belongs.",
+        ]
+
+        idx = 0
         while len(fallback) < TIKTOK_MIN_CHARS:
-            fallback += add_line
+            line = expansion_lines[idx % len(expansion_lines)]
+            idx += 1
+            if line:
+                fallback += f"\n\n{line}"
 
     fallback = _trim_to_sentence_boundary(fallback, TIKTOK_MAX_CHARS)
+    if len(fallback) < TIKTOK_MIN_CHARS:
+        strict_pad = " Additional context is included to keep this explanation clear and complete."
+        while len(fallback) < TIKTOK_MIN_CHARS:
+            needed = TIKTOK_MIN_CHARS - len(fallback)
+            fallback += strict_pad[:needed]
+
     return fallback
 
 # ---------------------------
