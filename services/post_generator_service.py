@@ -244,8 +244,8 @@ INSTAGRAM_OVERLAP_STOPWORDS = {
     "under", "after", "before", "again", "still", "your", "you", "them",
 }
 
-TIKTOK_MIN_CHARS = 170
-TIKTOK_MAX_CHARS = 380
+TIKTOK_MIN_CHARS = 600
+TIKTOK_MAX_CHARS = 700
 
 # High-reach discovery tags for algorithm boost
 INSTAGRAM_DISCOVERY_CORE = [
