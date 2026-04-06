@@ -23,6 +23,804 @@ router = APIRouter()
 
 # Collection for user post analytics (used by recommendation engine)
 user_post_analytics_collection = db["user_post_analytics"]
+oauth_credentials_collection = db["oauthcredentials"]
+
+SUPPORTED_OVERVIEW_PLATFORMS = {
+    "instagram", "facebook", "threads", "pinterest", "tiktok", "youtube", "linkedin", "twitter", "x"
+}
+
+
+def _get_sunday_week_window(today_local):
+    """Return Sunday-start week window for a local date."""
+    days_since_sunday = (today_local.weekday() + 1) % 7
+    start_of_week = today_local - timedelta(days=days_since_sunday)
+    end_of_week = start_of_week + timedelta(days=6)
+    return start_of_week, end_of_week
+
+
+async def _get_user_timezone(user_id: str) -> pytz.BaseTzInfo:
+    """Fetch user timezone from DB with robust user lookup and safe UTC fallback."""
+    from bson import ObjectId
+
+    user_info = await users_collection.find_one({"user_id": user_id})
+
+    if not user_info:
+        user_info = await users_collection.find_one({"userId": user_id})
+
+    if not user_info:
+        user_info = await users_collection.find_one({"_id": user_id})
+
+    if not user_info and ObjectId.is_valid(user_id):
+        try:
+            user_info = await users_collection.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            user_info = None
+
+    tz_name = "UTC"
+    if user_info:
+        tz_name = (
+            user_info.get("time_zone")
+            or user_info.get("timezone")
+            or user_info.get("timeZone")
+            or user_info.get("settings", {}).get("timezone")
+            or user_info.get("preferences", {}).get("timezone")
+            or "UTC"
+        )
+
+    try:
+        return pytz.timezone(tz_name)
+    except Exception:
+        return pytz.UTC
+
+
+async def _get_connected_platforms(user_id: str) -> List[str]:
+    """Return normalized list of connected social platforms for the user."""
+    creds = await oauth_credentials_collection.find(
+        {"userId": user_id},
+        {"platform": 1, "_id": 0}
+    ).to_list(length=50)
+
+    platforms = []
+    for cred in creds:
+        platform = (cred.get("platform") or "").strip().lower()
+        if platform in SUPPORTED_OVERVIEW_PLATFORMS:
+            platforms.append(platform)
+
+    seen = set()
+    deduped = []
+    for platform in platforms:
+        if platform in seen:
+            continue
+        seen.add(platform)
+        deduped.append(platform)
+    return deduped
+
+
+def _merge_manual_edits(existing_plan: Dict[str, Any], regenerated_plan: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Preserve user changes when plan is regenerated.
+
+    Strategy:
+    - Preserve day-level custom focus text where present.
+    - Preserve task-level status and user-edited content by matching on (date, task_id)
+      with a fallback to (date, title).
+    """
+    if not existing_plan or not regenerated_plan:
+        return regenerated_plan
+
+    old_days = existing_plan.get("this_week_plan", [])
+    new_days = regenerated_plan.get("this_week_plan", [])
+
+    old_day_by_date = {d.get("date"): d for d in old_days if d.get("date")}
+
+    for day in new_days:
+        day_date = day.get("date")
+        old_day = old_day_by_date.get(day_date)
+        if not old_day:
+            continue
+
+        if old_day.get("daily_focus") and old_day.get("manually_edited") is True:
+            day["daily_focus"] = old_day.get("daily_focus")
+
+        old_tasks = old_day.get("tasks", [])
+        old_by_id = {t.get("task_id"): t for t in old_tasks if t.get("task_id")}
+        old_by_title = {(t.get("title") or "").strip().lower(): t for t in old_tasks if t.get("title")}
+
+        for task in day.get("tasks", []):
+            existing_task = None
+            task_id = task.get("task_id")
+            if task_id:
+                existing_task = old_by_id.get(task_id)
+            if not existing_task:
+                key = (task.get("title") or "").strip().lower()
+                existing_task = old_by_title.get(key)
+
+            if not existing_task:
+                continue
+
+            if "status" in existing_task:
+                task["status"] = existing_task["status"]
+
+            if existing_task.get("manually_edited") is True:
+                for field in ["description", "sub_tasks", "recommended_posting_time", "target_platform", "notes", "manually_edited"]:
+                    if field in existing_task:
+                        task[field] = existing_task[field]
+
+    return regenerated_plan
+
+
+def _normalize_platform_name(platform: str) -> str:
+    p = (platform or "").strip().lower()
+    if p == "x":
+        return "twitter"
+    return p
+
+
+def _to_time_label(slot: Dict[str, Any], tz_label: str) -> Optional[str]:
+    if slot.get("hour") is None:
+        return None
+    try:
+        hour = int(slot.get("hour"))
+        minute = int(slot.get("minute", 0) or 0)
+    except Exception:
+        return None
+    suffix = "AM" if hour < 12 else "PM"
+    hour12 = hour % 12 or 12
+    return f"{hour12}:{minute:02d} {suffix} ({tz_label})"
+
+
+def _time_label_to_minutes(time_label: str) -> int:
+    """Parse labels like '6:00 PM (UTC)' into minutes from midnight for sorting."""
+    try:
+        token = str(time_label or "").split("(")[0].strip()
+        hm, ampm = token.split(" ")
+        hour_str, minute_str = hm.split(":")
+        hour = int(hour_str)
+        minute = int(minute_str)
+        ampm = ampm.upper().strip()
+        if ampm == "PM" and hour != 12:
+            hour += 12
+        if ampm == "AM" and hour == 12:
+            hour = 0
+        return hour * 60 + minute
+    except Exception:
+        return 0
+
+
+def _format_post_count_label(count: int) -> str:
+    return "post" if int(count or 0) == 1 else "posts"
+
+
+def _platform_display_name(platform: str) -> str:
+    p = _normalize_platform_name(platform)
+    if p == "youtube":
+        return "YouTube Shorts"
+    if p == "tiktok":
+        return "TikTok"
+    if p == "linkedin":
+        return "LinkedIn"
+    return p.capitalize()
+
+
+def _sort_time_label_string(value: str) -> str:
+    parts = [p.strip() for p in str(value or "").split(",") if p.strip()]
+    if not parts:
+        return str(value or "")
+    parts = sorted(parts, key=_time_label_to_minutes)
+    return ", ".join(parts)
+
+
+def _apply_platform_display_normalization(text: str) -> str:
+    """Normalize platform display names in free-form text."""
+    if not text:
+        return text
+
+    replacements = {
+        "youtube_shorts": "YouTube Shorts",
+        "youtube shorts": "YouTube Shorts",
+        "youtube": "YouTube Shorts",
+        "tiktok": "TikTok",
+        "linkedin": "LinkedIn",
+        "instagram": "Instagram",
+        "facebook": "Facebook",
+        "threads": "Threads",
+        "pinterest": "Pinterest",
+        "twitter": "Twitter",
+    }
+
+    normalized = str(text)
+    for raw, display in replacements.items():
+        normalized = re.sub(rf"\\b{re.escape(raw)}\\b", display, normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _replace_time_segment_if_present(text: str, sorted_time_csv: str) -> str:
+    """Replace first 'at: ...' time segment with sorted times for readability."""
+    if not text or not sorted_time_csv:
+        return text
+    return re.sub(r"(at:\\s*)([^\\.\\n]+)", rf"\\g<1>{sorted_time_csv}", str(text), count=1, flags=re.IGNORECASE)
+
+
+def _sanitize_overview_plan_for_display(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize generated/cached overview plan text for cleaner UI output."""
+    if not isinstance(plan, dict):
+        return plan
+
+    for day in (plan.get("this_week_plan") or []):
+        for task in (day.get("tasks") or []):
+            posts_to_publish = int(task.get("posts_to_publish", 0) or 0)
+
+            title = str(task.get("title") or "")
+            if "quota:" in title.lower() and posts_to_publish > 0:
+                platform = _platform_display_name(task.get("target_platform") or "")
+                post_label = _format_post_count_label(posts_to_publish)
+                task["title"] = f"{platform} quota: {posts_to_publish} {post_label}"
+
+            rec_time = task.get("recommended_posting_time")
+            sorted_times = ""
+            if isinstance(rec_time, str) and "," in rec_time:
+                sorted_times = _sort_time_label_string(rec_time)
+                task["recommended_posting_time"] = sorted_times
+            elif isinstance(rec_time, str):
+                sorted_times = rec_time
+
+            description = str(task.get("description") or "")
+            description = _apply_platform_display_normalization(description)
+            description = _replace_time_segment_if_present(description, sorted_times)
+            if posts_to_publish == 1:
+                description = re.sub(r"\\b1\\s+posts\\b", "1 post", description, flags=re.IGNORECASE)
+            task["description"] = description
+
+            ai_content = task.get("ai_provided_content") or {}
+            if isinstance(ai_content, dict):
+                complete_data = str(ai_content.get("complete_data") or "")
+                complete_data = _apply_platform_display_normalization(complete_data)
+                if posts_to_publish == 1:
+                    complete_data = re.sub(r"\\b1\\s+posts\\b", "1 post", complete_data, flags=re.IGNORECASE)
+                ai_content["complete_data"] = complete_data
+
+                optimal = str(ai_content.get("optimal_posting_info") or "")
+                optimal = _apply_platform_display_normalization(optimal)
+                optimal = _replace_time_segment_if_present(optimal, sorted_times)
+                if posts_to_publish == 1:
+                    optimal = re.sub(r"\\b1\\s+posts\\b", "1 post", optimal, flags=re.IGNORECASE)
+                ai_content["optimal_posting_info"] = optimal
+                task["ai_provided_content"] = ai_content
+
+            for sub in (task.get("sub_tasks") or []):
+                ai_text = str(sub.get("ai_content") or "")
+                ai_text = _apply_platform_display_normalization(ai_text)
+                ai_text = _replace_time_segment_if_present(ai_text, sorted_times)
+                if posts_to_publish == 1:
+                    ai_text = re.sub(r"\\b1\\s+posts\\b", "1 post", ai_text, flags=re.IGNORECASE)
+                    ai_text = re.sub(r"\\b1\\s+sets\\b", "1 set", ai_text, flags=re.IGNORECASE)
+                    ai_text = re.sub(r"\\b1\\s+captions\\b", "1 caption", ai_text, flags=re.IGNORECASE)
+                sub["ai_content"] = ai_text
+
+            target_platform = task.get("target_platform")
+            if isinstance(target_platform, str):
+                task["target_platform"] = _normalize_platform_name(target_platform)
+
+    for weekly_target in (plan.get("weekly_posting_targets") or []):
+        if isinstance(weekly_target, dict):
+            display_name = _platform_display_name(weekly_target.get("platform") or "")
+            weekly_target["platform_display"] = display_name
+
+    return plan
+
+
+def _display_category(category: str) -> str:
+    return str(category or "general").replace("_", " ").strip().title()
+
+
+def _target_posts_per_week(platform: str, post_count: int, avg_engagement_rate: float) -> int:
+    """Return aggressive weekly posting targets for growth mode."""
+    p = _normalize_platform_name(platform)
+    aggressive_platforms = {"instagram", "threads", "tiktok", "youtube"}
+
+    if p in aggressive_platforms:
+        if post_count >= 40 or avg_engagement_rate >= 8:
+            return 20
+        if post_count >= 20 or avg_engagement_rate >= 5:
+            return 18
+        return 15
+
+    if post_count >= 30 or avg_engagement_rate >= 7:
+        return 12
+    if post_count >= 12 or avg_engagement_rate >= 4:
+        return 10
+    return 8
+
+
+def _default_categories_for_platform(platform: str) -> List[str]:
+    defaults = {
+        "instagram": ["technology", "educational", "behind_the_scenes"],
+        "facebook": ["educational", "community_question", "technology"],
+        "tiktok": ["technology", "educational", "trend_reaction"],
+        "youtube": ["tutorial", "technology", "educational"],
+        "linkedin": ["industry_trends", "educational", "case_study"],
+        "threads": ["technology", "hot_take", "conversation_starter"],
+        "pinterest": ["educational", "how_to_visual", "infographic"],
+        "twitter": ["technology", "thread", "market_commentary"],
+    }
+    return defaults.get(platform, ["technology", "educational", "community"])
+
+
+def _extract_ranked_categories(doc: Dict[str, Any], platform: str) -> List[str]:
+    ranked = []
+
+    direct = (
+        doc.get("top_categories")
+        or doc.get("topCategories")
+        or doc.get("best_categories")
+        or doc.get("content_categories")
+        or doc.get("contentCategories")
+        or []
+    )
+    for item in direct:
+        cat = str(item or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if cat:
+            ranked.append(cat)
+
+    breakdown = (
+        doc.get("content_category_breakdown")
+        or doc.get("contentCategoryBreakdown")
+        or doc.get("category_breakdown")
+        or {}
+    )
+    if isinstance(breakdown, dict):
+        try:
+            sorted_items = sorted(
+                breakdown.items(),
+                key=lambda kv: float(
+                    (kv[1] or {}).get("avg_engagement_rate", 0)
+                    or (kv[1] or {}).get("avg_engagement", 0)
+                    or (kv[1] or {}).get("engagement_score", 0)
+                    or 0
+                ) if isinstance(kv[1], dict) else 0,
+                reverse=True,
+            )
+            for name, _metrics in sorted_items:
+                cat = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
+                if cat:
+                    ranked.append(cat)
+        except Exception:
+            pass
+
+    deduped = []
+    seen = set()
+    for cat in ranked:
+        if cat in seen:
+            continue
+        seen.add(cat)
+        deduped.append(cat)
+
+    if not deduped:
+        deduped = _default_categories_for_platform(platform)
+
+    return deduped[:5]
+
+
+def _extract_ranked_slots(doc: Dict[str, Any], tz_label: str) -> List[str]:
+    slots = doc.get("best_time_slots") or []
+    if not isinstance(slots, list):
+        slots = []
+
+    def _slot_score(slot: Dict[str, Any]) -> float:
+        return float(slot.get("engagement_score", 0) or 0) * max(1.0, float(slot.get("recency_weight", 1.0) or 1.0))
+
+    normalized = [s for s in slots if isinstance(s, dict) and s.get("hour") is not None]
+    normalized.sort(key=_slot_score, reverse=True)
+
+    labels = []
+    for slot in normalized[:5]:
+        label = _to_time_label(slot, tz_label)
+        if label:
+            labels.append(label)
+
+    if not labels:
+        labels = [f"9:00 AM ({tz_label})", f"1:00 PM ({tz_label})", f"6:00 PM ({tz_label})"]
+
+    deduped = []
+    seen = set()
+    for label in labels:
+        if label in seen:
+            continue
+        seen.add(label)
+        deduped.append(label)
+    return deduped
+
+
+async def _build_overview_analytics_profile(user_id: str, connected_platforms: List[str], user_tz: pytz.BaseTzInfo) -> Dict[str, Any]:
+    tz_label = datetime.now(user_tz).tzname() or str(user_tz)
+    profile = {}
+
+    for platform in connected_platforms:
+        platform = _normalize_platform_name(platform)
+        doc = await user_post_analytics_collection.find_one({"userId": user_id, "platform": platform})
+        if not doc:
+            doc = await user_post_analytics_collection.find_one({"user_id": user_id, "platform": platform})
+        doc = doc or {}
+
+        post_count = int(doc.get("post_count", 0) or 0)
+        avg_rate = float(doc.get("avg_engagement_rate", 0) or 0)
+        categories = _extract_ranked_categories(doc, platform)
+        slots = _extract_ranked_slots(doc, tz_label)
+
+        profile[platform] = {
+            "post_count": post_count,
+            "avg_engagement_rate": avg_rate,
+            "categories": categories,
+            "best_times": slots,
+            "weekly_post_target": _target_posts_per_week(platform, post_count, avg_rate),
+        }
+
+    return {
+        "timezone_label": tz_label,
+        "platforms": profile,
+    }
+
+
+def _normalize_week_dates_for_overview(plan_data: Dict[str, Any], start_of_week) -> Dict[str, Any]:
+    day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+    by_date = {d.get("date"): d for d in (plan_data.get("this_week_plan") or []) if d.get("date")}
+    normalized_days = []
+
+    for idx, day_name in enumerate(day_names):
+        date_val = (start_of_week + timedelta(days=idx)).strftime("%Y-%m-%d")
+        existing = by_date.get(date_val, {})
+        normalized_days.append({
+            "date": date_val,
+            "day_of_week": day_name,
+            "daily_focus": existing.get("daily_focus", "Engagement growth execution"),
+            "tasks": existing.get("tasks", []),
+            "daily_kpi_target": existing.get("daily_kpi_target", {
+                "total_comments_target": 0,
+                "total_shares_target": 0,
+                "follower_growth_target_pct": 0.0,
+            })
+        })
+
+    plan_data["this_week_plan"] = normalized_days
+    return plan_data
+
+
+def _build_overview_week_plan(
+    start_of_week,
+    connected_platforms: List[str],
+    analytics_profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    tz_label = analytics_profile.get("timezone_label", "UTC")
+    platform_data = analytics_profile.get("platforms", {})
+
+    if not connected_platforms:
+        return {
+            "strategic_approach": "Connect social platforms to receive a personalized 7-day engagement plan.",
+            "recommendation_alignment": {
+                "platforms_detected": [],
+                "posting_schedule_source": "research_data",
+                "key_insights": ["No connected platforms found."],
+            },
+            "weekly_posting_targets": [],
+            "this_week_plan": [],
+            "product_playbook": {
+                "auto_posting": "Connect a platform and schedule posts with Stelle Auto Posting.",
+                "autonomous_engagement": "Enable Autonomous Engagement after publish to handle early replies.",
+                "auto_caption": "Use Auto Caption Generator to craft hook-first captions.",
+                "hashtag_generator": "Use Hashtag Generator to create platform-fit tag sets.",
+            },
+        }
+
+    aggressive_platforms = {"instagram", "threads", "tiktok", "youtube"}
+
+    def _distribute_weekly_count(total: int) -> List[int]:
+        base = total // 7
+        rem = total % 7
+        distribution = []
+        for i in range(7):
+            distribution.append(base + (1 if i < rem else 0))
+        return distribution
+
+    weekly_targets = []
+    per_platform_daily_quota: Dict[str, List[int]] = {}
+
+    for platform in connected_platforms:
+        pdata = platform_data.get(platform, {})
+        weekly_target = int(pdata.get("weekly_post_target", 8) or 8)
+        per_platform_daily_quota[platform] = _distribute_weekly_count(weekly_target)
+
+        weekly_targets.append({
+            "platform": platform,
+            "recommended_posts_per_week": weekly_target,
+            "priority_categories": pdata.get("categories", [])[:3],
+            "best_posting_times": pdata.get("best_times", [])[:3],
+            "mode": "aggressive_start" if platform in aggressive_platforms else "active_support",
+            "execution_note": (
+                "Post aggressively (15-20/week) and answer all comments fast with Autonomous Engagement."
+                if platform in aggressive_platforms
+                else "Maintain consistent posting with Auto Posting and active comment replies."
+            )
+        })
+
+    daily_focuses = [
+        "Hook-Driven Reach Day",
+        "Educational Saves Day",
+        "Conversation & Comments Day",
+        "Authority & Proof Day",
+        "Shareability Push Day",
+        "Community Momentum Day",
+        "Weekly Recap & Optimization Day",
+    ]
+
+    this_week_plan = []
+
+    for day_idx in range(7):
+        day_tasks = []
+
+        for platform in connected_platforms:
+            posts_today = per_platform_daily_quota.get(platform, [0] * 7)[day_idx]
+            if posts_today <= 0:
+                continue
+
+            pdata = platform_data.get(platform, {})
+            categories = pdata.get("categories", []) or _default_categories_for_platform(platform)
+            best_times = pdata.get("best_times", []) or [f"9:00 AM ({tz_label})"]
+
+            cat_primary = categories[day_idx % len(categories)]
+            cat_secondary = categories[(day_idx + 1) % len(categories)]
+            selected_times = []
+            for i in range(posts_today):
+                selected_times.append(best_times[(day_idx + i) % len(best_times)])
+            selected_times = sorted(selected_times, key=_time_label_to_minutes)
+            avg_rate = float(pdata.get("avg_engagement_rate", 0) or 0)
+
+            task_id = f"{(start_of_week + timedelta(days=day_idx)).strftime('%Y%m%d')}-{platform}-quota"
+            platform_label = _platform_display_name(platform)
+            post_label = _format_post_count_label(posts_today)
+            title = f"{platform_label} quota: {posts_today} {post_label}"
+
+            joined_times = ", ".join(selected_times)
+            aggressive_note = "Use aggressive growth mode." if platform in aggressive_platforms else "Maintain steady publishing momentum."
+
+            description = (
+                f"Publish {posts_today} {_display_category(cat_primary)} / {_display_category(cat_secondary)} {post_label} on {platform_label} today at: {joined_times}. "
+                f"{aggressive_note} Generate captions with Auto Caption Generator, generate hashtags, schedule every post with Auto Posting, "
+                f"and use Autonomous Engagement to answer all comments quickly after each publish."
+            )
+
+            comments_target = max(8, posts_today * max(3, int(2 + avg_rate * 0.5)))
+            shares_target = max(4, posts_today * max(2, int(1 + avg_rate * 0.3)))
+
+            day_tasks.append({
+                "task_id": task_id,
+                "title": title,
+                "status": "not started",
+                "description": description,
+                "recommended_posting_time": joined_times,
+                "target_platform": platform,
+                "posts_to_publish": posts_today,
+                "ai_provided_content": {
+                    "complete_data": (
+                        f"Today's theme stack: {_display_category(cat_primary)} then {_display_category(cat_secondary)}. "
+                        f"Publish {posts_today} {post_label} with distinct hooks and one comment CTA per post."
+                    ),
+                    "optimal_posting_info": (
+                        f"Recommended slots from analytics for {platform_label}: {joined_times}. "
+                        f"Category focus is {_display_category(cat_primary)} / {_display_category(cat_secondary)}."
+                    ),
+                    "product_feature_recommendation": (
+                        "Execution stack: Auto Caption Generator -> Hashtag Generator -> Auto Posting -> Autonomous Engagement. "
+                        "Comment policy: reply to all meaningful comments within 120 minutes."
+                    )
+                },
+                "sub_tasks": [
+                    {
+                        "title": "Generate caption",
+                        "description": "Create final caption using Auto Caption Generator.",
+                        "ai_content": (
+                            f"Generate {posts_today} distinct caption{'s' if posts_today != 1 else ''} around {_display_category(cat_primary)} and {_display_category(cat_secondary)}. "
+                            "Each caption needs: hook, value, CTA question."
+                        )
+                    },
+                    {
+                        "title": "Generate hashtags",
+                        "description": "Create platform-fit hashtags with Hashtag Generator.",
+                        "ai_content": (
+                            f"Generate hashtag sets per post ({posts_today} set{'s' if posts_today != 1 else ''}): 4 broad + 6 niche + 2 branded tags each."
+                        )
+                    },
+                    {
+                        "title": "Schedule post",
+                        "description": "Schedule in Stelle Auto Posting at the recommended slot.",
+                        "ai_content": f"Schedule all {posts_today} {post_label} at: {joined_times}. Validate previews before queueing."
+                    },
+                    {
+                        "title": "Enable autonomous engagement",
+                        "description": "Turn on Autonomous Engagement immediately after publish.",
+                        "ai_content": (
+                            "Run Autonomous Engagement for each post. Reply to all comments quickly (target under 15 minutes) "
+                            "and keep it active for the first 90-120 minutes after every publish."
+                        )
+                    }
+                ],
+                "kpi_targets": {
+                    "comments": comments_target,
+                    "shares": shares_target,
+                    "follower_growth": max(1, posts_today // 2),
+                },
+                "kpi_target": {
+                    "engagement_rate_lift_pct": 10,
+                    "comment_growth_pct": 15,
+                    "share_growth_pct": 10,
+                    "follower_growth_pct": 3,
+                }
+            })
+
+        total_comments = sum((t.get("kpi_targets") or {}).get("comments", 0) for t in day_tasks)
+        total_shares = sum((t.get("kpi_targets") or {}).get("shares", 0) for t in day_tasks)
+        total_posts = sum(int(t.get("posts_to_publish", 0) or 0) for t in day_tasks)
+
+        this_week_plan.append({
+            "date": (start_of_week + timedelta(days=day_idx)).strftime("%Y-%m-%d"),
+            "day_of_week": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day_idx],
+            "daily_focus": daily_focuses[day_idx],
+            "tasks": day_tasks,
+            "daily_kpi_target": {
+                "total_posts_target": total_posts,
+                "total_comments_target": total_comments,
+                "total_shares_target": total_shares,
+                "follower_growth_target_pct": round(0.5 + 0.03 * min(20, total_posts), 2),
+            }
+        })
+
+    source = "user_analytics" if any((platform_data.get(p, {}) or {}).get("post_count", 0) >= 5 for p in connected_platforms) else "research_data"
+
+    return {
+        "strategic_approach": (
+            "Aggressive 7-day growth sprint built from your analytics: post frequently, schedule every post via Auto Posting, "
+            "and answer all comments fast using Autonomous Engagement to maximize early momentum."
+        ),
+        "recommendation_alignment": {
+            "platforms_detected": connected_platforms,
+            "posting_schedule_source": source,
+            "key_insights": [
+                "Aggressive-start mode recommends 15-20 posts/week on Instagram, Threads, TikTok, and YouTube Shorts.",
+                "Category priorities come from top-performing category signals in user analytics.",
+                "Recommended posting times prioritize your best engagement time slots.",
+                "Auto Posting + Autonomous Engagement is mandatory for execution and fast comment response."
+            ]
+        },
+        "weekly_posting_targets": weekly_targets,
+        "this_week_plan": this_week_plan,
+        "product_playbook": {
+            "auto_posting": "Schedule every post at its recommended time using Stelle Auto Posting.",
+            "autonomous_engagement": "Enable Autonomous Engagement for 90-120 minutes post-publish.",
+            "auto_caption": "Draft and refine each caption with Auto Caption Generator before scheduling.",
+            "hashtag_generator": "Generate platform-fit hashtags per post using Hashtag Generator.",
+            "execution_sequence": [
+                "Choose platform and category from daily plan",
+                "Generate caption with Auto Caption Generator",
+                "Generate hashtags with Hashtag Generator",
+                "Schedule with Auto Posting at recommended slot",
+                "Enable Autonomous Engagement after publish",
+                "Review daily KPI and adjust next-day content angle"
+            ]
+        }
+    }
+
+
+@router.get("/overview-week-plan")
+async def get_overview_week_plan(
+    user_id: str,
+    force_refresh: bool = False,
+    user_timezone: Optional[str] = None,
+    timezone_alias: Optional[str] = Query(default=None, alias="timezone"),
+):
+    """Return analytics-driven 7-day social engagement plan for overview."""
+    try:
+        requested_tz = user_timezone or timezone_alias
+        if requested_tz:
+            try:
+                user_tz = pytz.timezone(requested_tz)
+            except Exception:
+                user_tz = await _get_user_timezone(user_id)
+        else:
+            user_tz = await _get_user_timezone(user_id)
+
+        today = datetime.now(user_tz).date()
+        start_of_week, end_of_week = _get_sunday_week_window(today)
+        week_start_date_str = start_of_week.strftime("%Y-%m-%d")
+        week_end_date_str = end_of_week.strftime("%Y-%m-%d")
+
+        existing_plan_doc = await weekly_plans_collection.find_one({
+            "user_id": user_id,
+            "week_start_date": week_start_date_str,
+            "plan_type": "overview_7day"
+        })
+
+        if existing_plan_doc and not force_refresh:
+            cached_plan = _sanitize_overview_plan_for_display(existing_plan_doc.get("plan", {}))
+            await weekly_plans_collection.update_one(
+                {"_id": existing_plan_doc["_id"]},
+                {
+                    "$set": {
+                        "plan": cached_plan,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                }
+            )
+            return {
+                "success": True,
+                "week_start_date": week_start_date_str,
+                "week_end_date": week_end_date_str,
+                "plan": cached_plan,
+                "connected_platforms": existing_plan_doc.get("connected_platforms", []),
+                "timezone_used": datetime.now(user_tz).tzname() or str(user_tz),
+                "source": "cached",
+            }
+
+        connected_platforms = [
+            _normalize_platform_name(p)
+            for p in await _get_connected_platforms(user_id)
+        ]
+
+        deduped_platforms = []
+        seen = set()
+        for p in connected_platforms:
+            if p in seen:
+                continue
+            seen.add(p)
+            deduped_platforms.append(p)
+        connected_platforms = deduped_platforms
+
+        analytics_profile = await _build_overview_analytics_profile(user_id, connected_platforms, user_tz)
+        generated_plan = _build_overview_week_plan(start_of_week, connected_platforms, analytics_profile)
+        generated_plan = _normalize_week_dates_for_overview(generated_plan, start_of_week)
+
+        final_plan = generated_plan
+        if existing_plan_doc:
+            final_plan = _merge_manual_edits(existing_plan_doc.get("plan", {}), generated_plan)
+            await weekly_plans_collection.update_one(
+                {"_id": existing_plan_doc["_id"]},
+                {
+                    "$set": {
+                        "plan": final_plan,
+                        "week_end_date": week_end_date_str,
+                        "connected_platforms": connected_platforms,
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                }
+            )
+            source = "refreshed"
+        else:
+            await weekly_plans_collection.insert_one({
+                "user_id": user_id,
+                "week_start_date": week_start_date_str,
+                "week_end_date": week_end_date_str,
+                "plan_type": "overview_7day",
+                "plan": final_plan,
+                "connected_platforms": connected_platforms,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            })
+            source = "generated"
+
+        final_plan = _sanitize_overview_plan_for_display(final_plan)
+
+        return {
+            "success": True,
+            "week_start_date": week_start_date_str,
+            "week_end_date": week_end_date_str,
+            "plan": final_plan,
+            "connected_platforms": connected_platforms,
+            "timezone_used": datetime.now(user_tz).tzname() or str(user_tz),
+            "source": source,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in /overview-week-plan endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 
 # --- Utility for Plan Generation ---
