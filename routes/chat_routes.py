@@ -800,7 +800,11 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     delta = chunk.choices[0].delta.content or ""
                     if delta:
                         full_reply += delta
-                        yield delta
+                        # Split into words and yield one by one with delay
+                        words = re.findall(r"\S+\s*|\n", delta)
+                        for word in words:
+                            yield word
+                            await asyncio.sleep(0.05)
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
                 fallback = "I encountered a temporary response issue. Please try again."
@@ -833,7 +837,6 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
     except Exception as e:
         logger.error(f"Error in /generate endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal error processing your request: {e}")
-
 
 @router.post("/regenerate", response_model=GenerateResponse)
 async def regenerate_response_endpoint(request: RegenerateRequest, background_tasks: BackgroundTasks):
