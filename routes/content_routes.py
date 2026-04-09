@@ -4,7 +4,7 @@ import json
 import asyncio
 import base64
 from datetime import datetime, timezone 
-from typing import List, Dict, Any # <-- CRITICAL: Dict, Any, List needed for routing fix
+from typing import List, Dict, Any, Optional # <-- CRITICAL: Dict, Any, List needed for routing fix
 
 from fastapi import APIRouter, HTTPException, Form, File, WebSocket, WebSocketDisconnect, UploadFile # <-- ADDED UploadFile
 from fastapi.responses import JSONResponse
@@ -26,6 +26,14 @@ from services.common_utils import logger, websocket_queries
 
 
 router = APIRouter()
+
+
+VISION_MODELS = [
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.2-90b-vision-preview",
+    "llama-3.2-11b-vision-preview",
+]
 
 # --- Utility Functions for Visualization ---
 
@@ -154,9 +162,9 @@ async def websocket_endpoint_visualization(websocket: WebSocket, query_id: str):
 # FIX: Added response_model=Dict[str, Any] for analyze-images endpoint
 @router.post("/analyze-images", response_model=Dict[str, Any])
 async def analyze_images_endpoint(
-    user_id: str = Form(...),
-    session_id: str = Form(...),
-    query: str = Form(...),
+    user_id: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None),
+    query: str = Form("Describe these images in plain English."),
     # CRITICAL FIX: Use List[UploadFile] here too
     images: List[UploadFile] = File(...),
 ):
@@ -165,6 +173,10 @@ async def analyze_images_endpoint(
     
     if not 0 < len(images) <= 3:
         return {"error": "Please upload 1 to 3 images."}
+
+    for image in images:
+        if image.content_type and not image.content_type.startswith("image/"):
+            return {"error": f"Unsupported file type: {image.content_type}. Please upload image files only."}
 
     user_message_text = f"Query regarding images: {query}"
     user_embedding = await generate_text_embedding(user_message_text)
@@ -176,54 +188,71 @@ async def analyze_images_endpoint(
         data_url = f"data:{image.content_type};base64,{base64_image}"
         content.append({"type": "image_url", "image_url": {"url": data_url}})
 
-    # Use AsyncGroq client
+    # Use AsyncGroq client with vision-capable model fallback.
     client_async = await get_groq_client()
-    response = await client_async.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": "Return response in plain english. Do not use LaTeX"},
-            {"role": "user", "content": content},
-        ],
-        temperature=1,
-        max_completion_tokens=1024,
-        top_p=1,
-    )
-    output = response.choices[0].message.content
+    output = ""
+    last_error = None
 
-    assistant_embedding = await generate_text_embedding(output)
+    for model_name in VISION_MODELS:
+        try:
+            response = await client_async.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "Return response in plain english. Do not use LaTeX"},
+                    {"role": "user", "content": content},
+                ],
+                temperature=0.3,
+                max_completion_tokens=1024,
+                top_p=1,
+            )
+            output = (response.choices[0].message.content or "").strip()
+            if output:
+                break
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Vision model {model_name} failed for /content/analyze-images: {e}")
 
-    new_messages = [
-        {"role": "user", "content": user_message_text, "embedding": user_embedding},
-        {"role": "assistant", "content": output, "embedding": assistant_embedding},
-    ]
-
-    chat_entry = await chats_collection.find_one(
-        {"user_id": user_id, "session_id": session_id}
-    )
-    
-    update_fields = {
-        "$push": {"messages": {"$each": new_messages}},
-        "$set": {"last_updated": datetime.now(timezone.utc)},
-    }
-    
-    if chat_entry:
-        await chats_collection.update_one(
-            {"_id": chat_entry["_id"]},
-            update_fields
-        )
-    else:
-        await chats_collection.insert_one(
-            {
-                "user_id": user_id, "session_id": session_id, "messages": new_messages,
-                "last_updated": datetime.now(timezone.utc),
-            }
+    if not output:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Image analysis failed across all vision models: {last_error}",
         )
 
-    updated_chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
-    if updated_chat_entry and len(updated_chat_entry.get("messages", [])) >= 10:
-        from services.ai_service import store_long_term_memory
-        asyncio.create_task(
-            store_long_term_memory(user_id, session_id, updated_chat_entry["messages"][-10:])
+    if user_id and session_id:
+        assistant_embedding = await generate_text_embedding(output)
+
+        new_messages = [
+            {"role": "user", "content": user_message_text, "embedding": user_embedding},
+            {"role": "assistant", "content": output, "embedding": assistant_embedding},
+        ]
+
+        chat_entry = await chats_collection.find_one(
+            {"user_id": user_id, "session_id": session_id}
         )
+
+        update_fields = {
+            "$push": {"messages": {"$each": new_messages}},
+            "$set": {"last_updated": datetime.now(timezone.utc)},
+        }
+
+        if chat_entry:
+            await chats_collection.update_one(
+                {"_id": chat_entry["_id"]},
+                update_fields
+            )
+        else:
+            await chats_collection.insert_one(
+                {
+                    "user_id": user_id, "session_id": session_id, "messages": new_messages,
+                    "last_updated": datetime.now(timezone.utc),
+                }
+            )
+
+        updated_chat_entry = await chats_collection.find_one({"user_id": user_id, "session_id": session_id})
+        if updated_chat_entry and len(updated_chat_entry.get("messages", [])) >= 10:
+            from services.ai_service import store_long_term_memory
+            asyncio.create_task(
+                store_long_term_memory(user_id, session_id, updated_chat_entry["messages"][-10:])
+            )
 
     return {"output": output}

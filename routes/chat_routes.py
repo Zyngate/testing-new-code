@@ -48,16 +48,35 @@ deepsearch_queries = {}
 def _streaming_headers() -> Dict[str, str]:
     """Headers that help proxies/clients avoid buffering streamed chunks."""
     return {
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
+        "X-Content-Type-Options": "nosniff",
     }
 
 
-def _should_use_sse(request: Request) -> bool:
-    """Use SSE only when the client explicitly requests it."""
+def _should_use_sse(request: Request, payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Use SSE when explicitly requested by headers, query params, or request body flags."""
     accept = (request.headers.get("accept") or "").lower()
-    return "text/event-stream" in accept
+    if "text/event-stream" in accept:
+        return True
+
+    query_stream = (request.query_params.get("stream") or request.query_params.get("stream_mode") or "").lower().strip()
+    if query_stream in {"sse", "event-stream"}:
+        return True
+
+    header_stream = (request.headers.get("x-stream-mode") or "").lower().strip()
+    if header_stream in {"sse", "event-stream"}:
+        return True
+
+    if payload and isinstance(payload, dict):
+        body_mode = str(payload.get("stream_mode") or payload.get("streamMode") or "").lower().strip()
+        if body_mode in {"sse", "event-stream"}:
+            return True
+        if payload.get("sse") is True:
+            return True
+
+    return False
 
 
 def _stream_media_type(use_sse: bool) -> str:
@@ -71,6 +90,18 @@ def _encode_stream_chunk(text: str, use_sse: bool) -> str:
         return ""
     sse_safe = text.replace("\n", "\ndata: ")
     return f"data: {sse_safe}\n\n"
+
+
+async def _yield_word_chunks(text: str, use_sse: bool, delay_seconds: float = 0.01):
+    """Yield text in small word-level pieces to make streaming visibly incremental in UI."""
+    if not text:
+        return
+    parts = re.findall(r"\S+\s*|\n", text)
+    for part in parts:
+        if not part:
+            continue
+        yield _encode_stream_chunk(part, use_sse)
+        await asyncio.sleep(delay_seconds)
 
 def is_small_talk(message: str) -> bool:
     msg = message.lower().strip()
@@ -571,7 +602,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         # /chat forwards into this handler and should stay lightweight for fast token streaming.
         is_basic_chat_mode = request.url.path.rstrip("/").endswith("/chat")
-        use_sse = _should_use_sse(request)
+        use_sse = _should_use_sse(request, data)
 
         # --- Short-circuit: small talk ---
         if is_small_talk(user_message):
@@ -719,6 +750,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             "  4) Conclusion: 1-2 lines summarizing the key takeaway.\n"
             "  5) Next question: end with one relevant follow-up question to continue progress.\n"
             "- Use explicit section labels exactly: 'Introduction:', 'Deep Dive:', 'Conclusion:'.\n"
+            "- Use bullets only inside 'Deep Dive:'. Do not use bullets in empathy line, Introduction, Conclusion, or next question.\n"
+            "- Write 'Conclusion:' as plain prose on new lines, not inline with bullet points.\n"
             "- For substantive informational answers, target about 1800-2200 characters including spaces unless the user requests a different length.\n"
             "- Keep depth high and specific; do not add filler just to increase length.\n"
             "- For very short/simple queries, keep it brief but still include a warm opener and a useful follow-up question.\n"
@@ -765,8 +798,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     if len(visible) > len(last_visible):
                         new_text = visible[len(last_visible):]
                         if new_text:
-                            yield _encode_stream_chunk(new_text, use_sse)
-                            await asyncio.sleep(0.01)
+                            async for word_chunk in _yield_word_chunks(new_text, use_sse):
+                                yield word_chunk
                         last_visible = visible
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
@@ -781,7 +814,8 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             if not reply_content_clean:
                 reply_content_clean = "I could not generate a usable response. Please rephrase and try again."
                 if len(reply_content_clean) > len(last_visible):
-                    yield _encode_stream_chunk(reply_content_clean[len(last_visible):], use_sse)
+                    async for word_chunk in _yield_word_chunks(reply_content_clean[len(last_visible):], use_sse):
+                        yield word_chunk
 
             if use_sse:
                 yield "event: done\ndata: [DONE]\n\n"
@@ -887,6 +921,8 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
     "  4) Short conclusion with key takeaway.\n"
     "  5) End with one relevant next-step question.\n"
     "- Use section labels exactly: 'Introduction:', 'Deep Dive:', 'Conclusion:'.\n"
+    "- Allow bullets only in 'Deep Dive:'. No bullets are allowed in the empathy line, Introduction, Conclusion, or follow-up question.\n"
+    "- 'Conclusion:' must be paragraph text on its own lines, not appended to any bullet.\n"
     "- For substantive informational answers, target about 1800-2200 characters including spaces unless user asks for a different length.\n"
     "- Add substance and specificity, not filler.\n"
     "- For simple queries, keep the answer short but include a warm opener and one follow-up question.\n"
@@ -946,7 +982,8 @@ async def regenerate_response_endpoint(request: RegenerateRequest, background_ta
                     flags=re.DOTALL
                 )
                 if visible_delta.strip():
-                    yield visible_delta
+                    async for word_chunk in _yield_word_chunks(visible_delta, False):
+                        yield word_chunk
 
 
             reply_content = full_reply.strip()
