@@ -80,7 +80,7 @@ def _should_use_sse(request: Request, payload: Optional[Dict[str, Any]] = None) 
 
 
 def _stream_media_type(use_sse: bool) -> str:
-    return "text/plain"
+    return "text/event-stream" if use_sse else "text/plain"
 
 
 def _encode_stream_chunk(text: str, use_sse: bool) -> str:
@@ -800,10 +800,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     delta = chunk.choices[0].delta.content or ""
                     if delta:
                         full_reply += delta
-                        # Split into words and yield one by one with delay
-                        for char in delta:
-                            yield char
-                            await asyncio.sleep(0.015)  # 🔥 smooth typing speed
+                        yield _encode_stream_chunk(delta, use_sse)
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
                 fallback = "I encountered a temporary response issue. Please try again."
