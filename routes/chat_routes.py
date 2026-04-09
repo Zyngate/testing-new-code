@@ -602,7 +602,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         # /chat forwards into this handler and should stay lightweight for fast token streaming.
         is_basic_chat_mode = request.url.path.rstrip("/").endswith("/chat")
-        use_sse = _should_use_sse(request, data)
+        use_sse = False
 
         # --- Short-circuit: small talk ---
         if is_small_talk(user_message):
