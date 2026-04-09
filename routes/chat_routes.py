@@ -76,11 +76,11 @@ def _should_use_sse(request: Request, payload: Optional[Dict[str, Any]] = None) 
         if payload.get("sse") is True:
             return True
 
-    return True
+    return False
 
 
 def _stream_media_type(use_sse: bool) -> str:
-    return "text/event-stream" if use_sse else "text/plain"
+    return "text/plain"
 
 
 def _encode_stream_chunk(text: str, use_sse: bool) -> str:
@@ -790,9 +790,6 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             full_reply = ""
             last_visible = ""
             try:
-                if use_sse:
-                    # Early first bytes help some platforms flush the response pipeline.
-                    yield ": stream-open\n\n"
                 stream = await client_generate.chat.completions.create(
                     messages=cast(Any, messages),
                     model="llama-3.3-70b-versatile",
