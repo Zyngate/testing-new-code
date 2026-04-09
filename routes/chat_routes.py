@@ -801,10 +801,9 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                     if delta:
                         full_reply += delta
                         # Split into words and yield one by one with delay
-                        words = re.findall(r"\S+\s*|\n", delta)
-                        for word in words:
-                            yield word
-                            await asyncio.sleep(0.05)
+                        for char in delta:
+                            yield char
+                            await asyncio.sleep(0.015)  # 🔥 smooth typing speed
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
                 fallback = "I encountered a temporary response issue. Please try again."
