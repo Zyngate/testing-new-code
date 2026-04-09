@@ -589,6 +589,18 @@ async def _caption_from_video_file_inner(
         marketing_prompt = cached["marketing_prompt"]
         objects_detected = cached.get("objects", [])
         actions_detected = cached.get("actions", [])
+
+        # Backfill linkage when cache exists but scheduled_post_id becomes available later.
+        if scheduled_post_id:
+            try:
+                await save_video_analysis(
+                    video_hash,
+                    cached,
+                    user_id=user_id,
+                    scheduled_post_id=scheduled_post_id,
+                )
+            except Exception as e:
+                logger.warning(f"Could not backfill scheduled_post_id in video cache: {e}")
     else:
         logger.info("🔄 No cache found - running Vision + STT pipeline")
         

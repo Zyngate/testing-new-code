@@ -124,6 +124,16 @@ async def analyze_post_content(
             if cached_video and has_transcript:
                 # ✅ Cache HIT with transcript — reuse everything
                 additional_context = _build_video_context(cached_video)
+                # Backfill linkage for older cache rows created before scheduled_post_id was known.
+                try:
+                    await save_video_analysis(
+                        video_hash,
+                        cached_video,
+                        user_id=user_id,
+                        scheduled_post_id=post_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not backfill scheduled_post_id in video cache for post {post_id}: {e}")
                 logger.info(f"♻️ Reused video cache (with transcript) for post {post_id}")
 
             else:
