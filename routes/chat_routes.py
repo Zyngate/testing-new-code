@@ -788,7 +788,6 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
 
         async def generate_stream():
             full_reply = ""
-            last_visible = ""
             try:
                 stream = await client_generate.chat.completions.create(
                     messages=cast(Any, messages),
@@ -799,18 +798,13 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
                 )
                 async for chunk in stream:
                     delta = chunk.choices[0].delta.content or ""
-                    full_reply += delta
-                    visible = _clean_chat_response_text(full_reply)
-                    if len(visible) > len(last_visible):
-                        new_text = visible[len(last_visible):]
-                        if new_text:
-                            async for word_chunk in _yield_word_chunks(new_text, use_sse):
-                                yield word_chunk
-                        last_visible = visible
+                    if delta:
+                        full_reply += delta
+                        yield delta
             except Exception as stream_err:
                 logger.error(f"Stream error in /generate: {stream_err}")
                 fallback = "I encountered a temporary response issue. Please try again."
-                yield _encode_stream_chunk(fallback, use_sse)
+                yield fallback
                 asyncio.create_task(_persist_turn(user_id, session_id, user_message, fallback))
                 return
 
@@ -818,13 +812,7 @@ async def generate_response_endpoint(request: Request, background_tasks: Backgro
             reply_content_clean = _clean_chat_response_text(reply_content)
 
             if not reply_content_clean:
-                reply_content_clean = "I could not generate a usable response. Please rephrase and try again."
-                if len(reply_content_clean) > len(last_visible):
-                    async for word_chunk in _yield_word_chunks(reply_content_clean[len(last_visible):], use_sse):
-                        yield word_chunk
-
-            if use_sse:
-                yield "event: done\ndata: [DONE]\n\n"
+                yield "I could not generate a usable response. Please rephrase and try again."
 
             asyncio.create_task(
                 _post_stream_persist(
