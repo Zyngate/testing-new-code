@@ -678,7 +678,7 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
         q = query.lower()
         needs_browsing = not any(k in q for k in philosophy_keywords)
 
-        model="llama-3.3-70b-versatile",
+        model="llama-3.3-70b-versatile"
 
         # ---- STRUCTURE-FIRST SYSTEM PROMPT ----
         system_prompt = (
