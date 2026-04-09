@@ -322,7 +322,7 @@ async def query_internet_via_groq(query: str, return_sources: bool = False):
         completion = await asyncio.to_thread(
             internet_client.chat.completions.create,
             messages=[{"role": "user", "content": query}],
-            model="compound-beta",
+            model="llama-3.3-70b-versatile",
         )
         content = completion.choices[0].message.content
 
@@ -678,7 +678,7 @@ async def query_deepsearch(query: str) -> Tuple[str, List[Dict[str, str]]]:
         q = query.lower()
         needs_browsing = not any(k in q for k in philosophy_keywords)
 
-        model = "compound-beta" if needs_browsing else "llama-3.3-70b-versatile"
+        model="llama-3.3-70b-versatile",
 
         # ---- STRUCTURE-FIRST SYSTEM PROMPT ----
         system_prompt = (
