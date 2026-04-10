@@ -1331,7 +1331,9 @@ STRUCTURE (STRICT)
 
 ONE SINGLE PARAGRAPH ONLY — NO line breaks, NO blank lines between sentences.
 
-Start with a strong hook (bold claim, sharp question, or relatable pain point).
+Start with a strong hook. Prefer a bold statement, surprising fact, or relatable pain point over a question.
+Only use a question if no strong statement fits the topic.
+Avoid starting with "What" — it is overused. If using a question, start with "Ever", "Ever noticed", "Think about", or similar instead.
 Then continue with context and keywords in the SAME paragraph.
 End with a natural CTA in the SAME paragraph.
 
