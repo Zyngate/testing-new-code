@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 service = RecommendationService()  # Uses .env key automatically
 
 class RecommendationRequest(BaseModel):
-    posts: List[PostData]  # ✅ Keep Pydantic Union
+    posts: List[Dict[str, Any]]
+    analytics: Optional[Dict[str, Dict[str, Any]]] = None
+    timezone: Optional[str] = "UTC"
 
 class SaveAnalyticsRequest(BaseModel):
     userId: str
@@ -40,12 +42,108 @@ class GetOptimalTimesRequest(BaseModel):
     platforms: List[str]
     timezone: Optional[str] = None  # User's timezone (e.g., 'Asia/Kolkata'); auto-fetched from DB if not provided
 
+
+def _detect_platform_from_link(link: str) -> str:
+    url = (link or "").lower()
+    if "youtube.com" in url or "youtu.be" in url:
+        return "youtube"
+    if "threads.net" in url or "threads.com" in url:
+        return "threads"
+    if "instagram.com" in url:
+        return "instagram"
+    if "linkedin.com" in url:
+        return "linkedin"
+    if "tiktok.com" in url:
+        return "tiktok"
+    if "facebook.com" in url or "fb.com" in url:
+        return "facebook"
+    return "instagram"
+
+
+def _normalize_single_post(post: Dict[str, Any], default_tz: str = "UTC") -> PostData:
+    platform = _detect_platform_from_link(str(post.get("link", "")))
+    post_type = str(post.get("type", "VIDEO")).upper()
+    posting_time = str(post.get("posting_time") or post.get("timestamp") or "")
+    if not posting_time:
+        from datetime import datetime
+        posting_time = datetime.utcnow().isoformat() + "Z"
+
+    common = {
+        "link": str(post.get("link", "")),
+        "type": post_type,
+        "likes": int(post.get("likes", 0) or 0),
+        "views": int(post.get("views", 0) or 0),
+        "posting_time": posting_time,
+        "caption": str(post.get("caption", "") or ""),
+        "time_zone": str(post.get("time_zone", default_tz) or default_tz),
+    }
+
+    if platform == "youtube":
+        return YouTubePost(
+            **common,
+            comments=int(post.get("comments", 0) or 0),
+            shares=int(post.get("shares", 0) or 0),
+            favourites=int(post.get("favourites", 0) or 0),
+        )
+
+    if platform == "threads":
+        return ThreadsPost(
+            **common,
+            replies=int(post.get("replies", 0) or 0),
+            reposts=int(post.get("reposts", 0) or 0),
+        )
+
+    if platform == "linkedin":
+        return LinkedInPost(
+            **common,
+            comments=int(post.get("comments", 0) or 0),
+            shares=int(post.get("shares", 0) or 0),
+        )
+
+    if platform == "tiktok":
+        return TikTokPost(
+            **common,
+            comments=int(post.get("comments", 0) or 0),
+            shares=int(post.get("shares", 0) or 0),
+        )
+
+    if platform == "facebook":
+        return FacebookPost(
+            **common,
+            comments=int(post.get("comments", 0) or 0),
+            shares=int(post.get("shares", 0) or 0),
+            saved=int(post.get("saved", 0) or 0),
+            interactions=int(post.get("interactions", 0) or 0),
+            reach=int(post.get("reach", 0) or 0),
+        )
+
+    return InstagramPost(
+        **common,
+        comments=int(post.get("comments", 0) or 0),
+        shares=int(post.get("shares", 0) or 0),
+        saved=int(post.get("saved", 0) or 0),
+        interactions=int(post.get("interactions", 0) or 0),
+        reach=int(post.get("reach", 0) or 0),
+    )
+
 @router.post("/analyze", response_model=dict)
 async def analyze_recommendation(request: RecommendationRequest):
     """Full recommendation analysis endpoint"""
     try:
-        # ✅ Pass Pydantic models DIRECTLY - NO .dict() conversion!
-        result = service.generate_recommendations(request.posts)
+        # Supports legacy normalized payloads and raw YouTube payloads with separate analytics.
+        normalized_posts = []
+
+        if request.analytics is not None:
+            normalized_posts = service.normalize_youtube_payload(
+                posts=request.posts,
+                analytics=request.analytics,
+                time_zone=request.timezone or "UTC"
+            )
+        else:
+            for post in request.posts:
+                normalized_posts.append(_normalize_single_post(post, request.timezone or "UTC"))
+
+        result = service.generate_recommendations(normalized_posts)
         return result
     except Exception as e:
         tb = traceback.format_exc()
