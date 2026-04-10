@@ -186,6 +186,7 @@ class YouTubePost(BaseModel):
     likes: int
     comments: int
     shares: int
+    favourites: int = 0
     views: int
     posting_time: str
     caption: str
@@ -331,7 +332,7 @@ class RecommendationResponse(BaseModel):
     user_timezone: str
     timezone_display_name: str
     posts_by_platform: Dict[str, int]
-    overview_totals: Dict[str, Any]  # Total metrics: likes, comments, replies, reposts, shares, views, saved
+    overview_totals: Dict[str, Any]  # Total metrics: likes, comments, replies, reposts, shares, views, saved, favourites
     content_performance: Dict[str, float]
     content_performance_by_rate: Dict[str, float]
     time_performance: Dict[str, Any]
@@ -565,6 +566,7 @@ class RecommendationEngine:
             views = post_dict.get('views', 0)
             reach = post_dict.get('reach', 0)
             saved = post_dict.get('saved', 0)
+            favourites = post_dict.get('favourites', 0)
             interactions = post_dict.get('interactions', 0)
 
             if platform == 'threads':
@@ -622,7 +624,7 @@ class RecommendationEngine:
                 print(f"Error processing posting_time '{post_dict.get('posting_time', 'N/A')}': {e}")
                 posting_time_user = datetime.now(user_tz)
 
-            engagement_score = likes + (comments * 2) + (shares * 3) + saved
+            engagement_score = likes + (comments * 2) + (shares * 3) + saved + favourites
             engagement_rate = (engagement_score / max(views, reach, 1)) * 100
 
             category = self.content_analyzer.extract_category_from_caption(post_dict['caption'], platform)
@@ -637,6 +639,7 @@ class RecommendationEngine:
                 'shares': shares,
                 'reposts': post_dict.get('reposts', 0) if platform == 'threads' else 0,
                 'saved': saved,
+                'favourites': favourites,
                 'interactions': interactions,
                 'views': views,
                 'reach': reach,
@@ -2341,6 +2344,45 @@ class RecommendationService:
     def __init__(self, api_key: str = None):
         self.engine = RecommendationEngine(api_key)
 
+    def normalize_youtube_payload(
+        self,
+        posts: List[Dict[str, Any]],
+        analytics: Optional[Dict[str, Dict[str, Any]]] = None,
+        time_zone: str = "UTC"
+    ) -> List[YouTubePost]:
+        """Convert raw YouTube payload (posts + analytics map) into YouTubePost models."""
+        analytics = analytics or {}
+        normalized_posts: List[YouTubePost] = []
+
+        for post in posts or []:
+            post_id = str(post.get('id', '')).strip()
+            post_analytics = analytics.get(post_id, {}) if post_id else {}
+
+            permalink = post.get('permalink')
+            if not permalink and post_id:
+                permalink = f"https://www.youtube.com/watch?v={post_id}"
+
+            posting_time = post.get('timestamp') or datetime.utcnow().isoformat() + "Z"
+            caption = post.get('caption') or post.get('title') or ""
+            media_type = str(post.get('media_type') or "VIDEO").upper()
+
+            normalized_posts.append(
+                YouTubePost(
+                    link=permalink or "https://www.youtube.com",
+                    type=media_type,
+                    likes=int(post_analytics.get('likes', post.get('likes', 0) or 0)),
+                    comments=int(post_analytics.get('comments', post.get('comments', 0) or 0)),
+                    shares=int(post_analytics.get('shares', post.get('shares', 0) or 0)),
+                    favourites=int(post_analytics.get('favourites', post.get('favourites', 0) or 0)),
+                    views=int(post_analytics.get('views', post.get('views', 0) or 0)),
+                    posting_time=posting_time,
+                    caption=caption,
+                    time_zone=time_zone,
+                )
+            )
+
+        return normalized_posts
+
     def generate_recommendations(self, posts: List[PostData]) -> Dict[str, Any]:
         """Main entry point - generates full recommendation response"""
         if not posts:
@@ -2378,6 +2420,7 @@ class RecommendationService:
             'total_reposts': int(df['reposts'].sum()) if 'reposts' in df.columns else 0,
             'total_views': int(df['views'].sum()) if 'views' in df.columns else 0,
             'total_saved': int(df['saved'].sum()) if 'saved' in df.columns else 0,
+            'total_favourites': int(df['favourites'].sum()) if 'favourites' in df.columns else 0,
             'total_interactions': int(df['interactions'].sum()) if 'interactions' in df.columns else 0,
             'avg_engagement_rate': float(df['engagement_rate'].mean()) if 'engagement_rate' in df.columns else 0.0,
         }
