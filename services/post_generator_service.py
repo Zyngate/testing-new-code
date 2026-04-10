@@ -1323,32 +1323,20 @@ Return ONLY the description text.
 
     elif p_norm == "tiktok":
         return f"""
-Write a TikTok caption (TARGET {TIKTOK_MIN_CHARS}-{TIKTOK_MAX_CHARS} characters).
+Write a TikTok caption. Length MUST be strictly between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters including spaces. This is non-negotiable.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 STRUCTURE (STRICT)
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-Line 1 — HOOK (MOST IMPORTANT)
-- The strongest sentence
-- Must grab attention immediately (before "more")
-- Can be:
-  • a bold claim
-  • a sharp question
-  • a relatable pain point
+ONE SINGLE PARAGRAPH ONLY — NO line breaks, NO blank lines between sentences.
+
+Start with a strong hook (bold claim, sharp question, or relatable pain point).
+Then continue with context and keywords in the SAME paragraph.
+End with a natural CTA in the SAME paragraph.
 
 DO NOT start with:
 "The phrase", "This phrase", "That phrase", "The line"
-
-━━━━━━━━━━━━━━━━━━━━━━━
-Line 2–4 — CONTEXT
-━━━━━━━━━━━━━━━━━━━━━━━
-
-- Explain what the video delivers in simple, natural language
-- MUST include 1–2 strong keywords from the content
-- Keep it clear, not abstract
-- No storytelling, no fluff
-
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 CONTENT RULES
@@ -1401,8 +1389,8 @@ GLOBAL RULES
 FINAL CHECK
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-- Must be between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters
-- Hook must be in first line
+- Count characters including spaces. If below {TIKTOK_MIN_CHARS}, keep writing. Do not stop until you reach {TIKTOK_MIN_CHARS} characters.
+- Hook must be in first sentence
 - Keywords must appear naturally
 - CTA must be present
 
@@ -1736,16 +1724,13 @@ async def _enforce_tiktok_caption_length(caption_text: str, effective_query: str
         return caption_text
 
     repair_prompt = f"""
-Rewrite this TikTok caption.
+Rewrite this TikTok caption as ONE single paragraph with no line breaks.
 
-STRICT RULES:
-- Keep it natural and human.
-- No first-person.
-- No emojis.
-- No hashtags.
-- Keep CTA in final line.
-- Use 3-4 short lines.
-- Final length MUST be between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters.
+RULES:
+- ONE paragraph only — no line breaks, no blank lines
+- Start with a strong hook
+- MUST be exactly {TIKTOK_MIN_CHARS}–{TIKTOK_MAX_CHARS} characters including spaces. Count carefully before returning.
+- No first-person. No emojis. No hashtags.
 
 TOPIC:
 {effective_query}
@@ -1753,41 +1738,31 @@ TOPIC:
 ORIGINAL:
 {caption_text}
 
-Return ONLY the rewritten caption text.
+Return ONLY the caption as one paragraph.
 """
-
     repaired = await safe_generate_caption(repair_prompt, platform="tiktok", retries=1)
     if repaired and _is_valid_tiktok_caption_length(repaired):
         return repaired.strip()
 
-    fallback = caption_text.strip()
-    core_topic = _extract_tiktok_core_topic(effective_query)
-    if len(fallback) < TIKTOK_MIN_CHARS:
-        expansion_lines = [
-            f"The core issue here is {core_topic}." if core_topic else "The core issue here is practical and immediate.",
-            "This matters because people form opinions based on what they hear and repeat.",
-            "The bigger question is how these ideas shape fairness, status, and day-to-day treatment.",
-            "If we normalize hierarchy too early, it can influence behavior long before anyone questions it.",
-            "Context matters because repeated beliefs can become social rules people stop challenging.",
-            "The long-term impact is not only personal identity, but also how communities define who belongs.",
-        ]
+    expand_prompt = f"""
+Expand this TikTok caption into ONE single paragraph (no line breaks).
+MUST be between {TIKTOK_MIN_CHARS} and {TIKTOK_MAX_CHARS} characters including spaces.
+Add more detail, context, or insight to reach the minimum length.
+No first-person. No emojis. No hashtags. No line breaks.
 
-        idx = 0
-        while len(fallback) < TIKTOK_MIN_CHARS:
-            line = expansion_lines[idx % len(expansion_lines)]
-            idx += 1
-            if line:
-                fallback += f"\n\n{line}"
+ORIGINAL:
+{caption_text}
 
-    fallback = _trim_to_sentence_boundary(fallback, TIKTOK_MAX_CHARS)
-    if len(fallback) < TIKTOK_MIN_CHARS:
-        strict_pad = " Additional context is included to keep this explanation clear and complete."
-        while len(fallback) < TIKTOK_MIN_CHARS:
-            needed = TIKTOK_MIN_CHARS - len(fallback)
-            fallback += strict_pad[:needed]
+TOPIC:
+{effective_query}
 
-    return fallback
+Return ONLY the expanded caption as one paragraph.
+"""
+    expanded = await safe_generate_caption(expand_prompt, platform="tiktok", retries=1)
+    if expanded and _is_valid_tiktok_caption_length(expanded):
+        return expanded.strip()
 
+    return caption_text.strip()
 # ---------------------------
 # CTA INJECTION ENGINE
 # ---------------------------
