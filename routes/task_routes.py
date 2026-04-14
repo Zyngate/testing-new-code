@@ -289,33 +289,32 @@ def toggle_task_state(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Derive status safely
     current_status = task.get("status")
+    if not current_status:
+        current_status = "completed" if task.get("retrieved") else "scheduled"
 
-    # 🚫 Protect execution integrity
+    # Protect running tasks
     if current_status == "running":
         raise HTTPException(
             status_code=409,
             detail="Task is currently running and cannot be paused or resumed"
         )
 
+    # Completed tasks can't be toggled
     if current_status == "completed":
         raise HTTPException(
             status_code=400,
             detail="Completed tasks cannot be modified"
         )
 
-    # 🔁 Toggle logic
+    # Toggle logic
     if current_status == "paused":
-        update = {
-            "status": "scheduled",
-            "retrieved": False
-        }
+        update = {"status": "scheduled", "retrieved": False}
         message = "Task resumed successfully"
 
     elif current_status == "scheduled":
-        update = {
-            "status": "paused"
-        }
+        update = {"status": "paused"}
         message = "Task paused successfully"
 
     else:
@@ -331,16 +330,9 @@ def toggle_task_state(task_id: str):
         "new_state": update["status"]
     }
 
-
 @router.delete("/{task_id}")
 def delete_task(task_id: str):
-    """
-    Delete a task permanently.
-    
-    - Running tasks cannot be deleted (wait for completion or pause first)
-    - All other states (scheduled, paused, completed) can be deleted
-    """
-    tasks_col, _ = get_or_init_sync_collections()
+    tasks_col, output_col = get_or_init_sync_collections()  # ✅ get both
 
     try:
         task_oid = ObjectId(task_id)
@@ -351,20 +343,22 @@ def delete_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    current_status = task.get("status", "scheduled")
+    current_status = task.get("status")
+    if not current_status:
+        current_status = "completed" if task.get("retrieved") else "scheduled"
 
-    # Protect running tasks
     if current_status == "running":
         raise HTTPException(
             status_code=409,
             detail="Task is currently running. Wait for completion or pause first."
         )
 
-    # Delete the task
     result = tasks_col.delete_one({"_id": task_oid})
-
     if result.deleted_count == 0:
         raise HTTPException(status_code=500, detail="Failed to delete task")
+
+    # ✅ Clean up generated content too, if it exists
+    output_col.delete_many({"task_id": task_oid})
 
     logger.info(f"🗑️ Task deleted: {task_id} (was {current_status})")
 
