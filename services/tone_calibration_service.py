@@ -311,6 +311,14 @@ async def get_engagement_settings(user_id: str) -> Dict[str, Any]:
         doc["daily_reply_limit"] = 0
         doc["max_replies_per_post"] = 0
         doc.setdefault("reply_window_hours", 10)
+        if isinstance(doc.get("platforms"), list):
+            doc["platforms"] = [
+                p.lower().strip()
+                for p in doc["platforms"]
+                if isinstance(p, str) and p.strip()
+            ]
+        else:
+            doc["platforms"] = []
         for dt_key in ("created_at", "updated_at"):
             if hasattr(doc.get(dt_key), "isoformat"):
                 doc[dt_key] = doc[dt_key].isoformat()
@@ -360,8 +368,22 @@ async def update_engagement_settings(user_id: str, updates: Dict[str, Any]) -> D
         elif k == "platforms":
             if not isinstance(v, list):
                 continue
-            valid_platforms = {"instagram", "tiktok", "youtube", "twitter", "facebook"}
-            filtered[k] = [p for p in v if isinstance(p, str) and p.lower() in valid_platforms]
+            valid_platforms = {
+                "instagram",
+                "threads",
+                "tiktok",
+                "youtube",
+                "twitter",
+                "facebook",
+                "linkedin",
+            }
+            normalized = [
+                p.lower().strip()
+                for p in v
+                if isinstance(p, str) and p.lower().strip() in valid_platforms
+            ]
+            # Keep order while removing duplicates.
+            filtered[k] = list(dict.fromkeys(normalized))
 
         elif k == "spam_filter_enabled":
             if not isinstance(v, bool):
