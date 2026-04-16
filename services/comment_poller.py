@@ -49,6 +49,236 @@ def _caption_similarity(a: str, b: str) -> float:
     return len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
 
 
+def _parse_graph_datetime(value: str) -> datetime:
+    """Parse graph API timestamp into UTC datetime; fallback to now on parse errors."""
+    if not value:
+        return datetime.now(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _to_utc_datetime(value: Any) -> datetime:
+    """Normalize datetime values from DB/API to timezone-aware UTC."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        return _parse_graph_datetime(value)
+    return datetime.now(timezone.utc)
+
+
+async def _fetch_threads_posts_for_linking(user_id: str) -> List[Dict[str, Any]]:
+    """Fetch recent Threads posts for ID backfilling of scheduledposts rows."""
+    auth = await get_user_auth(user_id, "threads")
+    if not auth:
+        return []
+
+    access_token = (auth.get("accessToken", "") or "").strip()
+    account_id = (auth.get("accountId", "") or "").strip()
+    if not access_token or not account_id:
+        return []
+    if not access_token.startswith("THAA"):
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await _fetch_all_threads_posts(
+                client=client,
+                account_id=account_id,
+                access_token=access_token,
+                max_items=200,
+            )
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch Threads posts for linking user {user_id}: {e}")
+        return []
+
+
+async def _fetch_all_threads_posts(
+    client: httpx.AsyncClient,
+    account_id: str,
+    access_token: str,
+    max_items: int = 200,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch Threads posts with pagination.
+    Threads API may return only a small first page; this pulls additional pages.
+    """
+    url = f"https://graph.threads.net/v1.0/{account_id}/threads"
+    params = {
+        "fields": "id,text,timestamp,permalink",
+        "limit": 100,
+        "access_token": access_token,
+    }
+
+    posts: List[Dict[str, Any]] = []
+    next_url: str | None = None
+
+    while len(posts) < max_items:
+        if next_url:
+            resp = await client.get(next_url)
+        else:
+            resp = await client.get(url, params=params)
+
+        resp.raise_for_status()
+        data = resp.json() or {}
+        page_posts = data.get("data", []) or []
+        if not page_posts:
+            break
+
+        posts.extend(page_posts)
+        next_url = (data.get("paging", {}) or {}).get("next")
+        if not next_url:
+            break
+
+    return posts[:max_items]
+
+
+async def _auto_link_missing_threads_platform_ids(user_id: str, posts: List[Dict[str, Any]]) -> int:
+    """
+    Best-effort auto-link for Threads posts missing platformPostId.
+    Matches by caption similarity + publish-time proximity.
+    """
+    missing_posts = [
+        p for p in posts
+        if p.get("platform", "").lower() == "threads"
+        and not _is_valid_platform_id(p.get("platformPostId", ""), "threads")
+        and not str(p.get("_id", "")).startswith("threads:")
+    ]
+    if not missing_posts:
+        return 0
+
+    threads_posts = await _fetch_threads_posts_for_linking(user_id)
+    if not threads_posts:
+        return 0
+
+    used_ids: set[str] = set()
+    linked_count = 0
+    now = datetime.now(timezone.utc)
+
+    for post in missing_posts:
+        post_caption = str(post.get("caption", "") or "")
+        post_time = _to_utc_datetime(post.get("updatedAt") or post.get("scheduledAt"))
+
+        best_score = 0.0
+        best_item = None
+
+        for item in threads_posts:
+            thread_id = str(item.get("id", "") or "").strip()
+            if not thread_id or thread_id in used_ids:
+                continue
+
+            caption_score = _caption_similarity(post_caption, str(item.get("text", "") or ""))
+            item_time = _to_utc_datetime(item.get("timestamp"))
+            post_epoch = post_time.timestamp() if isinstance(post_time, datetime) else datetime.now(timezone.utc).timestamp()
+            item_epoch = item_time.timestamp() if isinstance(item_time, datetime) else datetime.now(timezone.utc).timestamp()
+            hours_delta = abs(post_epoch - item_epoch) / 3600.0
+            time_score = max(0.0, 1.0 - min(hours_delta / 48.0, 1.0))
+            score = (0.7 * caption_score) + (0.3 * time_score)
+
+            if score > best_score:
+                best_score = score
+                best_item = item
+
+        if not best_item or best_score < 0.2:
+            continue
+
+        thread_id = str(best_item.get("id", "") or "").strip()
+        if not thread_id:
+            continue
+
+        await scheduled_posts_col.update_one(
+            {"_id": post["_id"], "userId": user_id},
+            {"$set": {"platformPostId": thread_id, "updatedAt": now}},
+        )
+        post["platformPostId"] = thread_id
+        used_ids.add(thread_id)
+        linked_count += 1
+
+        logger.info(
+            f"🔗 Auto-linked Threads platformPostId for post {post['_id']} -> {thread_id} "
+            f"(score={best_score:.2f})"
+        )
+
+    return linked_count
+
+
+async def _fetch_recent_threads_posts_for_poller(
+    user_id: str,
+    window_start: datetime,
+    existing_platform_ids: set[str],
+) -> List[Dict[str, Any]]:
+    """
+    Fetch recent Threads posts directly from Threads Graph API so autonomous
+    engagement can run even when scheduledposts does not contain Threads entries.
+    """
+    auth = await get_user_auth(user_id, "threads")
+    if not auth:
+        return []
+
+    access_token = (auth.get("accessToken", "") or "").strip()
+    account_id = (auth.get("accountId", "") or "").strip()
+    if not access_token or not account_id:
+        return []
+    if not access_token.startswith("THAA"):
+        logger.warning(f"⚠️ Threads token for user {user_id} is invalid (must start with THAA)")
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            all_threads_posts = await _fetch_all_threads_posts(
+                client=client,
+                account_id=account_id,
+                access_token=access_token,
+                max_items=200,
+            )
+
+        synthetic_posts: List[Dict[str, Any]] = []
+        skipped_existing = 0
+        skipped_old = 0
+        skipped_invalid_id = 0
+        for item in all_threads_posts:
+            thread_post_id = str(item.get("id", "") or "").strip()
+            if not thread_post_id:
+                skipped_invalid_id += 1
+                continue
+            if thread_post_id in existing_platform_ids:
+                skipped_existing += 1
+                continue
+
+            ts = _parse_graph_datetime(str(item.get("timestamp", "") or ""))
+            if ts < window_start:
+                skipped_old += 1
+                continue
+
+            synthetic_posts.append({
+                "_id": f"threads:{thread_post_id}",
+                "userId": user_id,
+                "status": "posted",
+                "platform": "threads",
+                "platformPostId": thread_post_id,
+                "caption": item.get("text", "") or "",
+                "mediaType": "TEXT",
+                "mediaUrls": [],
+                "scheduledAt": ts,
+                "updatedAt": ts,
+            })
+
+        logger.info(
+            f"🧵 Threads scan for user {user_id}: fetched={len(all_threads_posts)}, "
+            f"added={len(synthetic_posts)}, skipped_existing={skipped_existing}, "
+            f"skipped_old={skipped_old}, skipped_invalid_id={skipped_invalid_id}"
+        )
+
+        return synthetic_posts
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch recent Threads posts for user {user_id}: {e}")
+        return []
+
+
 async def _fetch_instagram_media_for_linking(user_id: str) -> List[Dict[str, Any]]:
     """
     Fetch the user's recent Instagram media for auto-linking posts that
@@ -262,7 +492,11 @@ async def _process_user(settings: Dict[str, Any]):
     """
     user_id = settings.get("user_id", "")
     reply_window_hours = settings.get("reply_window_hours", 48)
-    enabled_platforms = settings.get("platforms", [])
+    enabled_platforms = [
+        str(p).strip().lower()
+        for p in settings.get("platforms", [])
+        if isinstance(p, str) and str(p).strip()
+    ]
     reply_mode = settings.get("reply_mode", "automatic")
 
     try:
@@ -273,10 +507,14 @@ async def _process_user(settings: Dict[str, Any]):
         # 1. Belong to this user
         # 2. Were posted (status = "posted") within the reply window
         # 3. Are on enabled platforms
+        # Use updatedAt first because posted jobs may have older scheduledAt values.
         post_query = {
             "userId": user_id,
             "status": "posted",
-            "scheduledAt": {"$gte": window_start},
+            "$or": [
+                {"updatedAt": {"$gte": window_start}},
+                {"scheduledAt": {"$gte": window_start}},
+            ],
         }
         if enabled_platforms:
             # Case-insensitive match on platforms
@@ -287,6 +525,28 @@ async def _process_user(settings: Dict[str, Any]):
         posts = []
         async for post in posts_cursor:
             posts.append(post)
+
+        auto_linked_threads = await _auto_link_missing_threads_platform_ids(user_id, posts)
+        if auto_linked_threads:
+            logger.info(f"🔁 Auto-linked {auto_linked_threads} Threads post(s) for user {user_id}")
+
+        existing_platform_ids = {
+            str(p.get("platformPostId", "") or "").strip()
+            for p in posts
+            if str(p.get("platformPostId", "") or "").strip()
+        }
+
+        if "threads" in enabled_platforms:
+            threads_posts = await _fetch_recent_threads_posts_for_poller(
+                user_id=user_id,
+                window_start=window_start,
+                existing_platform_ids=existing_platform_ids,
+            )
+            if threads_posts:
+                posts.extend(threads_posts)
+                logger.info(
+                    f"🧵 Added {len(threads_posts)} recent Threads post(s) from Threads API for user {user_id}"
+                )
 
         # Best-effort automatic backfill for missing Instagram platform IDs.
         auto_linked = await _auto_link_missing_instagram_platform_ids(user_id, posts)
@@ -319,15 +579,20 @@ async def _process_user(settings: Dict[str, Any]):
                 continue
 
             # ── Ensure post is analyzed (Phase 2 — lazy analysis) ──
-            await analyze_post_content(
-                user_id=user_id,
-                post_id=post_id,
-                platform=platform,
-                media_type=media_type,
-                caption=caption,
-                media_urls=media_urls,
-                video_hash=post.get("videoHash"),
-            )
+            # Synthetic Threads posts may not exist in scheduledposts with ObjectId.
+            # Analysis is best-effort and should never block reply generation.
+            try:
+                await analyze_post_content(
+                    user_id=user_id,
+                    post_id=post_id,
+                    platform=platform,
+                    media_type=media_type,
+                    caption=caption,
+                    media_urls=media_urls,
+                    video_hash=post.get("videoHash"),
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Post analysis skipped for {post_id} ({platform}): {e}")
 
             # ── Get OAuth token ──
             # For Instagram, comment operations require a Business Graph API
@@ -464,7 +729,11 @@ async def _process_user_with_stats(settings: Dict[str, Any]) -> Dict[str, Any]:
     """
     user_id = settings.get("user_id", "")
     reply_window_hours = settings.get("reply_window_hours", 48)
-    enabled_platforms = settings.get("platforms", [])
+    enabled_platforms = [
+        str(p).strip().lower()
+        for p in settings.get("platforms", [])
+        if isinstance(p, str) and str(p).strip()
+    ]
 
     total_posts = 0
     total_comments = 0
@@ -493,6 +762,28 @@ async def _process_user_with_stats(settings: Dict[str, Any]) -> Dict[str, Any]:
         posts = []
         async for post in posts_cursor:
             posts.append(post)
+
+        auto_linked_threads = await _auto_link_missing_threads_platform_ids(user_id, posts)
+        if auto_linked_threads:
+            logger.info(f"🔁 Auto-linked {auto_linked_threads} Threads post(s) for user {user_id}")
+
+        existing_platform_ids = {
+            str(p.get("platformPostId", "") or "").strip()
+            for p in posts
+            if str(p.get("platformPostId", "") or "").strip()
+        }
+
+        if "threads" in enabled_platforms:
+            threads_posts = await _fetch_recent_threads_posts_for_poller(
+                user_id=user_id,
+                window_start=window_start,
+                existing_platform_ids=existing_platform_ids,
+            )
+            if threads_posts:
+                posts.extend(threads_posts)
+                logger.info(
+                    f"🧵 Added {len(threads_posts)} recent Threads post(s) from Threads API for user {user_id}"
+                )
 
         total_posts = len(posts)
 
@@ -525,15 +816,18 @@ async def _process_user_with_stats(settings: Dict[str, Any]) -> Dict[str, Any]:
                 continue
 
             # ── Ensure post is analyzed ──
-            await analyze_post_content(
-                user_id=user_id,
-                post_id=post_id,
-                platform=platform,
-                media_type=media_type,
-                caption=caption,
-                media_urls=media_urls,
-                video_hash=post.get("videoHash"),
-            )
+            try:
+                await analyze_post_content(
+                    user_id=user_id,
+                    post_id=post_id,
+                    platform=platform,
+                    media_type=media_type,
+                    caption=caption,
+                    media_urls=media_urls,
+                    video_hash=post.get("videoHash"),
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Post analysis skipped for {post_id} ({platform}): {e}")
 
             # ── Get OAuth token ──
             # For Instagram, comment operations require a Business Graph API
