@@ -281,12 +281,16 @@ async def generate_reply_for_comment(
                 status = "pending_review"
             else:
                 server_token = auth.get("accessToken", "")
+                post_kwargs = dict(reply_kwargs)
+                if platform == "threads":
+                    post_kwargs["user_id_threads"] = auth.get("accountId", "")
+
                 success = await post_reply(
                     platform=platform,
                     comment_id=comment_id,
                     reply_text=reply_text,
                     access_token=server_token,
-                    **reply_kwargs,
+                    **post_kwargs,
                 )
                 status = "posted" if success else "failed"
                 delay = random.uniform(MIN_REPLY_DELAY, MAX_REPLY_DELAY)
@@ -362,11 +366,16 @@ async def approve_reply(log_id: str, user_id: str, edited_text: str = None) -> D
             return {"success": False, "reason": "No auth token for platform"}
 
         access_token = auth.get("accessToken", "")
+        post_kwargs = {}
+        if platform == "threads":
+            post_kwargs["user_id_threads"] = auth.get("accountId", "")
+
         success = await post_reply(
             platform=platform,
             comment_id=comment_id,
             reply_text=reply_text,
             access_token=access_token,
+            **post_kwargs,
         )
 
         new_status = "approved_posted" if success else "failed"
