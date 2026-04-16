@@ -214,11 +214,23 @@ async def startup():
             {"$set": {"status": "scheduled", "retrieved": False}}
         )
 
-    # 🚫 DO NOT run schedulers on web service
-    if os.getenv("ENABLE_SCHEDULERS") == "true":
+    # Scheduler activation strategy:
+    # - explicit ENABLE_SCHEDULERS wins
+    # - if unset: default ON for local dev, OFF on hosted web services
+    is_hosted_web = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+    enable_schedulers_env = os.getenv("ENABLE_SCHEDULERS")
+    if enable_schedulers_env is None:
+        enable_schedulers = not is_hosted_web
+    else:
+        enable_schedulers = enable_schedulers_env.strip().lower() == "true"
+
+    if enable_schedulers:
         start_task_scheduler()
         # Start autonomous engagement comment poller
         asyncio.create_task(comment_poller_loop())
+        logger.info("✅ Background schedulers enabled (task scheduler + engagement poller)")
+    else:
+        logger.info("⏸️ Background schedulers disabled (set ENABLE_SCHEDULERS=true to enable)")
 # -------------------------
 #   ROOT ENDPOINT
 # -------------------------
