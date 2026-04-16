@@ -9,7 +9,7 @@ statistics, manual engagement triggers, and comment management
 """
 
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from config import logger
 from services.tone_calibration_service import (
@@ -28,17 +28,40 @@ from services.engagement_service import (
 from services.comment_poller import trigger_engagement_for_user
 from services.social_engagement_api import (
     get_user_auth,
+    fetch_comments,
     fetch_comments_with_replies_instagram,
     fetch_more_comments_instagram,
     post_comment_instagram,
     post_reply_instagram,
-    delete_comment_instagram,
     delete_comment,
     post_reply,
 )
 
 
 router = APIRouter(tags=["Autonomous Engagement"])
+
+SUPPORTED_COMMENT_CRUD_PLATFORMS = {"instagram", "threads"}
+
+
+def _ensure_supported_comment_platform(platform: str) -> str:
+    normalized = (platform or "").strip().lower()
+    if normalized not in SUPPORTED_COMMENT_CRUD_PLATFORMS:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"{normalized or 'This'} platform is coming soon. "
+                "Autonomous Engagement comment operations currently support only Instagram and Threads."
+            ),
+        )
+    return normalized
+
+
+def _ensure_threads_token(token: str):
+    if not (token or "").strip().startswith("THAA"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Threads token. Threads operations require a token starting with THAA.",
+        )
 
 
 # ───────────────────────────────────
@@ -338,6 +361,8 @@ async def _resolve_access_token(
     # 1. Token passed directly by frontend (like CommentsModal.tsx does)
     token = (payload.get("accessToken") or "").strip()
     if token:
+        if platform == "threads":
+            _ensure_threads_token(token)
         return token
 
     # 2. Fallback: look up from DB
@@ -345,15 +370,18 @@ async def _resolve_access_token(
     if not user_id:
         return ""
 
-    # For Instagram, prefer instafb (Business Graph token needed for comments)
-    if platform in ("instagram", "facebook", "threads"):
+    # For Instagram/Facebook, prefer instafb (Business Graph token needed for comments)
+    if platform in ("instagram", "facebook"):
         auth = await get_user_auth(user_id, "instafb")
         if auth:
             return auth.get("accessToken", "")
 
     auth = await get_user_auth(user_id, platform)
     if auth:
-        return auth.get("accessToken", "")
+        token = auth.get("accessToken", "")
+        if platform == "threads":
+            _ensure_threads_token(token)
+        return token
 
     return ""
 
@@ -393,7 +421,7 @@ async def fetch_comments_with_replies(payload: Dict[str, Any]):
     """
     try:
         media_id = payload.get("mediaId")
-        platform = payload.get("platform", "instagram").lower()
+        platform = _ensure_supported_comment_platform(payload.get("platform", "instagram"))
         limit = payload.get("limit", 25)
 
         if not media_id:
@@ -409,24 +437,22 @@ async def fetch_comments_with_replies(payload: Dict[str, Any]):
                 )
             )
 
-        # Instagram/Facebook/Threads use the Meta Graph API with full replies support
-        if platform in ("instagram", "facebook", "threads"):
+        if platform == "instagram":
             result = await fetch_comments_with_replies_instagram(
                 media_id=media_id,
                 access_token=access_token,
                 limit=limit,
             )
-        else:
-            # For other platforms, use the basic fetcher (no nested replies yet)
-            from services.social_engagement_api import fetch_comments as basic_fetch
-            flat_comments = await basic_fetch(
-                platform=platform,
+        elif platform == "threads":
+            # Threads uses graph.threads.net and returns replies for the post.
+            thread_comments = await fetch_comments(
+                platform="threads",
                 post_id=media_id,
                 access_token=access_token,
                 limit=limit,
             )
             result = {
-                "comments": flat_comments,
+                "comments": thread_comments,
                 "paging": {"next": None},
             }
 
@@ -451,7 +477,7 @@ async def fetch_more_comments(payload: Dict[str, Any]):
     """
     try:
         next_url = payload.get("nextUrl")
-        platform = payload.get("platform", "instagram").lower()
+        platform = _ensure_supported_comment_platform(payload.get("platform", "instagram"))
 
         if not next_url:
             raise HTTPException(status_code=400, detail="nextUrl is required")
@@ -484,7 +510,7 @@ async def post_new_comment(payload: Dict[str, Any]):
     try:
         media_id = payload.get("mediaId")
         message = payload.get("message", "").strip()
-        platform = payload.get("platform", "instagram").lower()
+        platform = _ensure_supported_comment_platform(payload.get("platform", "instagram"))
 
         if not media_id or not message:
             raise HTTPException(status_code=400, detail="mediaId and message are required")
@@ -493,17 +519,25 @@ async def post_new_comment(payload: Dict[str, Any]):
         if not access_token:
             raise HTTPException(status_code=401, detail="No access token available.")
 
-        if platform in ("instagram", "facebook"):
+        if platform == "instagram":
             result = await post_comment_instagram(
                 media_id=media_id,
                 message=message,
                 access_token=access_token,
             )
         else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Posting new comments is not yet supported for platform '{platform}'"
+            user_id = payload.get("userId", "")
+            auth = await get_user_auth(user_id, "threads") if user_id else None
+            user_id_threads = auth.get("accountId", "") if auth else ""
+
+            success = await post_reply(
+                platform="threads",
+                comment_id=media_id,
+                reply_text=message,
+                access_token=access_token,
+                user_id_threads=user_id_threads,
             )
+            result = {"success": success}
 
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "Failed to post comment"))
@@ -530,9 +564,7 @@ async def reply_to_comment(payload: Dict[str, Any]):
     try:
         comment_id = payload.get("commentId")
         message = payload.get("message", "").strip()
-        platform = payload.get("platform", "instagram").lower()
-        media_id = payload.get("mediaId", "")
-
+        platform = _ensure_supported_comment_platform(payload.get("platform", "instagram"))
         if not comment_id or not message:
             raise HTTPException(status_code=400, detail="commentId and message are required")
 
@@ -540,35 +572,22 @@ async def reply_to_comment(payload: Dict[str, Any]):
         if not access_token:
             raise HTTPException(status_code=401, detail="No access token available.")
 
-        if platform in ("instagram", "facebook"):
+        if platform == "instagram":
             success = await post_reply_instagram(
                 comment_id=comment_id,
                 reply_text=message,
                 access_token=access_token,
             )
         else:
-            # Use the unified dispatcher for other platforms
-            extra_kwargs = {}
             user_id = payload.get("userId", "")
-            if platform == "tiktok":
-                extra_kwargs["video_id"] = media_id
-            elif platform == "linkedin":
-                extra_kwargs["activity_urn"] = media_id
-                # Try to get author URN from DB auth
-                if user_id:
-                    auth = await get_user_auth(user_id, platform)
-                    extra_kwargs["author_urn"] = auth.get("accountId", "") if auth else ""
-            elif platform == "threads":
-                if user_id:
-                    auth = await get_user_auth(user_id, platform)
-                    extra_kwargs["user_id_threads"] = auth.get("accountId", "") if auth else ""
-
+            auth = await get_user_auth(user_id, "threads") if user_id else None
+            user_id_threads = auth.get("accountId", "") if auth else ""
             success = await post_reply(
-                platform=platform,
+                platform="threads",
                 comment_id=comment_id,
                 reply_text=message,
                 access_token=access_token,
-                **extra_kwargs,
+                user_id_threads=user_id_threads,
             )
 
         if not success:
@@ -595,9 +614,7 @@ async def delete_comment_endpoint(payload: Dict[str, Any]):
     """
     try:
         comment_id = payload.get("commentId")
-        platform = payload.get("platform", "instagram").lower()
-        video_id = payload.get("videoId", "")
-
+        platform = _ensure_supported_comment_platform(payload.get("platform", "instagram"))
         if not comment_id:
             raise HTTPException(status_code=400, detail="commentId is required")
 
@@ -605,15 +622,10 @@ async def delete_comment_endpoint(payload: Dict[str, Any]):
         if not access_token:
             raise HTTPException(status_code=401, detail="No access token available.")
 
-        extra_kwargs = {}
-        if platform == "tiktok":
-            extra_kwargs["video_id"] = video_id
-
         success = await delete_comment(
             platform=platform,
             comment_id=comment_id,
             access_token=access_token,
-            **extra_kwargs,
         )
 
         if not success:
