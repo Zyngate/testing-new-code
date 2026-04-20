@@ -53,7 +53,7 @@ def _get_fallback_captions(platforms: list[str], error_msg: str = "") -> dict:
 async def generate_video_caption(
     video: UploadFile = File(...),
     platforms: list[str] = Form(...)
-    scheduled_post_id: str = Form(None)
+    
 ):
     """
     Upload a video, process it and return captions + hashtags.

@@ -227,12 +227,8 @@ OCR text:
     return (resp or "").strip()
 
 
-# Vision model fallback list (try in order if one fails)
 VISION_MODELS = [
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.2-90b-vision-preview",
-    "llama-3.2-11b-vision-preview",
+    "llama-3.2-11b-vision-preview"
 ]
 
 async def _call_vision_model_with_retry(client, prompt_content: list, max_retries: int = 3) -> dict:

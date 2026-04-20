@@ -6,6 +6,8 @@ pip install uvicorn fastapi
 uvicorn main:app --reload
 
 
+http://54.81.52.137:8000/docs#/Media%20Upload/upload_media_media_upload_media_post
+
 uvicorn test1:app --reload
 
 {
