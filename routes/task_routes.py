@@ -39,6 +39,7 @@ class TaskUpdateRequest(BaseModel):
     days: Optional[List[str]] = None
     date_of_month: Optional[int] = None
     category: Optional[str] = None
+    description: Optional[str] = None 
 
 
 class ManualContentUpdateRequest(BaseModel):
@@ -262,7 +263,11 @@ def update_task(task_id: str, request: TaskUpdateRequest):
         update_fields["frequency"] = request.frequency
         update_fields["days"] = request.days or []
         update_fields["date"] = request.date_of_month
-
+    
+    if request.description:
+        update_fields["description"] = request.description
+        update_fields["normalized_prompt"] = normalize_prompt(request.description)
+    
     if request.category is not None:
         update_fields["category"] = request.category
 
