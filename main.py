@@ -67,6 +67,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://www.stelle.chat",
+        "https://stelle.in",
     
     ],
     allow_credentials=True,

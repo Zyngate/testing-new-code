@@ -263,7 +263,7 @@ def update_task(task_id: str, request: TaskUpdateRequest):
         update_fields["frequency"] = request.frequency
         update_fields["days"] = request.days or []
         update_fields["date"] = request.date_of_month
-    
+         
     if request.description:
         update_fields["description"] = request.description
         update_fields["normalized_prompt"] = normalize_prompt(request.description)
