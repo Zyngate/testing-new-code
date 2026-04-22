@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 import cloudinary
 
 # --- Load Environment Variables ---
-load_dotenv()  # Load .env file in project root
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+load_dotenv(dotenv_path=ENV_FILE, override=True)  # Prefer .env over stale shell env vars
 
 # --- Logging Setup ---
 logging.basicConfig(
