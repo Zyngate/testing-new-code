@@ -644,16 +644,21 @@ async def _generate_reply(
         platform, comment_type, comment_tone, user_name,
     )
 
-    user_prompt = (f'@{comment_author} just commented: "{comment_text}"\n\n'
-    f'Write a reply as {user_name} that:\n'
-    f'- Starts by addressing @{comment_author} directly (use their @handle naturally if it feels right)\n'
-    f'- Responds to what THEY specifically said, not the topic in general\n'
-    f'- Picks up a specific word or idea from their comment and reacts to it\n'
-    f'- Feels like a real person talking to another real person in the comments section\n'
-    f'- Is short, casual, human — not a caption or essay\n'
-    f'- If political/offensive, deflect lightly without taking sides\n'
+    user_prompt = (
+    f'@{comment_author} just commented: "{comment_text}"\n\n'
+    f'Write a reply as {user_name} — a real human being, not a brand or bot.\n\n'
+    f'RULES:\n'
+    f'1. Start with @{comment_author} — mandatory, always.\n'
+    f'2. Write exactly 2-3 sentences. Not more, not less.\n'
+    f'3. Sound like a real person texting back a follower — warm, casual, imperfect.\n'
+    f'4. Respond directly to what @{comment_author} said — not the post topic in general.\n'
+    f'5. Naturally weave in ONE relevant fact from the post context — do not force it, make it feel organic.\n'
+    f'6. Do NOT copy words from their comment back at them.\n'
+    f'7. Do NOT restate what the post says.\n'
+    f'8. If political, stay neutral — acknowledge their vibe warmly without taking any side.\n'
+    f'9. If offensive or toxic, keep it to 1 short sentence only — do not engage with the content.\n'
     f'Return reply text only.'
-    )
+)
 
     # [FINE-TUNE] Dynamic temperature by comment tone
     temp_map = {"critical": 0.5, "positive": 0.8, "curious": 0.65}
@@ -751,11 +756,12 @@ async def _fact_align_reply(
         f"- Anchors: {fact_bundle.get('fact_anchors', 'none')}\n"
         f"- Lexical sync words: {fact_bundle.get('lexical_sync_words', 'none')}\n\n"
         "Task:\n"
-        "Check if the commenter said anything factually incorrect based on verified context. "
-        "Check if the AI reply contains any factual errors. "
-        "If corrections are needed, weave them in naturally and warmly — like a human casually clarifying, NOT like a teacher correcting a student. "
-        "CRITICAL: Do NOT summarize the post. Do NOT repeat post content. Keep the reply short and human. "
-        "If both the comment and reply are fine factually, return the draft reply EXACTLY as-is.\n"
+        "Step 1 — Fact check the COMMENT: Did @{comment_author} say anything factually incorrect based on verified context? "
+        "Step 2 — Fact check the AI REPLY: Does the reply contain any factual errors or invented details? "
+        "Step 3 — Check if the reply naturally includes a real fact from the verified context. If not, weave one in organically. "
+        "If corrections needed, rewrite warmly and casually — like a knowledgeable friend, NOT a fact-checker robot. "
+        "CRITICAL: Keep reply 2-3 sentences. Do NOT summarize the post. Do NOT remove the @username tag. "
+        "If everything is factually correct and a fact is already included, return the draft reply EXACTLY as-is.\n"
         "Return reply text only."
     )
 
@@ -763,10 +769,13 @@ async def _fact_align_reply(
         model=model,
         prompt=prompt,
         system_msg=(
-            "You are a factual safety layer for social reply generation. "
-            "Never add facts not present in verified context. "
-            "Never disagree with, lecture, or correct the commenter. Keep tone warm, casual, and human — not corporate. "
-            "Never use filler phrases like 'That's an interesting perspective', 'Thanks for sharing', or 'Appreciate your thoughts'. "
+            "You are a factual accuracy layer for social media reply generation. "
+            "Your job: check the commenter's claim AND the AI reply for factual errors using verified context. "
+            "If a fact is missing from the reply, add one naturally — like a friend casually mentioning it. "
+            "Never lecture, never correct harshly, never summarize the post. "
+            "Always preserve the @username tag at the start. "
+            "Keep the reply warm, human, 2-3 sentences max. "
+            "Never use filler phrases like 'That's an interesting perspective' or 'Thanks for sharing'. "
             "For emoji_only comments, output must remain emoji-only."
         ),
         temperature=0.2,
