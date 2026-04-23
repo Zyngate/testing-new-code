@@ -644,7 +644,7 @@ async def _generate_reply(
         platform, comment_type, comment_tone, user_name,
     )
 
-    user_prompt = { f'@{comment_author} just commented: "{comment_text}"\n\n'
+    user_prompt = (f'@{comment_author} just commented: "{comment_text}"\n\n'
     f'Write a reply as {user_name} that:\n'
     f'- Starts by addressing @{comment_author} directly (use their @handle naturally if it feels right)\n'
     f'- Responds to what THEY specifically said, not the topic in general\n'
@@ -653,7 +653,7 @@ async def _generate_reply(
     f'- Is short, casual, human — not a caption or essay\n'
     f'- If political/offensive, deflect lightly without taking sides\n'
     f'Return reply text only.'
-    }
+    )
 
     # [FINE-TUNE] Dynamic temperature by comment tone
     temp_map = {"critical": 0.5, "positive": 0.8, "curious": 0.65}
@@ -709,9 +709,10 @@ async def _rewrite_non_disagreeing_reply(
 
     rewrite_prompt = (
         f'Original comment from @{comment_author}: "{comment_text}"\n'
-        f'Draft reply: "{draft_reply}"\n\n'
-        "Rewrite this so it does not disagree with the commenter while staying relevant to the post context and user tone. "
-        "Return reply text only."
+    f'Draft reply: "{draft_reply}"\n\n'
+    "Rewrite so it does not disagree with the commenter, sounds like a real casual human, "
+    "removes any generic filler phrases, and if political deflects warmly without taking sides. "
+    "Return reply text only."
     )
 
     rewritten = await groq_generate_text(
