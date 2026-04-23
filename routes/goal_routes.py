@@ -32,6 +32,7 @@ SUPPORTED_OVERVIEW_PLATFORMS = {
 
 # Bump this when overview plan generation rules change so stale cached plans regenerate.
 OVERVIEW_PLAN_VERSION = 2
+OVERVIEW_PLAN_WINDOW_TYPE = "rolling_7day_from_today"
 
 TIMEZONE_ABBREVIATION_MAP = {
     "UTC": "UTC",
@@ -88,6 +89,13 @@ def _get_sunday_week_window(today_local):
     """Return Sunday-start week window for a local date."""
     days_since_sunday = (today_local.weekday() + 1) % 7
     start_of_week = today_local - timedelta(days=days_since_sunday)
+    end_of_week = start_of_week + timedelta(days=6)
+    return start_of_week, end_of_week
+
+
+def _get_rolling_7day_window(today_local):
+    """Return rolling 7-day window starting from current local date."""
+    start_of_week = today_local
     end_of_week = start_of_week + timedelta(days=6)
     return start_of_week, end_of_week
 
@@ -774,16 +782,16 @@ def _questionnaire_signature(questionnaire_context: Dict[str, Any]) -> str:
 
 
 def _normalize_week_dates_for_overview(plan_data: Dict[str, Any], start_of_week) -> Dict[str, Any]:
-    day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
     by_date = {d.get("date"): d for d in (plan_data.get("this_week_plan") or []) if d.get("date")}
     normalized_days = []
 
-    for idx, day_name in enumerate(day_names):
-        date_val = (start_of_week + timedelta(days=idx)).strftime("%Y-%m-%d")
+    for idx in range(7):
+        day_date = start_of_week + timedelta(days=idx)
+        date_val = day_date.strftime("%Y-%m-%d")
         existing = by_date.get(date_val, {})
         normalized_days.append({
             "date": date_val,
-            "day_of_week": day_name,
+            "day_of_week": day_date.strftime("%A"),
             "daily_focus": existing.get("daily_focus", "Engagement growth execution"),
             "tasks": existing.get("tasks", []),
             "daily_kpi_target": existing.get("daily_kpi_target", {
@@ -1060,7 +1068,7 @@ def _build_overview_week_plan(
 
         this_week_plan.append({
             "date": (start_of_week + timedelta(days=day_idx)).strftime("%Y-%m-%d"),
-            "day_of_week": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day_idx],
+            "day_of_week": (start_of_week + timedelta(days=day_idx)).strftime("%A"),
             "daily_focus": daily_focuses[day_idx],
             "tasks": day_tasks,
             "daily_kpi_target": {
@@ -1184,9 +1192,22 @@ async def get_overview_week_plan(
             user_tz = await _get_user_timezone(user_id)
 
         today = datetime.now(user_tz).date()
-        start_of_week, end_of_week = _get_sunday_week_window(today)
+        start_of_week, end_of_week = _get_rolling_7day_window(today)
         week_start_date_str = start_of_week.strftime("%Y-%m-%d")
         week_end_date_str = end_of_week.strftime("%Y-%m-%d")
+
+        connected_platforms_actual = [
+            _normalize_platform_name(p)
+            for p in await _get_connected_platforms(user_id)
+        ]
+        connected_platforms_actual = list(dict.fromkeys([p for p in connected_platforms_actual if p]))
+        selected_platforms = [p for p in selected_platforms if p in connected_platforms_actual]
+
+        if not selected_platforms:
+            raise HTTPException(
+                status_code=400,
+                detail="No selected platforms are connected for this user.",
+            )
 
         questionnaire_context = await _get_questionnaire_context(user_id)
         current_questionnaire_signature = _questionnaire_signature(questionnaire_context)
@@ -1222,6 +1243,11 @@ async def get_overview_week_plan(
 
             stored_plan_version = int(existing_plan_doc.get("plan_version") or 1)
             if stored_plan_version != current_plan_version:
+                should_regenerate = True
+
+            # One-time migration: regenerate legacy Sunday-based plans.
+            stored_window_type = str(existing_plan_doc.get("plan_window_type") or "")
+            if stored_window_type != OVERVIEW_PLAN_WINDOW_TYPE:
                 should_regenerate = True
 
         if existing_plan_doc and not should_regenerate:
@@ -1269,6 +1295,7 @@ async def get_overview_week_plan(
                         "connected_platforms": connected_platforms,
                         "questionnaire_signature": current_questionnaire_signature,
                         "plan_version": current_plan_version,
+                        "plan_window_type": OVERVIEW_PLAN_WINDOW_TYPE,
                         "updated_at": datetime.now(timezone.utc),
                     }
                 }
@@ -1284,6 +1311,7 @@ async def get_overview_week_plan(
                 "connected_platforms": connected_platforms,
                 "questionnaire_signature": current_questionnaire_signature,
                 "plan_version": current_plan_version,
+                "plan_window_type": OVERVIEW_PLAN_WINDOW_TYPE,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             })
