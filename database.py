@@ -34,6 +34,7 @@ users_collection = db["users"]
 notifications_collection = db["notifications"]
 otp_collection = db["user_otps"]
 weekly_plans_collection = db["weekly_plans"]
+overview_week_plans_collection = db["overview_week_plans"]
 calendar_events_collection = db["calendar_events"]
 user_profiles_collection = db["user_profiles"]
 user_post_analytics_collection = db["user_post_analytics"]  # For caching user post analytics

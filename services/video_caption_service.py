@@ -9,6 +9,7 @@ import glob
 import asyncio
 import base64
 import re
+import hashlib
 
 from config import logger
 from groq import Groq
@@ -754,27 +755,47 @@ async def _caption_from_video_file_inner(
     # (THIS IS THE MAIN FIX)
     # -----------------------------------------------------
 
-    visual_lines = [
-        f"- {cap}" for _, cap in visual_captions if cap
-    ]
-    visual_block = "\n".join(visual_lines[:5]) or "None"
-    evidence_prompt = f"""
-    VIDEO EVIDENCE (MUST BE USED):
+    visual_lines = [f"- {cap}" for _, cap in visual_captions if cap]
+    evidence_sections: List[str] = []
 
-    TRANSCRIPT (EXCERPTS):
-    {transcript[:800]}
+    if transcript and transcript.strip():
+        evidence_sections.append(f"TRANSCRIPT (EXCERPT):\n{transcript[:1200]}")
+    if visual_summary and visual_summary.strip():
+        evidence_sections.append(f"VISUAL SUMMARY:\n{visual_summary[:700]}")
+    if visual_lines:
+        evidence_sections.append("VISUAL FRAME DESCRIPTIONS:\n" + "\n".join(visual_lines[:8]))
+    if ocr_text_combined and ocr_text_combined.strip():
+        evidence_sections.append(f"ON-SCREEN TEXT (OCR):\n{ocr_text_combined[:700]}")
+    if objects_detected:
+        evidence_sections.append("DETECTED OBJECTS:\n" + ", ".join(objects_detected[:20]))
+    if actions_detected:
+        evidence_sections.append("DETECTED ACTIONS:\n" + ", ".join(actions_detected[:20]))
+    if detected_person:
+        evidence_sections.append(f"IDENTIFIED PERSON (IF VERIFIED):\n{detected_person}")
 
-    VISUAL FRAME DESCRIPTIONS:
-    {visual_block}
+    if not evidence_sections and marketing_prompt:
+        # Last resort so captions still reflect analysis if extraction is sparse.
+        evidence_sections.append(f"ANALYSIS SUMMARY:\n{marketing_prompt[:1200]}")
 
-ON-SCREEN TEXT (OCR):
-{ocr_text_combined or "None"}
+    evidence_body = "\n\n".join(evidence_sections).strip()
+    if not evidence_body:
+        evidence_body = "No reliable transcript, OCR, or visual evidence was extracted from this video."
 
-RULES:
-- Base the caption ONLY on this evidence
-- Do NOT generalize beyond the video
-- If a public figure is mentioned, it must be supported by the transcript or visuals
-"""
+    evidence_prompt = (
+        "VIDEO EVIDENCE (MUST BE USED):\n\n"
+        f"{evidence_body}\n\n"
+        "RULES:\n"
+        "- Base the caption ONLY on this evidence\n"
+        "- Do NOT generalize beyond the video\n"
+        "- If a public figure is mentioned, it must be supported by the transcript, OCR, or visuals"
+    )
+
+    evidence_fingerprint = hashlib.sha256(evidence_prompt.encode("utf-8")).hexdigest()[:12]
+    hash_prefix = (video_hash[:12] + "...") if video_hash else "none"
+    logger.info(
+        f"Evidence ready: hash={hash_prefix}, cache={'hit' if cached else 'miss'}, fp={evidence_fingerprint}, "
+        f"chars={len(evidence_prompt)}"
+    )
 
 
 
@@ -786,7 +807,7 @@ RULES:
 
     # 7. Generate keywords
     try:
-        keywords = await generate_keywords_post(client, marketing_prompt)
+        keywords = await generate_keywords_post(client, evidence_prompt)
     except Exception as e:
         logger.error("Keyword generation failed: " + str(e))
         keywords = ["", "", ""]
@@ -795,7 +816,7 @@ RULES:
     async def get_hashtags_for_platform(p):
         try:
             try:
-                tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt, autoposting=autoposting)
+                tags = await fetch_platform_hashtags(client, keywords, p, evidence_prompt, autoposting=autoposting)
             except TypeError:
                 tags = await fetch_platform_hashtags(client, keywords, p, autoposting=autoposting)
             return (p, tags or [])
@@ -805,38 +826,20 @@ RULES:
 
     async def get_captions():
         try:
-            creator_context = f"""
-You are writing a caption for a SHORT-FORM VIDEO (Reels / TikTok / Shorts).
-
-IMPORTANT:
-- This is NOT a summary task.
-- Do NOT describe scenes or list events.
-- Do NOT sound like a report or documentary.
-
-WHAT MATTERS:
-- Viewer curiosity
-- Emotional tension
-- Why this moment matters
-
-VIDEO SIGNALS (for understanding only):
-{marketing_prompt}
-
-Focus on ONE strong idea or reaction.
-"""
             captions_result = await generate_caption_post(
-    marketing_prompt,
-    keywords,
-    platforms,
-    autoposting=autoposting,
-    detected_person=detected_person,
-    ocr_text=ocr_text_combined,
-    transcript=transcript
-)
+                evidence_prompt,
+                keywords,
+                platforms,
+                autoposting=autoposting,
+                detected_person=detected_person,
+                ocr_text=ocr_text_combined,
+                transcript=transcript,
+            )
             logger.info(f"📝 Caption generation result: platforms={list(captions_result.get('captions', {}).keys())}, autoposting={autoposting}")
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
             logger.error(f"generate_caption_post failed: {e}", exc_info=True)
-            return {"captions": {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}}
+            return {"captions": {p: f"Short {p} caption: {evidence_prompt[:100]}" for p in platforms}}
 
     # Run all hashtag tasks + caption task in parallel
     hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
