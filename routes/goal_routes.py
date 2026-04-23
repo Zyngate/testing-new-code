@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 import pytz
 
 from models.common_models import PlanWeekRequest
-from database import goals_collection, users_collection, weekly_plans_collection, chats_collection, db
+from database import goals_collection, users_collection, weekly_plans_collection, overview_week_plans_collection, chats_collection, db
 from services.common_utils import get_current_datetime, convert_object_ids, filter_think_messages
 from services.ai_service import get_groq_client, generate_text_embedding # <-- FIX 24: Missing 'generate_text_embedding'
 from services.recommendation_plan_integration import get_recommendation_context_for_plan
@@ -24,10 +24,64 @@ router = APIRouter()
 # Collection for user post analytics (used by recommendation engine)
 user_post_analytics_collection = db["user_post_analytics"]
 oauth_credentials_collection = db["oauthcredentials"]
+questionnaire_submissions_collection = db["questionnairesubmissions"]
 
 SUPPORTED_OVERVIEW_PLATFORMS = {
     "instagram", "facebook", "threads", "pinterest", "tiktok", "youtube", "linkedin", "twitter", "x"
 }
+
+# Bump this when overview plan generation rules change so stale cached plans regenerate.
+OVERVIEW_PLAN_VERSION = 2
+
+TIMEZONE_ABBREVIATION_MAP = {
+    "UTC": "UTC",
+    "GMT": "Etc/GMT",
+    "EDT": "America/New_York",
+    "EST": "America/New_York",
+    "CDT": "America/Chicago",
+    "CST": "America/Chicago",
+    "MDT": "America/Denver",
+    "MST": "America/Denver",
+    "PDT": "America/Los_Angeles",
+    "PST": "America/Los_Angeles",
+    "BST": "Europe/London",
+    "CET": "Europe/Paris",
+    "CEST": "Europe/Paris",
+    "EET": "Europe/Athens",
+    "EEST": "Europe/Athens",
+    "IST": "Asia/Kolkata",
+    "JST": "Asia/Tokyo",
+    "AEST": "Australia/Sydney",
+    "AEDT": "Australia/Sydney",
+}
+
+
+def _resolve_timezone_param(timezone_value: Optional[str]) -> Optional[pytz.BaseTzInfo]:
+    """Resolve timezone values from IANA names or common abbreviations."""
+    if not timezone_value:
+        return None
+
+    raw = str(timezone_value).strip()
+    if not raw:
+        return None
+
+    candidates = [raw, raw.replace(" ", "_")]
+    mapped = TIMEZONE_ABBREVIATION_MAP.get(raw.upper())
+    if mapped:
+        candidates.insert(0, mapped)
+
+    seen = set()
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            return pytz.timezone(candidate)
+        except Exception:
+            continue
+
+    return None
 
 
 def _get_sunday_week_window(today_local):
@@ -67,10 +121,8 @@ async def _get_user_timezone(user_id: str) -> pytz.BaseTzInfo:
             or "UTC"
         )
 
-    try:
-        return pytz.timezone(tz_name)
-    except Exception:
-        return pytz.UTC
+    resolved = _resolve_timezone_param(tz_name)
+    return resolved or pytz.UTC
 
 
 async def _get_connected_platforms(user_id: str) -> List[str]:
@@ -167,6 +219,31 @@ def _to_time_label(slot: Dict[str, Any], tz_label: str) -> Optional[str]:
     suffix = "AM" if hour < 12 else "PM"
     hour12 = hour % 12 or 12
     return f"{hour12}:{minute:02d} {suffix} ({tz_label})"
+
+
+def _convert_slot_to_user_timezone(slot: Dict[str, Any], user_tz: pytz.BaseTzInfo) -> Dict[str, int]:
+    """Convert a slot hour/minute from its source timezone into the user's timezone."""
+    try:
+        hour = int(slot.get("hour"))
+        minute = int(slot.get("minute", 0) or 0)
+    except Exception:
+        return {"hour": 0, "minute": 0}
+
+    source_tz_name = (
+        slot.get("timezone")
+        or slot.get("time_zone")
+        or slot.get("tz")
+        or "UTC"
+    )
+
+    source_tz = _resolve_timezone_param(str(source_tz_name)) or pytz.UTC
+
+    try:
+        source_dt = source_tz.localize(datetime(2000, 1, 1, hour, minute))
+        user_dt = source_dt.astimezone(user_tz)
+        return {"hour": user_dt.hour, "minute": user_dt.minute}
+    except Exception:
+        return {"hour": hour, "minute": minute}
 
 
 def _time_label_to_minutes(time_label: str) -> int:
@@ -401,10 +478,12 @@ def _extract_ranked_categories(doc: Dict[str, Any], platform: str) -> List[str]:
     return deduped[:5]
 
 
-def _extract_ranked_slots(doc: Dict[str, Any], tz_label: str) -> List[str]:
+def _extract_ranked_slots(doc: Dict[str, Any], user_tz: pytz.BaseTzInfo) -> List[str]:
     slots = doc.get("best_time_slots") or []
     if not isinstance(slots, list):
         slots = []
+
+    tz_label = datetime.now(user_tz).tzname() or str(user_tz)
 
     def _slot_score(slot: Dict[str, Any]) -> float:
         return float(slot.get("engagement_score", 0) or 0) * max(1.0, float(slot.get("recency_weight", 1.0) or 1.0))
@@ -414,7 +493,8 @@ def _extract_ranked_slots(doc: Dict[str, Any], tz_label: str) -> List[str]:
 
     labels = []
     for slot in normalized[:5]:
-        label = _to_time_label(slot, tz_label)
+        converted = _convert_slot_to_user_timezone(slot, user_tz)
+        label = _to_time_label(converted, tz_label)
         if label:
             labels.append(label)
 
@@ -445,7 +525,7 @@ async def _build_overview_analytics_profile(user_id: str, connected_platforms: L
         post_count = int(doc.get("post_count", 0) or 0)
         avg_rate = float(doc.get("avg_engagement_rate", 0) or 0)
         categories = _extract_ranked_categories(doc, platform)
-        slots = _extract_ranked_slots(doc, tz_label)
+        slots = _extract_ranked_slots(doc, user_tz)
 
         profile[platform] = {
             "post_count": post_count,
@@ -459,6 +539,238 @@ async def _build_overview_analytics_profile(user_id: str, connected_platforms: L
         "timezone_label": tz_label,
         "platforms": profile,
     }
+
+
+def _extract_text_tokens_for_questionnaire(value: Any) -> List[str]:
+    tokens: List[str] = []
+
+    def _visit(node: Any):
+        if node is None:
+            return
+        if isinstance(node, str):
+            raw = node.strip()
+            if raw:
+                tokens.append(raw)
+            return
+        if isinstance(node, (int, float, bool)):
+            return
+        if isinstance(node, list):
+            for item in node:
+                _visit(item)
+            return
+        if isinstance(node, dict):
+            for item in node.values():
+                _visit(item)
+
+    _visit(value)
+    return tokens
+
+
+def _parse_questionnaire_preferences(doc: Dict[str, Any]) -> Dict[str, Any]:
+    all_text = " ".join(t.lower() for t in _extract_text_tokens_for_questionnaire(doc))
+    risk_level = str(doc.get("riskLevel") or doc.get("risk_level") or "").strip().upper()
+    recommended_plan = str(doc.get("recommendedPlan") or doc.get("recommended_plan") or "").strip()
+    score_raw = doc.get("score", 0)
+    try:
+        score = int(score_raw or 0)
+    except Exception:
+        score = 0
+
+    preferred_platforms = []
+    platform_keywords = {
+        "instagram": ["instagram", "insta"],
+        "facebook": ["facebook"],
+        "threads": ["threads"],
+        "tiktok": ["tiktok", "tik tok"],
+        "youtube": ["youtube", "yt", "youtube shorts", "shorts"],
+        "linkedin": ["linkedin"],
+        "twitter": ["twitter", "x "],
+        "pinterest": ["pinterest"],
+    }
+    for platform, keywords in platform_keywords.items():
+        if any(keyword in all_text for keyword in keywords):
+            preferred_platforms.append(platform)
+
+    preferred_categories = []
+    category_map = {
+        "educational": ["educational", "education", "tutorial", "how to", "tips"],
+        "technology": ["technology", "tech", "ai", "automation", "saas"],
+        "behind_the_scenes": ["behind the scenes", "bts", "process"],
+        "community": ["community", "conversation", "engagement", "q&a", "question"],
+        "authority": ["authority", "proof", "case study", "testimonial", "results"],
+        "entertainment": ["entertainment", "fun", "humor", "viral"],
+    }
+    for category, keywords in category_map.items():
+        if any(keyword in all_text for keyword in keywords):
+            preferred_categories.append(category)
+
+    preferred_times = []
+    time_patterns = [
+        r"\b\d{1,2}[:.]\d{2}\s?(?:am|pm)\b",
+        r"\b\d{1,2}\s?(?:am|pm)\b",
+        r"\bmorning\b",
+        r"\bafternoon\b",
+        r"\bevening\b",
+        r"\bnight\b",
+    ]
+    for pattern in time_patterns:
+        for match in re.findall(pattern, all_text, flags=re.IGNORECASE):
+            value = str(match).strip()
+            if value and value not in preferred_times:
+                preferred_times.append(value)
+
+    mapped_times = []
+    for token in preferred_times:
+        low = token.lower()
+        if low == "morning":
+            mapped_times.append("9:00 AM")
+        elif low == "afternoon":
+            mapped_times.append("1:00 PM")
+        elif low in {"evening", "night"}:
+            mapped_times.append("6:00 PM")
+        else:
+            mapped_times.append(token.upper().replace(".", ":"))
+
+    preferred_times = []
+    for t in mapped_times:
+        if t not in preferred_times:
+            preferred_times.append(t)
+
+    recovery_no_automation_days = 0
+    plan_text = f"{recommended_plan} {all_text}".lower()
+    if "strict recovery" in plan_text and "no automation" in plan_text:
+        range_match = re.search(r"days?\s*(\d+)\s*[\-\u2013\u2014]\s*(\d+)", plan_text)
+        if range_match:
+            try:
+                start_day = int(range_match.group(1))
+                end_day = int(range_match.group(2))
+                recovery_no_automation_days = max(0, end_day - start_day + 1)
+            except Exception:
+                recovery_no_automation_days = 5
+        else:
+            recovery_no_automation_days = 5
+
+    if recovery_no_automation_days == 0 and risk_level in {"ORANGE", "RED"}:
+        recovery_no_automation_days = 5
+
+    answer_map: Dict[int, str] = {}
+    for answer in (doc.get("answers") or []):
+        if not isinstance(answer, dict):
+            continue
+        qid_raw = answer.get("questionId")
+        try:
+            qid = int(qid_raw)
+        except Exception:
+            continue
+        selected = answer.get("selectedOptions") or []
+        if isinstance(selected, list):
+            merged = " ".join(str(x or "") for x in selected)
+        else:
+            merged = str(selected or "")
+        answer_map[qid] = merged.lower()
+
+    has_watermark_issue = "watermark" in answer_map.get(5, "")
+    has_spam_warning = any(k in answer_map.get(6, "") for k in ["spam", "hidden", "blocked"])
+    immediate_growth_needed = any(k in answer_map.get(7, "") for k in ["immediately", "growth now"])
+
+    return {
+        "preferred_platforms": preferred_platforms,
+        "preferred_categories": preferred_categories,
+        "preferred_times": preferred_times,
+        "risk_level": risk_level,
+        "recommended_plan": recommended_plan,
+        "score": score,
+        "recovery_no_automation_days": recovery_no_automation_days,
+        "has_watermark_issue": has_watermark_issue,
+        "has_spam_warning": has_spam_warning,
+        "immediate_growth_needed": immediate_growth_needed,
+    }
+
+
+async def _get_questionnaire_context(user_id: str) -> Dict[str, Any]:
+    from bson import ObjectId
+
+    filters = [
+        {"user_id": user_id},
+        {"userId": user_id},
+        {"userid": user_id},
+    ]
+    if ObjectId.is_valid(user_id):
+        oid = ObjectId(user_id)
+        filters.extend([
+            {"user_id": oid},
+            {"userId": oid},
+            {"userid": oid},
+            {"user": oid},
+            {"user": user_id},
+        ])
+
+    query = {"$or": filters}
+
+    doc = await questionnaire_submissions_collection.find_one(
+        query,
+        sort=[("submittedAt", -1), ("submitted_at", -1), ("createdAt", -1), ("created_at", -1), ("_id", -1)]
+    )
+
+    if not doc:
+        return {
+            "has_questionnaire": False,
+            "preferred_platforms": [],
+            "preferred_categories": [],
+            "preferred_times": [],
+            "risk_level": "",
+            "recommended_plan": "",
+            "score": 0,
+            "recovery_no_automation_days": 0,
+            "has_watermark_issue": False,
+            "has_spam_warning": False,
+            "immediate_growth_needed": False,
+            "questionnaire_doc_id": "",
+            "questionnaire_submitted_at": "",
+        }
+
+    parsed = _parse_questionnaire_preferences(doc)
+    submitted_at = (
+        doc.get("submittedAt")
+        or doc.get("submitted_at")
+        or doc.get("createdAt")
+        or doc.get("created_at")
+        or ""
+    )
+    if hasattr(submitted_at, "isoformat"):
+        submitted_at = submitted_at.isoformat()
+
+    return {
+        "has_questionnaire": True,
+        "preferred_platforms": parsed.get("preferred_platforms", []),
+        "preferred_categories": parsed.get("preferred_categories", []),
+        "preferred_times": parsed.get("preferred_times", []),
+        "risk_level": parsed.get("risk_level", ""),
+        "recommended_plan": parsed.get("recommended_plan", ""),
+        "score": parsed.get("score", 0),
+        "recovery_no_automation_days": parsed.get("recovery_no_automation_days", 0),
+        "has_watermark_issue": parsed.get("has_watermark_issue", False),
+        "has_spam_warning": parsed.get("has_spam_warning", False),
+        "immediate_growth_needed": parsed.get("immediate_growth_needed", False),
+        "questionnaire_doc_id": str(doc.get("_id") or ""),
+        "questionnaire_submitted_at": str(submitted_at or ""),
+    }
+
+
+def _questionnaire_signature(questionnaire_context: Dict[str, Any]) -> str:
+    ctx = questionnaire_context or {}
+    parts = [
+        str(bool(ctx.get("has_questionnaire"))),
+        str(ctx.get("questionnaire_doc_id") or ""),
+        str(ctx.get("questionnaire_submitted_at") or ""),
+        str(ctx.get("risk_level") or ""),
+        str(ctx.get("recommended_plan") or ""),
+        str(ctx.get("score") or 0),
+        str(ctx.get("recovery_no_automation_days") or 0),
+        str(bool(ctx.get("has_watermark_issue"))),
+        str(bool(ctx.get("has_spam_warning"))),
+    ]
+    return "|".join(parts)
 
 
 def _normalize_week_dates_for_overview(plan_data: Dict[str, Any], start_of_week) -> Dict[str, Any]:
@@ -489,9 +801,19 @@ def _build_overview_week_plan(
     start_of_week,
     connected_platforms: List[str],
     analytics_profile: Dict[str, Any],
+    questionnaire_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tz_label = analytics_profile.get("timezone_label", "UTC")
     platform_data = analytics_profile.get("platforms", {})
+    questionnaire_context = questionnaire_context or {}
+    has_questionnaire = bool(questionnaire_context.get("has_questionnaire"))
+    questionnaire_categories = questionnaire_context.get("preferred_categories") or []
+    questionnaire_times = questionnaire_context.get("preferred_times") or []
+    questionnaire_risk_level = str(questionnaire_context.get("risk_level") or "").upper()
+    questionnaire_recommended_plan = str(questionnaire_context.get("recommended_plan") or "").strip()
+    recovery_no_automation_days = max(0, int(questionnaire_context.get("recovery_no_automation_days") or 0))
+    has_watermark_issue = bool(questionnaire_context.get("has_watermark_issue"))
+    has_spam_warning = bool(questionnaire_context.get("has_spam_warning"))
 
     if not connected_platforms:
         return {
@@ -521,24 +843,69 @@ def _build_overview_week_plan(
             distribution.append(base + (1 if i < rem else 0))
         return distribution
 
+    def _recovery_distribution(total: int) -> List[int]:
+        # Recovery mode: lower activity during first 5 days, jumpstart on days 6-7.
+        dist = [0, 0, 0, 0, 0, 0, 0]
+        remaining = max(0, int(total or 0))
+
+        for idx in range(5):
+            if remaining <= 0:
+                break
+            dist[idx] = 1
+            remaining -= 1
+
+        for idx in [5, 6]:
+            if remaining <= 0:
+                break
+            add = min(2, remaining)
+            dist[idx] += add
+            remaining -= add
+
+        while remaining > 0:
+            dist[6] += 1
+            remaining -= 1
+
+        return dist
+
     weekly_targets = []
     per_platform_daily_quota: Dict[str, List[int]] = {}
 
     for platform in connected_platforms:
         pdata = platform_data.get(platform, {})
         weekly_target = int(pdata.get("weekly_post_target", 8) or 8)
-        per_platform_daily_quota[platform] = _distribute_weekly_count(weekly_target)
+        if has_questionnaire and recovery_no_automation_days > 0:
+            weekly_target = min(weekly_target, 9)
+            per_platform_daily_quota[platform] = _recovery_distribution(weekly_target)
+        else:
+            per_platform_daily_quota[platform] = _distribute_weekly_count(weekly_target)
+
+        weekly_categories = pdata.get("categories", [])[:3]
+        if questionnaire_categories:
+            weekly_categories = list(dict.fromkeys(questionnaire_categories + weekly_categories))[:3]
+
+        weekly_times = pdata.get("best_times", [])[:3]
+        if questionnaire_times:
+            normalized_times = [f"{t} ({tz_label})" if "(" not in t else t for t in questionnaire_times]
+            weekly_times = list(dict.fromkeys(normalized_times + weekly_times))[:3]
 
         weekly_targets.append({
             "platform": platform,
             "recommended_posts_per_week": weekly_target,
-            "priority_categories": pdata.get("categories", [])[:3],
-            "best_posting_times": pdata.get("best_times", [])[:3],
-            "mode": "aggressive_start" if platform in aggressive_platforms else "active_support",
+            "priority_categories": weekly_categories,
+            "best_posting_times": weekly_times,
+            "mode": (
+                "recovery_then_jumpstart"
+                if has_questionnaire and recovery_no_automation_days > 0
+                else ("aggressive_start" if platform in aggressive_platforms else "active_support")
+            ),
             "execution_note": (
-                "Post aggressively (15-20/week) and answer all comments fast with Autonomous Engagement."
-                if platform in aggressive_platforms
-                else "Maintain consistent posting with Auto Posting and active comment replies."
+                "Days 1-5 use strict recovery with manual posting and manual replies; Days 6-7 move into strategic jumpstart."
+                if has_questionnaire and recovery_no_automation_days > 0
+                else (
+                    "Post aggressively (15-20/week) and answer all comments fast with Autonomous Engagement."
+                    if platform in aggressive_platforms
+                    else "Maintain consistent posting with Auto Posting and active comment replies."
+                )
             )
         })
 
@@ -564,7 +931,13 @@ def _build_overview_week_plan(
 
             pdata = platform_data.get(platform, {})
             categories = pdata.get("categories", []) or _default_categories_for_platform(platform)
+            if questionnaire_categories:
+                categories = list(dict.fromkeys(questionnaire_categories + categories))
+
             best_times = pdata.get("best_times", []) or [f"9:00 AM ({tz_label})"]
+            if questionnaire_times:
+                normalized_times = [f"{t} ({tz_label})" if "(" not in t else t for t in questionnaire_times]
+                best_times = list(dict.fromkeys(normalized_times + best_times))
 
             cat_primary = categories[day_idx % len(categories)]
             cat_secondary = categories[(day_idx + 1) % len(categories)]
@@ -580,13 +953,21 @@ def _build_overview_week_plan(
             title = f"{platform_label} quota: {posts_today} {post_label}"
 
             joined_times = ", ".join(selected_times)
+            in_recovery_phase = has_questionnaire and recovery_no_automation_days > 0 and day_idx < recovery_no_automation_days
             aggressive_note = "Use aggressive growth mode." if platform in aggressive_platforms else "Maintain steady publishing momentum."
 
-            description = (
-                f"Publish {posts_today} {_display_category(cat_primary)} / {_display_category(cat_secondary)} {post_label} on {platform_label} today at: {joined_times}. "
-                f"{aggressive_note} Generate captions with Auto Caption Generator, generate hashtags, schedule every post with Auto Posting, "
-                f"and use Autonomous Engagement to answer all comments quickly after each publish."
-            )
+            if in_recovery_phase:
+                description = (
+                    f"Publish {posts_today} {_display_category(cat_primary)} / {_display_category(cat_secondary)} {post_label} on {platform_label} today at: {joined_times}. "
+                    "Recovery mode active: post manually (no automation), avoid spam-like behavior, remove watermark assets, "
+                    "and do manual comment replies with human-safe pacing."
+                )
+            else:
+                description = (
+                    f"Publish {posts_today} {_display_category(cat_primary)} / {_display_category(cat_secondary)} {post_label} on {platform_label} today at: {joined_times}. "
+                    f"{aggressive_note} Generate captions with Auto Caption Generator, generate hashtags, schedule every post with Auto Posting, "
+                    f"and use Autonomous Engagement to answer all comments quickly after each publish."
+                )
 
             comments_target = max(8, posts_today * max(3, int(2 + avg_rate * 0.5)))
             shares_target = max(4, posts_today * max(2, int(1 + avg_rate * 0.3)))
@@ -609,6 +990,9 @@ def _build_overview_week_plan(
                         f"Category focus is {_display_category(cat_primary)} / {_display_category(cat_secondary)}."
                     ),
                     "product_feature_recommendation": (
+                        "Execution stack: Auto Caption Generator -> Hashtag Generator -> Manual Publish -> Manual Engagement. "
+                        "Recovery policy: no automation for early-phase recovery; reply manually with natural cadence."
+                        if in_recovery_phase else
                         "Execution stack: Auto Caption Generator -> Hashtag Generator -> Auto Posting -> Autonomous Engagement. "
                         "Comment policy: reply to all meaningful comments within 120 minutes."
                     )
@@ -631,13 +1015,27 @@ def _build_overview_week_plan(
                     },
                     {
                         "title": "Schedule post",
-                        "description": "Schedule in Stelle Auto Posting at the recommended slot.",
-                        "ai_content": f"Schedule all {posts_today} {post_label} at: {joined_times}. Validate previews before queueing."
+                        "description": (
+                            "Prepare manual publish checklist for the recommended slot (automation disabled in recovery mode)."
+                            if in_recovery_phase else
+                            "Schedule in Stelle Auto Posting at the recommended slot."
+                        ),
+                        "ai_content": (
+                            f"Publish manually all {posts_today} {post_label} at: {joined_times}. Use natural spacing and validate watermark-free assets before publish."
+                            if in_recovery_phase else
+                            f"Schedule all {posts_today} {post_label} at: {joined_times}. Validate previews before queueing."
+                        )
                     },
                     {
                         "title": "Enable autonomous engagement",
-                        "description": "Turn on Autonomous Engagement immediately after publish.",
+                        "description": (
+                            "Run manual engagement replies after publish (autonomous mode off during recovery)."
+                            if in_recovery_phase else
+                            "Turn on Autonomous Engagement immediately after publish."
+                        ),
                         "ai_content": (
+                            "Reply manually to meaningful comments within 30-60 minutes with non-repetitive language; keep automation off during recovery phase."
+                            if in_recovery_phase else
                             "Run Autonomous Engagement for each post. Reply to all comments quickly (target under 15 minutes) "
                             "and keep it active for the first 90-120 minutes after every publish."
                         )
@@ -674,35 +1072,70 @@ def _build_overview_week_plan(
         })
 
     source = "user_analytics" if any((platform_data.get(p, {}) or {}).get("post_count", 0) >= 5 for p in connected_platforms) else "research_data"
+    if has_questionnaire:
+        source = "user_analytics+questionnaire"
+
+    key_insights = [
+        "Category priorities come from top-performing category signals in user analytics.",
+        "Recommended posting times prioritize your best engagement time slots.",
+    ]
+    if has_questionnaire and recovery_no_automation_days > 0:
+        key_insights = [
+            "Recovery mode is active: no automation in days 1-5, then controlled jumpstart in days 6-7.",
+        ] + key_insights + [
+            "Automation features are intentionally paused in recovery window to protect account health.",
+        ]
+    else:
+        key_insights = [
+            "Aggressive-start mode recommends 15-20 posts/week on Instagram, Threads, TikTok, and YouTube Shorts.",
+        ] + key_insights + [
+            "Auto Posting + Autonomous Engagement is mandatory for execution and fast comment response.",
+        ]
 
     return {
         "strategic_approach": (
             "Aggressive 7-day growth sprint built from your analytics: post frequently, schedule every post via Auto Posting, "
             "and answer all comments fast using Autonomous Engagement to maximize early momentum."
+            if not has_questionnaire else
+            (
+                "Questionnaire-aware recovery plan: Days 1-5 strict recovery with no automation, then Days 6-7 strategic jumpstart. "
+                "Blend analytics timing with safer execution to protect account health while restoring growth momentum."
+                if recovery_no_automation_days > 0 else
+            "Aggressive 7-day growth sprint built from your analytics plus questionnaire preferences: align content themes to your intent, "
+            "schedule at your best-fit times, and execute with Auto Posting and Autonomous Engagement for fast momentum."
+            )
         ),
         "recommendation_alignment": {
             "platforms_detected": connected_platforms,
             "posting_schedule_source": source,
-            "key_insights": [
-                "Aggressive-start mode recommends 15-20 posts/week on Instagram, Threads, TikTok, and YouTube Shorts.",
-                "Category priorities come from top-performing category signals in user analytics.",
-                "Recommended posting times prioritize your best engagement time slots.",
-                "Auto Posting + Autonomous Engagement is mandatory for execution and fast comment response."
-            ]
+            "key_insights": key_insights + (["Questionnaire preferences were blended with analytics for topic and timing decisions."] if has_questionnaire else []) + (
+                [
+                    f"Questionnaire risk level: {questionnaire_risk_level or 'N/A'}.",
+                    f"Questionnaire recovery guidance: {questionnaire_recommended_plan or 'Applied in execution strategy.'}",
+                ] if has_questionnaire and (questionnaire_risk_level or questionnaire_recommended_plan) else []
+            ) + (["Watermark-risk signal detected: prioritize native, watermark-free content assets."] if has_watermark_issue else []) + (["Spam-warning signal detected: use manual engagement and non-repetitive replies during recovery."] if has_spam_warning else [])
         },
         "weekly_posting_targets": weekly_targets,
         "this_week_plan": this_week_plan,
         "product_playbook": {
-            "auto_posting": "Schedule every post at its recommended time using Stelle Auto Posting.",
-            "autonomous_engagement": "Enable Autonomous Engagement for 90-120 minutes post-publish.",
+            "auto_posting": (
+                "Recovery mode: keep Auto Posting OFF during days 1-5, then enable controlled scheduling from day 6 onward."
+                if has_questionnaire and recovery_no_automation_days > 0 else
+                "Schedule every post at its recommended time using Stelle Auto Posting."
+            ),
+            "autonomous_engagement": (
+                "Recovery mode: keep Autonomous Engagement OFF during days 1-5; do manual replies, then enable controlled automation from day 6 onward."
+                if has_questionnaire and recovery_no_automation_days > 0 else
+                "Enable Autonomous Engagement for 90-120 minutes post-publish."
+            ),
             "auto_caption": "Draft and refine each caption with Auto Caption Generator before scheduling.",
             "hashtag_generator": "Generate platform-fit hashtags per post using Hashtag Generator.",
             "execution_sequence": [
                 "Choose platform and category from daily plan",
                 "Generate caption with Auto Caption Generator",
                 "Generate hashtags with Hashtag Generator",
-                "Schedule with Auto Posting at recommended slot",
-                "Enable Autonomous Engagement after publish",
+                "Publish manually in recovery window or schedule with Auto Posting after recovery",
+                "Use manual engagement in recovery window or Autonomous Engagement after recovery",
                 "Review daily KPI and adjust next-day content angle"
             ]
         }
@@ -712,17 +1145,40 @@ def _build_overview_week_plan(
 @router.get("/overview-week-plan")
 async def get_overview_week_plan(
     user_id: str,
+    platforms: List[str] = Query(..., description="User-selected platforms. Repeat param or pass comma-separated values."),
     force_refresh: bool = False,
     user_timezone: Optional[str] = None,
     timezone_alias: Optional[str] = Query(default=None, alias="timezone"),
 ):
-    """Return analytics-driven 7-day social engagement plan for overview."""
+    """Return analytics-driven 7-day social engagement plan for user-selected platforms."""
     try:
+        selected_platforms_raw: List[str] = []
+        for item in (platforms or []):
+            for chunk in str(item or "").split(","):
+                value = _normalize_platform_name(chunk)
+                if value:
+                    selected_platforms_raw.append(value)
+
+        selected_platforms: List[str] = []
+        seen_platforms = set()
+        for platform in selected_platforms_raw:
+            if platform not in SUPPORTED_OVERVIEW_PLATFORMS:
+                continue
+            if platform in seen_platforms:
+                continue
+            seen_platforms.add(platform)
+            selected_platforms.append(platform)
+
+        if not selected_platforms:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one valid platform is required in 'platforms' query parameter.",
+            )
+
         requested_tz = user_timezone or timezone_alias
         if requested_tz:
-            try:
-                user_tz = pytz.timezone(requested_tz)
-            except Exception:
+            user_tz = _resolve_timezone_param(requested_tz)
+            if not user_tz:
                 user_tz = await _get_user_timezone(user_id)
         else:
             user_tz = await _get_user_timezone(user_id)
@@ -732,15 +1188,45 @@ async def get_overview_week_plan(
         week_start_date_str = start_of_week.strftime("%Y-%m-%d")
         week_end_date_str = end_of_week.strftime("%Y-%m-%d")
 
-        existing_plan_doc = await weekly_plans_collection.find_one({
-            "user_id": user_id,
-            "week_start_date": week_start_date_str,
-            "plan_type": "overview_7day"
+        questionnaire_context = await _get_questionnaire_context(user_id)
+        current_questionnaire_signature = _questionnaire_signature(questionnaire_context)
+        current_plan_version = OVERVIEW_PLAN_VERSION
+
+        existing_plan_doc = await overview_week_plans_collection.find_one({
+            "$or": [
+                {"user_id": user_id, "plan_type": "overview_7day"},
+                {"userId": user_id, "plan_type": "overview_7day"},
+            ]
         })
 
+        should_regenerate = force_refresh
         if existing_plan_doc and not force_refresh:
+            existing_week_start_raw = existing_plan_doc.get("week_start_date")
+            try:
+                existing_week_start = datetime.strptime(str(existing_week_start_raw), "%Y-%m-%d").date()
+                should_regenerate = (today - existing_week_start).days >= 7
+            except Exception:
+                should_regenerate = True
+
+            existing_platforms = [
+                _normalize_platform_name(p)
+                for p in (existing_plan_doc.get("connected_platforms") or [])
+                if p
+            ]
+            if set(existing_platforms) != set(selected_platforms):
+                should_regenerate = True
+
+            stored_questionnaire_signature = str(existing_plan_doc.get("questionnaire_signature") or "")
+            if stored_questionnaire_signature != current_questionnaire_signature:
+                should_regenerate = True
+
+            stored_plan_version = int(existing_plan_doc.get("plan_version") or 1)
+            if stored_plan_version != current_plan_version:
+                should_regenerate = True
+
+        if existing_plan_doc and not should_regenerate:
             cached_plan = _sanitize_overview_plan_for_display(existing_plan_doc.get("plan", {}))
-            await weekly_plans_collection.update_one(
+            await overview_week_plans_collection.update_one(
                 {"_id": existing_plan_doc["_id"]},
                 {
                     "$set": {
@@ -751,55 +1237,53 @@ async def get_overview_week_plan(
             )
             return {
                 "success": True,
-                "week_start_date": week_start_date_str,
-                "week_end_date": week_end_date_str,
+                "week_start_date": existing_plan_doc.get("week_start_date", week_start_date_str),
+                "week_end_date": existing_plan_doc.get("week_end_date", week_end_date_str),
                 "plan": cached_plan,
-                "connected_platforms": existing_plan_doc.get("connected_platforms", []),
+                "connected_platforms": selected_platforms,
                 "timezone_used": datetime.now(user_tz).tzname() or str(user_tz),
                 "source": "cached",
             }
 
-        connected_platforms = [
-            _normalize_platform_name(p)
-            for p in await _get_connected_platforms(user_id)
-        ]
-
-        deduped_platforms = []
-        seen = set()
-        for p in connected_platforms:
-            if p in seen:
-                continue
-            seen.add(p)
-            deduped_platforms.append(p)
-        connected_platforms = deduped_platforms
+        connected_platforms = selected_platforms
 
         analytics_profile = await _build_overview_analytics_profile(user_id, connected_platforms, user_tz)
-        generated_plan = _build_overview_week_plan(start_of_week, connected_platforms, analytics_profile)
+        generated_plan = _build_overview_week_plan(
+            start_of_week,
+            connected_platforms,
+            analytics_profile,
+            questionnaire_context,
+        )
         generated_plan = _normalize_week_dates_for_overview(generated_plan, start_of_week)
 
         final_plan = generated_plan
         if existing_plan_doc:
             final_plan = _merge_manual_edits(existing_plan_doc.get("plan", {}), generated_plan)
-            await weekly_plans_collection.update_one(
+            await overview_week_plans_collection.update_one(
                 {"_id": existing_plan_doc["_id"]},
                 {
                     "$set": {
                         "plan": final_plan,
+                        "week_start_date": week_start_date_str,
                         "week_end_date": week_end_date_str,
                         "connected_platforms": connected_platforms,
+                        "questionnaire_signature": current_questionnaire_signature,
+                        "plan_version": current_plan_version,
                         "updated_at": datetime.now(timezone.utc),
                     }
                 }
             )
             source = "refreshed"
         else:
-            await weekly_plans_collection.insert_one({
+            await overview_week_plans_collection.insert_one({
                 "user_id": user_id,
                 "week_start_date": week_start_date_str,
                 "week_end_date": week_end_date_str,
                 "plan_type": "overview_7day",
                 "plan": final_plan,
                 "connected_platforms": connected_platforms,
+                "questionnaire_signature": current_questionnaire_signature,
+                "plan_version": current_plan_version,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             })
