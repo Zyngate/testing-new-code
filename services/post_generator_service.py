@@ -819,11 +819,11 @@ def enforce_instagram_constraints(text: str, target_chars: int = 1500) -> str:
 
     # 3) If too short, expand paragraph 3 with varied non-repetitive lines.
     expansion_lines = [
-        "The pressure now is not abstract; the next response carries real strategic weight.",
-        "What happens next will define whether this remains rhetoric or turns into policy.",
-        "That is why every public statement here functions as a signal, not just a soundbite.",
-        "Each line now raises the stakes for allies, opponents, and undecided observers alike.",
-        "The outcome depends on what action follows these words, not on the words alone.",
+        "The implications here extend well beyond the surface-level observation.",
+        "Context matters, and the specifics make this harder to dismiss.",
+        "This is the kind of detail that tends to get overlooked but shouldn't.",
+        "The question isn't just what happened, but what it signals going forward.",
+        "Worth sitting with before forming a final opinion.",
     ]
 
     line_index = 0
@@ -938,94 +938,63 @@ Example openings:
     
     if p_norm == "instagram":
         return f"""
-{person_instruction}
+You are writing a real Instagram Reels caption. NOT a summary. NOT a transcript. NOT a report.
 
-Write a long-form Instagram Reels caption in EXACTLY 3 paragraphs.
-
-STRUCTURE (MANDATORY):
-
-PARAGRAPH 1 — HOOK (NON-NEGOTIABLE)
-
-{identity_hook_rule}
-
-- 3-4 short lines.
-- Must reference one concrete detail from OCR or transcript naturally.
-- Do NOT label it as "OCR", "on-screen text", "transcript", "the phrase", "this phrase", "that phrase", "the line", or "this line".
-- Write the hook as a sharp public-facing claim, not scene narration.
-
-PARAGRAPH 2 — CONTEXT & INSIGHT  
-- This paragraph MUST add NEW information and MUST NOT repeat the hook wording or meaning.
-- Do NOT rephrase the hook sentence. Continue the story forward.
-- Explain what happens next and why it matters.
-- Human, conversational tone.
-- Grounded in the topic meaning, not scene narration.
-- This should be the longest paragraph.
-- Never mention what anyone wore in the video.
-- FORBIDDEN OPENERS: "This video shows", "This video delves", "The video shows", "The video delves", "In this video".
-
-PARAGRAPH 3 — REFLECTION / CTA  
-- 3-4 short lines.
-- Invite the viewer to think, react, or comment  
-- Natural and thoughtful, not salesy  
-- End with a question or reflective line
-
-CONTEXT ANCHOR (MANDATORY):
-
-Base the caption on the main point/topic.
-Do NOT narrate the scene like a visual description.
-Do NOT describe posture, clothing, camera framing, background, or facial expressions.
-Write as a social caption reaction/opinion, not as a shot-by-shot summary.
-
-STYLE:
-- Human and engaging  
-- Confident, not corporate
-- Critical-editorial voice (serious, direct, accountable)
-- Clear, not abstract
-- Sound like a real caption, not a report
-- Use varied sentence shapes; avoid repetitive structures.
-MANDATORY SPECIFICITY RULE:
-- You MUST reference at least ONE concrete detail from the topic.
-RULES:
-- You MAY mention the topic, claim, or implication, but do NOT describe the scene frame-by-frame  
-- Do NOT describe body language, camera angle, background objects, or posture  
-- STRICTLY NO first-person language (no I, me, my, we)  
-- No emojis  
-- No hashtags inside the caption text  
-- Avoid generic motivational filler  
-
-SELF-CHECK:
-- If first-person appears, rewrite internally before responding  
-- If paragraph 2 repeats hook meaning, rewrite paragraph 2.
-- If any forbidden opener appears, rewrite before returning.
-- If "on-screen text" appears, rewrite before returning.
-- If the caption reads like video description (scene/background/body language), rewrite before returning.
-- If it sounds like a neutral news report instead of an opinionated caption, rewrite before returning.
-
-
-LENGTH:
-- Long-form: 1,000–1,500 characters total (including spaces)  
-- EXACTLY 3 paragraphs separated by a blank line  
-
-VIDEO DETAILS (USE THESE SPECIFICS CAREFULLY):
-
-RAW VIDEO MATERIAL (PRIORITY FOR HOOK):
+BACKGROUND (read to understand the topic — do NOT copy, quote, or paraphrase):
+TOPIC: {effective_query}
 {raw_material}
 
-TOPIC:
-{effective_query}
+{person_instruction}
 
-MANDATORY SPECIFICITY RULE:
-- You MUST reference at least ONE concrete detail from the topic.
-- Do NOT write abstract commentary.
-- The caption should make it obvious what the video is about.
-- If someone reads the caption without watching the video, 
-  they must clearly understand the subject.
+YOUR JOB:
+Read the background above. Understand what this is about. Then write a caption that reacts to it — like a real person who watched this video and has something to say about it.
 
-SELF-CHECK:
-If the topic is not clearly identifiable from the caption,
-rewrite internally before returning.
+Think: What is the most interesting, surprising, or provocative angle here? Lead with that.
 
-Return ONLY the caption text.
+━━━━━━━━━━━━━━━━━━━━━━━
+STRUCTURE — EXACTLY 3 PARAGRAPHS
+━━━━━━━━━━━━━━━━━━━━━━━
+
+PARAGRAPH 1 — HOOK
+{identity_hook_rule}
+- 2-3 short punchy lines.
+- Lead with the most interesting or surprising angle from the topic.
+- Make it feel like something a real person would stop scrolling for.
+- DO NOT start by describing what the video shows.
+- DO NOT quote the transcript or OCR text directly.
+
+PARAGRAPH 2 — INSIGHT
+- 3-5 sentences.
+- Dig into WHY this matters or WHAT most people miss about it.
+- Add a specific angle, implication, or context the viewer wouldn't already know.
+- This should be the meatiest paragraph — earn the reader's attention.
+- Must NOT repeat or rephrase anything from paragraph 1.
+- FORBIDDEN OPENERS: "This video shows", "This video delves", "The video shows", "In this video"
+
+PARAGRAPH 3 — REFLECTION
+- 2-3 short lines.
+- End with a thought, question, or observation that makes the reader pause.
+- Natural, not salesy. Not a generic CTA.
+
+━━━━━━━━━━━━━━━━━━━━━━━
+HARD RULES
+━━━━━━━━━━━━━━━━━━━━━━━
+- NEVER quote or closely paraphrase the transcript/OCR — use them only to understand the topic
+- NEVER describe the video visually (no camera angles, no "we see", no scene narration)
+- NEVER use first-person (no I, me, my, we)
+- NEVER use: on-screen text, transcript, OCR, the phrase, the line
+- NO emojis, NO hashtags in caption text
+- NO generic filler like "its impact is still felt today" or "a testament to complexity"
+- The caption must read like an opinionated reaction, not a Wikipedia summary
+
+LENGTH: 1,000–1,500 characters total. EXACTLY 3 paragraphs separated by a blank line.
+
+SELF-CHECK before returning:
+- Does it sound like a real person reacting to this topic? If not, rewrite.
+- Does paragraph 2 quote or summarize the source? If yes, rewrite with an opinion instead.
+- Is there ANY generic filler sentence that could apply to ANY topic? If yes, replace it with something specific.
+
+Return ONLY the caption text. No labels, no explanations.
 """
 
     elif p_norm == "threads":
@@ -1034,6 +1003,9 @@ You are writing a Threads caption. The tone DEPENDS on the content type.
 
 STEP 1: READ THE TOPIC AND DETERMINE CONTENT TYPE
 Topic: {effective_query}
+
+CONTENT MATERIAL (USE FOR SPECIFICS — choose 1 concrete detail if useful):
+{raw_material}
 
 STEP 2: CHECK FOR MARKETING/BUSINESS KEYWORDS
 Does the topic contain 2+ of these keywords?
@@ -1168,6 +1140,9 @@ SELF-CHECK BEFORE FINAL ANSWER:
 Context:
 {effective_query}
 
+CONTENT MATERIAL (USE FOR SPECIFIC DETAILS):
+{raw_material}
+
 Return ONLY the caption text.
 """
 
@@ -1207,6 +1182,9 @@ STYLE:
 
 LENGTH:
 - 180–450 characters
+
+CONTENT MATERIAL (USE THESE FOR SPECIFICS):
+{raw_material}
 
 Context:
 {effective_query}
@@ -1260,6 +1238,9 @@ If something can be said in 5 words, do not use 10.
 
 TOPIC:
 {effective_query}
+
+CONTENT MATERIAL (REFERENCE FOR SPECIFICS — do not copy verbatim):
+{raw_material}
 
 Return ONLY the caption (1-2 sentences max).
 """
@@ -1324,6 +1305,9 @@ RULES:
 
 TOPIC:
 {effective_query}
+
+CONTENT MATERIAL (USE FOR SPECIFIC DETAILS):
+{raw_material}
 
 Return ONLY the description text.
 """
@@ -1412,10 +1396,11 @@ CONTEXT
 
 {effective_query}
 
+CONTENT MATERIAL (USE FOR SPECIFIC DETAILS — reference naturally, do not label as OCR/transcript):
+{raw_material}
+
 Return ONLY the caption text.
 """
-
-    elif p_norm == "twitter":
         return f"""
 Write a short, punchy tweet.
 
@@ -1436,10 +1421,11 @@ RULES:
 Context:
 {effective_query}
 
+CONTENT MATERIAL (USE FOR SPECIFICS — reference naturally):
+{raw_material}
+
 Return ONLY the caption text.
 """
-
-    else:
         return f"""
 Write a natural social media caption.
 
@@ -1642,22 +1628,21 @@ async def _enforce_instagram_caption_strict(
     repair_prompt = f"""
 Rewrite this Instagram caption in EXACTLY 3 paragraphs.
 
+THE CORE PROBLEM TO FIX:
+The caption reads like a summary or transcript of the video. Rewrite it as an opinionated reaction — like a real person commenting on this topic, not a reporter describing it.
+
 STRICT RULES:
-- Paragraph 1 = hook with one concrete detail.
-- Paragraph 2 = NEW progression only. Do NOT repeat hook wording or meaning.
-- Paragraph 3 = reflection only. Do NOT restate paragraph 2 in different words.
-- Paragraph 2 must NOT start with: This video shows / This video delves / The video shows / The video delves / In this video.
-- Paragraph 2 and 3 must NOT start with passive openers like: A distinction is made / The discussion raises.
-- Do NOT use these words/phrases anywhere: on-screen text, OCR, transcript, the phrase, this phrase, that phrase, the line, this line.
-- Do NOT write scene narration (no "in front of", "in the background", "as the scene unfolds", posture/body-language description, or camera framing details).
-- Avoid abstract filler words: conversation, discussion, debate, complexities and nuances.
-- Voice must be critical-editorial and opinionated, like a serious Instagram commentary caption.
-- Do NOT write like a neutral news report.
-- Human, natural, conversational tone.
-- Do NOT repeat the same sentence or claim in different wording.
-- Keep each paragraph 2-4 sentences max.
-- No first-person language.
-- No emojis. No hashtags.
+- Paragraph 1 = punchy hook with one specific angle. Make someone stop scrolling.
+- Paragraph 2 = insight — WHY this matters, what most people miss, the real implication. Must NOT repeat paragraph 1.
+- Paragraph 3 = short reflection or question. Natural, not salesy.
+- NEVER quote or paraphrase the source material directly — react to it instead.
+- Paragraph 2 must NOT start with: This video shows / This video delves / The video shows / In this video.
+- Paragraphs 2 and 3 must NOT start with passive openers like: A distinction is made / The discussion raises.
+- FORBIDDEN words/phrases anywhere: on-screen text, OCR, transcript, the phrase, this phrase, the line.
+- NO scene narration (no posture, body language, camera framing, background description).
+- NO generic filler sentences that could apply to any topic.
+- NO first-person language. NO emojis. NO hashtags.
+- Voice: opinionated, direct, editorial — not neutral news report.
 
 TOPIC:
 {effective_query}
@@ -1665,16 +1650,16 @@ TOPIC:
 PERSON (if any):
 {detected_person or "none"}
 
-OCR:
+OCR (background only — do NOT copy):
 {(ocr_text or "")[:300]}
 
-TRANSCRIPT:
+TRANSCRIPT (background only — do NOT copy):
 {(transcript or "")[:300]}
 
-ORIGINAL CAPTION:
+ORIGINAL CAPTION (rewrite this):
 {caption_text}
 
-Return ONLY the rewritten caption.
+Return ONLY the rewritten caption. 3 paragraphs, blank line between each.
 """
 
     for pass_index in range(2):
@@ -1932,10 +1917,9 @@ async def _generate_caption_for_platform(
     # -------- SAFE CLEANING --------
     caption_text = caption_text.replace('\\"', "").replace('"', "").strip()
 
-    # Fix common dropped-preposition typos
+    # Fix common dropped-preposition typos (only when clearly a typo — isolated single chars)
     caption_text = re.sub(r"\bom\b", "from", caption_text)
-    caption_text = re.sub(r"\bor\b", "for", caption_text)
-    caption_text = re.sub(r"\bf\b", "of", caption_text)
+    # ⚠️ Removed: r"\bor\b" → "for" and r"\bf\b" → "of" — these caused mass corruption
 
     for bad in BANNED_WORDS:
         pattern = r'\b' + re.escape(bad) + r'\b'
