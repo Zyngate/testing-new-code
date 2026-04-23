@@ -751,8 +751,11 @@ async def _fact_align_reply(
         f"- Anchors: {fact_bundle.get('fact_anchors', 'none')}\n"
         f"- Lexical sync words: {fact_bundle.get('lexical_sync_words', 'none')}\n\n"
         "Task:\n"
-        "Rewrite only if needed so the reply is fact-consistent with verified context, supportive/non-argumentative, and naturally uses sync words. "
-        "If already fine, return the draft reply unchanged.\n"
+        "Check if the commenter said anything factually incorrect based on verified context. "
+        "Check if the AI reply contains any factual errors. "
+        "If corrections are needed, weave them in naturally and warmly — like a human casually clarifying, NOT like a teacher correcting a student. "
+        "CRITICAL: Do NOT summarize the post. Do NOT repeat post content. Keep the reply short and human. "
+        "If both the comment and reply are fine factually, return the draft reply EXACTLY as-is.\n"
         "Return reply text only."
     )
 
