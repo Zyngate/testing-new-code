@@ -786,7 +786,7 @@ RULES:
 
     # 7. Generate keywords
     try:
-        keywords = await generate_keywords_post(client, marketing_prompt)
+        keywords = await generate_keywords_post(client, evidence_prompt)
     except Exception as e:
         logger.error("Keyword generation failed: " + str(e))
         keywords = ["", "", ""]
@@ -795,7 +795,7 @@ RULES:
     async def get_hashtags_for_platform(p):
         try:
             try:
-                tags = await fetch_platform_hashtags(client, keywords, p, marketing_prompt, autoposting=autoposting)
+                tags = await fetch_platform_hashtags(client, keywords, p, evidence_prompt, autoposting=autoposting)
             except TypeError:
                 tags = await fetch_platform_hashtags(client, keywords, p, autoposting=autoposting)
             return (p, tags or [])
@@ -805,38 +805,20 @@ RULES:
 
     async def get_captions():
         try:
-            creator_context = f"""
-You are writing a caption for a SHORT-FORM VIDEO (Reels / TikTok / Shorts).
-
-IMPORTANT:
-- This is NOT a summary task.
-- Do NOT describe scenes or list events.
-- Do NOT sound like a report or documentary.
-
-WHAT MATTERS:
-- Viewer curiosity
-- Emotional tension
-- Why this moment matters
-
-VIDEO SIGNALS (for understanding only):
-{marketing_prompt}
-
-Focus on ONE strong idea or reaction.
-"""
             captions_result = await generate_caption_post(
-    marketing_prompt,
-    keywords,
-    platforms,
-    autoposting=autoposting,
-    detected_person=detected_person,
-    ocr_text=ocr_text_combined,
-    transcript=transcript
-)
+                evidence_prompt,
+                keywords,
+                platforms,
+                autoposting=autoposting,
+                detected_person=detected_person,
+                ocr_text=ocr_text_combined,
+                transcript=transcript,
+            )
             logger.info(f"📝 Caption generation result: platforms={list(captions_result.get('captions', {}).keys())}, autoposting={autoposting}")
             return captions_result if isinstance(captions_result, dict) else {"captions": captions_result}
         except Exception as e:
             logger.error(f"generate_caption_post failed: {e}", exc_info=True)
-            return {"captions": {p: f"Short {p} caption: {marketing_prompt[:100]}" for p in platforms}}
+            return {"captions": {p: f"Short {p} caption: {evidence_prompt[:100]}" for p in platforms}}
 
     # Run all hashtag tasks + caption task in parallel
     hashtag_tasks = [get_hashtags_for_platform(p) for p in platforms]
