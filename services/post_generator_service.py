@@ -1333,7 +1333,10 @@ ONE SINGLE PARAGRAPH ONLY — NO line breaks, NO blank lines between sentences.
 
 Start with a strong hook. Prefer a bold statement, surprising fact, or relatable pain point over a question.
 Only use a question if no strong statement fits the topic.
-Avoid starting with "What" — it is overused. If using a question, start with "Ever", "Ever noticed", "Think about", or similar instead.
+Avoid starting with "What" — it is overused.
+Do NOT repeatedly start captions with the same opener across outputs.
+Do NOT start with: "Ever noticed", "Think about", "Did you know", "Here's the thing".
+If a question is used, make it short, specific, and different from common hook templates.
 Then continue with context and keywords in the SAME paragraph.
 End with a natural CTA in the SAME paragraph.
 
