@@ -1507,6 +1507,25 @@ def _instagram_paragraphs(text: str) -> List[str]:
     return [p.strip() for p in text.split("\n\n") if p.strip()]
 
 
+def _split_sentences(text: str) -> List[str]:
+    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _dedupe_sentences(sentences: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    deduped: List[str] = []
+    for s in sentences:
+        key = re.sub(r"\s+", " ", s).strip().lower()
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(s.strip())
+    return deduped
+
+
 def _token_set_for_overlap(text: str) -> Set[str]:
     tokens = re.findall(r"[a-z]+", text.lower())
     return {
@@ -1625,6 +1644,8 @@ STRICT RULES:
 - Voice must be critical-editorial and opinionated, like a serious Instagram commentary caption.
 - Do NOT write like a neutral news report.
 - Human, natural, conversational tone.
+- Do NOT repeat the same sentence or claim in different wording.
+- Keep each paragraph 2-4 sentences max.
 - No first-person language.
 - No emojis. No hashtags.
 
@@ -1668,6 +1689,8 @@ Return ONLY the rewritten caption.
             break
 
     combined = "\n\n".join([p1, p2, p3]).strip()
+    # Strip hashtags if model leaked them into caption body.
+    combined = re.sub(r"(^|\s)#[A-Za-z0-9_]+", "", combined)
     for term in INSTAGRAM_FORBIDDEN_TERMS:
         combined = re.sub(re.escape(term), "", combined, flags=re.IGNORECASE)
 
@@ -1678,7 +1701,32 @@ Return ONLY the rewritten caption.
 
     combined = re.sub(r"\s+", " ", combined)
     combined = combined.replace(" .", ".").replace(" ,", ",").strip()
-    rebuilt = "\n\n".join([p.strip() for p in _instagram_paragraphs(combined)[:3] if p.strip()])
+
+    # Sentence-level dedupe to avoid repetitive transcript-like output.
+    sentences = _dedupe_sentences(_split_sentences(combined))
+
+    if not sentences:
+        return caption_text
+
+    # Force exactly 3 paragraphs even in fallback mode.
+    if len(sentences) < 3:
+        sentences = sentences + ["The point is clear and worth discussing carefully."] * (3 - len(sentences))
+
+    p1_sentences = sentences[:2]
+    p2_sentences = sentences[2:5] if len(sentences) > 2 else []
+    p3_sentences = sentences[5:8] if len(sentences) > 5 else []
+
+    if not p2_sentences:
+        p2_sentences = ["The implications matter more than the headline claim."]
+    if not p3_sentences:
+        p3_sentences = ["The bigger question is what this means moving forward."]
+
+    forced_paragraphs = [
+        " ".join(p1_sentences).strip(),
+        " ".join(p2_sentences).strip(),
+        " ".join(p3_sentences).strip(),
+    ]
+    rebuilt = "\n\n".join([p for p in forced_paragraphs if p])
     return rebuilt if rebuilt else caption_text
 
 
