@@ -252,26 +252,27 @@ INSTAGRAM_DISCOVERY_CORE = [
     "#fyp", "#explore", "#foryou", "#explorepage"
 ]
 
-_instagram_discovery_deck = INSTAGRAM_DISCOVERY_CORE[:]
-random.shuffle(_instagram_discovery_deck)
 _instagram_discovery_index = 0
 
 
 def _next_instagram_discovery_tag() -> str:
-    """Return a rotating discovery tag so consecutive videos don't repeat one tag."""
-    global _instagram_discovery_index, _instagram_discovery_deck
+    """Return the next discovery tag in strict round-robin order."""
+    global _instagram_discovery_index
 
-    if not _instagram_discovery_deck:
+    if not INSTAGRAM_DISCOVERY_CORE:
         return "#explore"
 
-    if _instagram_discovery_index >= len(_instagram_discovery_deck):
-        _instagram_discovery_deck = INSTAGRAM_DISCOVERY_CORE[:]
-        random.shuffle(_instagram_discovery_deck)
-        _instagram_discovery_index = 0
-
-    tag = _instagram_discovery_deck[_instagram_discovery_index]
+    tag = INSTAGRAM_DISCOVERY_CORE[_instagram_discovery_index % len(INSTAGRAM_DISCOVERY_CORE)]
     _instagram_discovery_index += 1
     return tag
+
+
+def _get_instagram_discovery_rotation() -> List[str]:
+    """Return one full rotation starting from the current discovery index."""
+    if not INSTAGRAM_DISCOVERY_CORE:
+        return ["#explore"]
+    start = _instagram_discovery_index % len(INSTAGRAM_DISCOVERY_CORE)
+    return INSTAGRAM_DISCOVERY_CORE[start:] + INSTAGRAM_DISCOVERY_CORE[:start]
 
 # Broad-tag blacklist: discovery/algorithmic boost tags that should NOT be used
 # as the 'broad/category' tag. We prefer category-level tags for the broad slot.
@@ -756,17 +757,23 @@ async def fetch_platform_hashtags(
             ordered_lower.add(lowered)
 
     # 3️⃣ TRENDING (max 4 unique)
-    # 3️⃣ TRENDING
     if platform == "instagram":
+        # Always rotate discovery tags in a deterministic order for Instagram,
+        # regardless of autoposting mode.
+        discovery_pool = _get_instagram_discovery_rotation()
         if autoposting:
-            pool = INSTAGRAM_DISCOVERY_CORE
+            pool = discovery_pool
         else:
-            pool = TRENDING_POOLS.get(platform, [])
+            discovery_lower = {t.lower() for t in INSTAGRAM_DISCOVERY_CORE}
+            extra_pool = [
+                t for t in TRENDING_POOLS.get(platform, [])
+                if t.lower() not in discovery_lower
+            ]
+            random.shuffle(extra_pool)
+            pool = discovery_pool + extra_pool
     else:
-        pool = TRENDING_POOLS.get(platform, [])
-
-    pool = pool[:]  # avoid mutating global pool
-    random.shuffle(pool)
+        pool = TRENDING_POOLS.get(platform, [])[:]
+        random.shuffle(pool)
 
     trending_added = 0
 
