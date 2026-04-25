@@ -83,7 +83,7 @@ async def upload_media(
             detail=f"Maximum {MAX_MEDIA_UPLOAD} media files allowed"
         )
 
-    MAX_FILE_SIZE_MB = 100
+    MAX_FILE_SIZE_MB = 500
     MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
     valid_files = []
